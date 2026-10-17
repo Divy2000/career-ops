@@ -29,6 +29,16 @@ const write = (rel: string, content: string | Buffer, base = path.join(work, 'sr
 };
 const src = () => path.join(work, 'src');
 
+/** Reports `name` as a different file from every other path, as a case- or normalization-sensitive source disk would. */
+function asAnotherFile(name: string) {
+  const realStat = fs.statSync;
+  vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+    const st = realStat(p, o);
+    if (st && path.basename(String(p)) === name) st.ino = typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1;
+    return st;
+  }) as typeof fs.statSync);
+}
+
 /** The folder layout of a recording: chapters/toc.json, one mp4, one srt and tutorial/script.md. */
 function recordingFolder() {
   write('chapters/toc.json', JSON.stringify(TOC));
@@ -274,8 +284,19 @@ describe('installTutorial with a quick guide', () => {
     const both = JSON.stringify({ ...manifest, guide: 'Tutorial.json', sections: [GUIDE.sections[0]] });
     folder({ manifest: JSON.parse(both), guide: null });
     if (!fs.existsSync(path.join(src(), 'Tutorial.json'))) write('Tutorial.json', both);
+    // A case-insensitive source disk cannot hold both, so report Tutorial.json as another file.
+    else asAnotherFile('Tutorial.json');
     expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Tutorial\.json" is used by both the manifest and the guide file/);
     expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
+  it('installs a guide named Tutorial.json that is the tutorial.json file itself', () => {
+    const both = { ...manifest, guide: 'Tutorial.json', sections: [GUIDE.sections[0]] };
+    folder({ manifest: both, guide: null });
+    if (!fs.existsSync(path.join(src(), 'Tutorial.json'))) fs.linkSync(path.join(src(), 'tutorial.json'), path.join(src(), 'Tutorial.json'));
+    installTutorial({ source: src(), dataRoot });
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'tutorial.json'), 'utf8'))).toEqual(both);
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'Tutorial.json'), 'utf8'))).toEqual(both);
   });
 
   it('installs a guide that is the tutorial.json itself, which the manifest write leaves byte for byte', () => {
@@ -291,12 +312,7 @@ describe('installTutorial with a quick guide', () => {
     if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) write('Poster.jpg', 'LIGHT');
     else {
       // A case-insensitive source disk cannot hold both, so report Poster.jpg as another file, as a case-sensitive one would.
-      const realStat = fs.statSync;
-      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
-        const st = realStat(p, o);
-        if (st && path.basename(String(p)) === 'Poster.jpg') st.ino = typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1;
-        return st;
-      }) as typeof fs.statSync);
+      asAnotherFile('Poster.jpg');
     }
     expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Poster\.jpg" is used by both the poster and the light poster file/);
     expect(fs.existsSync(dest('guided'))).toBe(false);
@@ -322,12 +338,7 @@ describe('installTutorial with a quick guide', () => {
     if (!fs.readdirSync(src()).includes(nfd) && !fs.existsSync(path.join(src(), nfd))) write(nfd, 'GUIDE-POSTER');
     else {
       // A normalization-insensitive disk (APFS) cannot hold both, so report the NFD name as another file, as ext4 would.
-      const realStat = fs.statSync;
-      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
-        const st = realStat(p, o);
-        if (st && path.basename(String(p)) === nfd) st.ino = typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1;
-        return st;
-      }) as typeof fs.statSync);
+      asAnotherFile(nfd);
     }
     expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/is used by both the poster and the guide poster file/);
     expect(fs.existsSync(dest('guided'))).toBe(false);
