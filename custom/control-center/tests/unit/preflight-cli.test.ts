@@ -47,6 +47,15 @@ describe('runPreflightCli', () => {
     expect(r.output).toContain('preflight ok');
   });
 
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and finds claude on PATH (R27-supervisor-L2-03)', async () => {
+    const dir = path.dirname(fakeClaude("console.log('0.0.0-fake');"));
+    for (const value of ['', '  ']) {
+      const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: value, PATH: dir, NODE_ENV: 'test' }, nodeVersion: 'v26.0.0', ...host() });
+      expect(r.code, JSON.stringify(value)).toBe(0);
+      expect(r.output, JSON.stringify(value)).toContain('preflight ok');
+    }
+  });
+
   it('keeps warnings in the output but exits 0', async () => {
     const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: fakeClaude("console.log('0.0.0-fake');"), NODE_ENV: 'test', ANTHROPIC_API_KEY: 'x' }, nodeVersion: 'v26.0.0', ...host() });
     expect(r.code).toBe(0);

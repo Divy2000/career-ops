@@ -187,6 +187,17 @@ export function resolveClaudeBin(bin: string, opts: { env?: NodeJS.ProcessEnv; h
   return claudeCandidates(bin, opts)[0] ?? bin;
 }
 
+/**
+ * The claude binary CC_CLAUDE_BIN picks, and the other installs to warn about. An empty or blank CC_CLAUDE_BIN means
+ * unset, as in the shell scripts (`${CC_CLAUDE_BIN:-}`); an explicit one is a decision, so only an automatic pick lists
+ * the alternatives.
+ */
+export function chooseClaudeBin(env: NodeJS.ProcessEnv, opts: { home?: string; candidates?: string[] } = {}): { claudeBin: string; alternatives: string[] } {
+  const explicit = env.CC_CLAUDE_BIN?.trim();
+  if (explicit) return { claudeBin: resolveClaudeBin(explicit, { ...opts, env }), alternatives: [] };
+  return { claudeBin: resolveClaudeBin('claude', { ...opts, env }), alternatives: claudeCandidates('claude', { ...opts, env }) };
+}
+
 function claudeFailure(bin: string, p: Probe, timeoutMs: number): string {
   const detail = p.enoent
     ? 'not found (ENOENT)'
