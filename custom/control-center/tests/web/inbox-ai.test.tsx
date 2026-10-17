@@ -26,6 +26,7 @@ const URLS = ['https://jobs.example.com/1', 'https://jobs.example.com/2', 'https
 beforeEach(async () => {
   navigations.length = 0;
   posts = [];
+  answer = () => undefined;
   vi.stubGlobal(
     'fetch',
     vi.fn((_url: string, init?: RequestInit) => {
@@ -43,6 +44,8 @@ beforeEach(async () => {
   await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, createElement(InboxAi, { urls: URLS })))));
 });
 afterEach(async () => {
+  // A fan-out left unanswered keeps the module's batch-starting mark, which would hold back the next test's button.
+  await act(async () => answer(new Response('{}', { status: 503, headers: { 'content-type': 'application/json' } })));
   await act(async () => root.unmount());
   host.remove();
   vi.unstubAllGlobals();
@@ -68,5 +71,24 @@ describe('Inbox Evaluate visible', () => {
     expect(evaluate().disabled).toBe(false);
     await act(async () => evaluate().click());
     expect(posts).toHaveLength(2);
+  });
+});
+
+describe('Inbox Evaluate visible with two spellings of one posting', () => {
+  const TWINS = ['https://boards.greenhouse.io/acme/jobs/123', 'https://boards.greenhouse.io/acme/jobs/123?gh_src=abc'];
+  const renderTwins = async () => {
+    const { InboxAi } = await import('@web/features/pipeline/InboxAi');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(ConfirmProvider, null, createElement(InboxAi, { urls: TWINS })))));
+  };
+
+  it('Given two pending rows for one posting, When Evaluate visible is clicked, Then one evaluation is sent, the twin is named as left out, and the user moves to Sessions (R29-feat-b-L1-01)', async () => {
+    await renderTwins();
+    expect(evaluate().textContent).toContain('Evaluate visible (1)');
+    expect(host.textContent).toContain(`Left out as the same posting as another row: ${TWINS[1]}.`);
+    await act(async () => evaluate().click());
+    expect(posts).toEqual([{ mode: 'oferta', urls: [TWINS[0]] }]);
+    await act(async () => answer(json(200, { sessions: [{}], reserved: [42] })));
+    expect(navigations).toEqual([{ to: '/sessions' }]);
   });
 });

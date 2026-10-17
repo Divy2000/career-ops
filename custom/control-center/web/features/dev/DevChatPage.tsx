@@ -327,12 +327,16 @@ export function DevChatPage() {
     setPanel((p) => ({ key: p.key + 1, own: null, seen: null }));
     void navigate({ to: '/dev', search: {} });
   };
-  // The panel reports 'queued' as it mounts, then the stream's statuses.
-  const [status, setStatus] = useState('queued');
+  // The panel reports 'queued' as it mounts, then the stream's statuses. A status is the reporting panel's: a panel
+  // remounted on another session counts as queued until it reports, so the previous session's finish does not stand
+  // for a session that may be running.
+  const [reported, setReported] = useState({ key: panel.key, status: 'queued' });
+  const status = reported.key === panel.key ? reported.status : 'queued';
   const [blacklist, setBlacklist] = useState(false);
   const actions = useActions();
   const { run, message } = useRunAction();
-  const onStatus = useCallback((s: string) => setStatus(s), []);
+  const panelKey = panel.key;
+  const onStatus = useCallback((s: string) => setReported({ key: panelKey, status: s }), [panelKey]);
   // The unlock covers the one turn it was sent with; the next turn needs the box ticked again.
   const onSent = useCallback(() => setBlacklist(false), []);
   // The Changes panel polls only a Dev Chat session the server confirmed, while its stream does not report it finished.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigate, useRouter, type AnyRouter } from '@tanstack/react-router';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { SessionPanel } from '../../components/SessionPanel';
@@ -8,6 +8,7 @@ import { fanOut, useSessions } from '../../lib/sessions';
 import { usePipeline } from '../../lib/queries';
 import { evaluatingTargets } from './evaluating';
 import { localJdPath } from '@shared/local-jd';
+import { dedupUrlKey } from '@shared/dedup-url';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS, FANOUT_CONFIRM_ABOVE } from '@shared/fanout';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
@@ -179,7 +180,18 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   const pendingEvaluating = pipeline.data?.kind === 'ok' ? new Set(pipeline.data.rows.filter((r) => !r.done && localJdPath(r.url) === null && beingEvaluated.has(r.url)).map((r) => r.url)).size : 0;
   // One fan-out takes at most BATCH_MAX_URLS. Splitting a bigger set into several requests would leave a partial start
   // when a later one fails, and the started rows stay pending, so a retry would evaluate them twice.
-  const unique = [...new Set(urls)];
+  // Two spellings of one posting (a tracking param, a trailing slash) are one evaluation, as the fan-out counts them: only
+  // the first is sent, since the server would refuse the other as a failure.
+  const { unique, folded } = useMemo(() => {
+    const byPosting = new Map<string, string>();
+    const twins: string[] = [];
+    for (const u of new Set(urls)) {
+      const key = dedupUrlKey(u);
+      if (byPosting.has(key)) twins.push(u);
+      else byPosting.set(key, u);
+    }
+    return { unique: [...byPosting.values()], folded: twins };
+  }, [urls]);
   const tooMany = unique.length > BATCH_MAX_URLS;
   // Busy from the click to the server's answer: the server dedupes URLs within one request only, so a second click
   // would start every evaluation again.
@@ -231,6 +243,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
         {batchStarting && !busy && <span className="muted small">Other evaluations are still starting, so Evaluate visible is off until they have.</span>}
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}
         {uncheckable && <span className="danger-text small">Could not check which rows are already being evaluated, so Evaluate visible is off until the sessions list loads.</span>}
+        {folded.length > 0 && <span className="muted small">Left out as the same posting as another row: {folded.join(', ')}.</span>}
         {savedJds > 0 && (
           <span className="muted small">
             {savedJds === 1 ? '1 row with a saved JD is left out of Evaluate visible and Process inbox: use Evaluate JD on its row.' : `${savedJds} rows with a saved JD are left out of Evaluate visible and Process inbox: use Evaluate JD on each row.`}
