@@ -176,7 +176,9 @@ function publish(tmp, base, merge) {
         try {
           renameSync(tmp, TARGET);
         } catch (e) {
-          removeQuietly(TARGET, 'placeholder library');
+          if (!removeQuietly(TARGET, 'placeholder library')) {
+            e.message += `; an empty placeholder library was left at ${TARGET}, delete it before rerunning`;
+          }
           throw e;
         }
       }
@@ -192,12 +194,14 @@ function publish(tmp, base, merge) {
 }
 
 // Cleanup after a failure (or a finished rename) must not replace the error the user needs to see, so a removal that
-// fails too is only noted.
+// fails too is only noted. Returns whether the file is gone.
 function removeQuietly(file, what) {
   try {
     rmSync(file, { force: true });
+    return true;
   } catch (err) {
     process.stderr.write(`note: could not remove the ${what} ${file}: ${err.message}\n`);
+    return false;
   }
 }
 

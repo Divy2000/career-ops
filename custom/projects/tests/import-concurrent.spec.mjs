@@ -236,6 +236,33 @@ syncBuiltinESMExports();
   assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), []);
 });
 
+test('given a data root without hard links, when the fresh library cannot be moved into place and its empty placeholder cannot be removed, then the error names the placeholder to delete (R27-scripts-a-L1-01 review)', () => {
+  const root = tempDir('projects-import-nolink-');
+  const a = path.join(root, 'a.json');
+  fs.writeFileSync(a, JSON.stringify([{ name: 'Alpha Service', highlights: ['Built alpha.'] }]));
+  const preload = path.join(root, 'nolink-fail-rm.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRm = fs.rmSync;
+fs.linkSync = () => { const err = new Error('operation not supported'); err.code = 'ENOTSUP'; throw err; };
+fs.renameSync = () => { const err = new Error('i/o error'); err.code = 'EIO'; throw err; };
+fs.rmSync = (target, opts) => {
+  if (String(target).endsWith('article-digest.md')) { const err = new Error('permission denied'); err.code = 'EACCES'; throw err; }
+  return realRm(target, opts);
+};
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', preload, IMPORT, a, '--write'], { cwd: root, env: rootEnv(root), encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stderr);
+  const target = path.join(root, 'article-digest.md');
+  assert.equal(fs.readFileSync(target, 'utf8'), '', 'the placeholder stays, so the error must name it');
+  const failure = r.stderr.split('\n').find((l) => l.startsWith('import failed: '));
+  assert.ok(failure, r.stderr);
+  assert.match(failure, /i\/o error/);
+  assert.ok(failure.includes(`an empty placeholder library was left at ${target}`), failure);
+  assert.match(failure, /delete it before rerunning/);
+});
+
 test('given a fresh data root, when the library appears during a --write --merge import, then the refusal does not tell the user to add --merge (R24-scripts-a-L1-01 review)', async () => {
   const root = tempDir('projects-import-app-race-');
   const a = path.join(root, 'a.json');
