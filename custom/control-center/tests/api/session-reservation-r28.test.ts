@@ -246,5 +246,25 @@ describe('a number a turn kept while its stopped run could still write (R27-mgr-
       await app.close();
     }
   }, 40_000);
+  it('given a kept number that a bare-date digest shares, when the process stops after the digest is written, then the digest is not credited', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      fs.mkdirSync(path.join(app.cfg.dataRoot, 'reports'), { recursive: true });
+      fs.writeFileSync(reportPath(app, '2025-acme-2026-10-11.md'), '# Evaluation: Acme\n\n**Score:** 4.0/5\n');
+      const { id, n, runId, go } = await keptAfterError(app, 'https://jobs.example.com/synthetic/r28-kept-digest');
+      expect(n).toBe(2026);
+      fs.writeFileSync(reportPath(app, '2026-10-17.md'), '# Scan digest\n');
+      go();
+
+      await until(() => !app.runner.ending(runId), 20_000);
+      await until(() => app.sessions.read(id)!.reportNum === null);
+      expect(app.sessions.read(id)!.creditedReport).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+    }
+  }, 40_000);
 });
 

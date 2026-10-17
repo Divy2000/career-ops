@@ -183,6 +183,11 @@ export interface ManagerDeps {
   policyAckRetryMs?: number;
 }
 
+/** A name that is entirely a date (a digest) is no report, as the allocator reads it (reserve-report-num.mjs). */
+function isBareDateFile(name: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}\.md$/.test(name);
+}
+
 export class SessionManager {
   readonly store: SessionStore;
   private listeners = new Set<(sessionId: string, ev: StoredEvent) => void>();
@@ -856,8 +861,7 @@ export class SessionManager {
    */
   private creditedHolds(meta: SessionMeta, num: number): boolean {
     if (meta.creditedReport?.num !== num) return false;
-    // A name that is entirely a date (a digest) is no report, as the allocator reads it (reserve-report-num.mjs).
-    for (const file of snapshotReports(this.cfg.dataRoot)) if (!/^\d{4}-\d{2}-\d{2}\.md$/.test(file) && reportNumberOf(file) === num) return true;
+    for (const file of snapshotReports(this.cfg.dataRoot)) if (!isBareDateFile(file) && reportNumberOf(file) === num) return true;
     return false;
   }
 
@@ -1268,7 +1272,7 @@ export class SessionManager {
       if (!meta || num === null) return;
       const credited = this.creditedHolds(meta, num);
       const since = credited ? undefined : this.ownedSince(meta, num);
-      const found = credited ? null : (detectNewReports(this.cfg.dataRoot, new Set(beforeReports)).find((x) => x.num === num) ?? null);
+      const found = credited ? null : (detectNewReports(this.cfg.dataRoot, new Set(beforeReports)).find((x) => x.num === num && !isBareDateFile(x.file)) ?? null);
       // Asked after the scan: a sentinel still the session's now was its own when that report was written.
       const written = found !== null && this.sentinelOwned(num, since ?? null) ? found : null;
       // Claimed before the await, as finalize does, so the number is released once.
