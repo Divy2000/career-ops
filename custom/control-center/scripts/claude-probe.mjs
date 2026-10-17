@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 const claudeBin = process.env.CC_CLAUDE_BIN?.trim() || 'claude';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-probe-'));
 const token = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8' });
-if (token.status !== 0) {
+if (token.status !== 0 || !token.stdout.trim()) {
   console.error('Keychain item career-ops-claude-token not found');
   process.exit(1);
 }

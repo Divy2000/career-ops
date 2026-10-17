@@ -75,6 +75,18 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
     expect(summary.probeB.stderrTail).toMatch(/ENOENT/);
   });
 
+  it('refuses a blank Keychain token before running the CLI, as probe:reads does (R28-supervisor-L2-01)', () => {
+    for (const stored of ['', '   ']) {
+      const box = sandbox();
+      fs.writeFileSync(path.join(box.bin, 'security'), `#!/bin/sh\necho '${stored}'\n`, { mode: 0o755 });
+      const claude = path.join(box.bin, 'claude');
+      fs.writeFileSync(claude, '#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\necho "$1" > "$f"\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+      const r = runProbe('claude-probe.mjs', box, claude);
+      expect(r.status, JSON.stringify(stored) + r.stdout).toBe(1);
+      expect(r.stderr).toMatch(/Keychain item career-ops-claude-token not found/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+    }
+  });
 });
 
 describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
