@@ -9,7 +9,8 @@ import type { RunMeta } from '../../server/runner/store.js';
 import { tempDir } from '../helpers/tmp.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { SessionManager } from '../../server/claude/manager.js';
-import { donePolicyBatches } from '../../server/domains/policyPass.js';
+import { donePolicyBatches, dropUnreadablePolicyBatch, recordDonePolicyBatch } from '../../server/domains/policyPass.js';
+import { acquirePipelineLock } from '../../../../pipeline-lock.mjs';
 import { localDate } from '../../shared/local-date.js';
 
 let t: TestApp;
@@ -70,6 +71,41 @@ const INIT = { type: 'system', subtype: 'init', model: 'fake-model', tools: ['Re
 const result = (text: string, isError = false) => ({ type: 'result', subtype: 'success', result: text, total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: isError });
 
 describe('the manual AI policy pass', () => {
+  it('given a done pass whose ack has not landed yet, when another pass starts, then the items that pass was given are not sent again (R29-srv-dom-b-L1-01)', async () => {
+    writePending([item(1), item(2)]);
+    const batch = path.join('data', 'immigration', 'batches', '20261004T090000-cc-0d0e0f10.json');
+    fs.mkdirSync(path.join(t.cfg.dataRoot, 'data', 'immigration', 'batches'), { recursive: true });
+    fs.writeFileSync(path.join(t.cfg.dataRoot, batch), JSON.stringify({ date: '2026-10-04', news_since: '2026-10-01', new_items: [item(1)] }));
+    recordDonePolicyBatch(t.cfg.dataRoot, batch);
+    try {
+      const res = await withScenario({ events: [INIT, result('Pass done.')] }, start);
+      expect(res.statusCode, res.body).toBe(202);
+      const settled = await settle(res.json().id);
+      expect(settled.meta.turns[0]!.userText).toContain('H-1B rule number 2');
+      expect(settled.meta.turns[0]!.userText).not.toContain('H-1B rule number 1');
+    } finally {
+      // The earlier pass's batch and marker go, so later tests see no ack owed.
+      dropUnreadablePolicyBatch(t.cfg.dataRoot, batch);
+    }
+  });
+
+  it('given pending.json.lock held past the wait, when a pass starts, then it is refused with 409 and the claim is free again (R29-srv-dom-b-L1-01)', async () => {
+    writePending([item(3)]);
+    const lock = await acquirePipelineLock(pendingFile());
+    process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS = '200';
+    try {
+      const res = await start();
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toMatch(/pending\.json is being updated/);
+    } finally {
+      delete process.env.CAREER_OPS_PIPELINE_LOCK_TIMEOUT_MS;
+      lock.release();
+    }
+    const res = await withScenario({ events: [INIT, result('Pass done.')] }, start);
+    expect(res.statusCode, res.body).toBe(202);
+    await settle(res.json().id);
+  });
+
   it('given queued items, when the pass ends done, then those items leave pending.json', async () => {
     writePending([item(1), item(2)]);
     const res = await start();

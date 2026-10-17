@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { cliScriptPath } from '../core/adapter.js';
+import { cliScriptPath, importCore } from '../core/adapter.js';
 import { localDate } from '../../shared/local-date.js';
 import { newsSince } from '../../../immigration/lib.mjs';
 import { ownerLive, readClaim, releaseClaim, retagClaim, runUnfinished, tryClaim } from '../../../immigration/policy-claim.mjs';
@@ -23,6 +23,16 @@ export class PendingUnreadableError extends Error {
     this.name = 'PendingUnreadableError';
   }
 }
+
+/** pending.json.lock stayed held (a feed check or an ack writing the queue) past the wait. */
+export class PolicyQueueBusyError extends Error {
+  constructor() {
+    super(`${PENDING} is being updated (its lock is held); try again in a moment`);
+    this.name = 'PolicyQueueBusyError';
+  }
+}
+
+type PipelineLock = { withPipelineLock: <T>(p: string, fn: () => T | Promise<T>, o?: { timeoutMs?: number }) => Promise<T> };
 
 export interface PolicyPass {
   /** daily-prompt.md filled in for this data root, today and the queued items. */
@@ -73,19 +83,64 @@ function readLastPass(dataRoot: string): string | null {
 const pad = (n: number) => String(n).padStart(2, '0');
 const stamp = (d: Date) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 
-export function preparePolicyPass(codeRoot: string, dataRoot: string, now = new Date()): PolicyPass {
-  const items = readPending(dataRoot);
+/** The ids of the items done passes were given whose ack has not landed yet: those passes already handled them. */
+function handledIds(dataRoot: string): Set<string> {
+  const ids = new Set<string>();
+  for (const batch of donePolicyBatches(dataRoot)) {
+    // One that cannot be read is never acknowledged, so its items stay for a pass to handle. One whose ack lands
+    // meanwhile may vanish between the listing and the read: its items have left the queue already.
+    let items: unknown;
+    try {
+      items = (JSON.parse(fs.readFileSync(path.join(dataRoot, batch), 'utf8')) as { new_items?: unknown } | null)?.new_items;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(items) || !items.every((i) => typeof i === 'object' && i !== null)) continue;
+    for (const item of items) {
+      const id = (item as { id?: unknown } | null)?.id;
+      if (typeof id === 'string') ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The queue a new pass is given, read under pending.json.lock as watch.mjs reads and writes it, so an ack landing
+ * meanwhile is seen whole (its items gone and its last_pass recorded) or not at all. Items a done pass was given are
+ * left out while its ack is still owed: sending them again would append the same rows a second time.
+ */
+async function readQueue(codeRoot: string, dataRoot: string, lockTimeoutMs: number | undefined): Promise<{ items: unknown[]; lastPass: string | null }> {
+  const { withPipelineLock } = await importCore<PipelineLock>(codeRoot, 'pipeline-lock.mjs');
+  // The lock is a directory beside pending.json, so its folder must exist before a first pass.
+  fs.mkdirSync(path.join(dataRoot, IMM), { recursive: true });
+  try {
+    return await withPipelineLock(
+      path.join(dataRoot, PENDING),
+      () => {
+        const handled = handledIds(dataRoot);
+        const items = readPending(dataRoot).filter((i) => !(typeof (i as { id?: unknown } | null)?.id === 'string' && handled.has((i as { id: string }).id)));
+        return { items, lastPass: readLastPass(dataRoot) };
+      },
+      lockTimeoutMs === undefined ? {} : { timeoutMs: lockTimeoutMs },
+    );
+  } catch (err) {
+    if ((err as Error).name === 'LockTimeoutError') throw new PolicyQueueBusyError();
+    throw err;
+  }
+}
+
+export async function preparePolicyPass(codeRoot: string, dataRoot: string, now = new Date(), opts: { lockTimeoutMs?: number } = {}): Promise<PolicyPass> {
+  // Read before the batch is written: a batch left by a pass that never started is one no pass acknowledges.
+  const template = fs.readFileSync(path.join(codeRoot, 'custom', 'immigration', 'daily-prompt.md'), 'utf8');
+  const { items, lastPass } = await readQueue(codeRoot, dataRoot, opts.lockTimeoutMs);
   const today = localDate(now);
   // The news window daily-prompt.md searches, as watch.mjs prints it: back to the last successful pass, at least 3 days.
-  const lastPass = readLastPass(dataRoot);
   let since: string;
   try {
     since = newsSince({ lastPass, today });
   } catch {
     throw new PendingUnreadableError('has a last_pass that is not a YYYY-MM-DD date', SEEN);
   }
-  // Read before the batch is written: a batch left by a pass that never started is one no pass acknowledges.
-  const template = fs.readFileSync(path.join(codeRoot, 'custom', 'immigration', 'daily-prompt.md'), 'utf8');
   // The shape watch.mjs prints and --ack reads (new_items[].id).
   const watchJson = JSON.stringify({ date: today, news_since: since, new_items: items }, null, 2);
   // Written even with nothing queued, as run-daily.sh does: acknowledging it is what records this pass's day as

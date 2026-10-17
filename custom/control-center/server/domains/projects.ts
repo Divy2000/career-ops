@@ -149,7 +149,10 @@ function extractPdf(codeRoot: string, abs: string): Promise<PdfResult> {
       if (m.ok) {
         probedRoots.add(codeRoot);
         done({ ok: true, text: m.text ?? '' });
-      } else done(m.missing ? { ok: false, missing: true } : { ok: false, error: m.error ?? 'extraction failed' });
+      } else {
+        probedRoots.delete(codeRoot);
+        done(m.missing ? { ok: false, missing: true } : { ok: false, error: m.error ?? 'extraction failed' });
+      }
     });
     worker.once('error', (err: Error) => done({ ok: false, error: String(err.message).split('\n')[0] }));
     worker.once('exit', (code) => done({ ok: false, error: `the extraction worker exited with code ${code}` }));

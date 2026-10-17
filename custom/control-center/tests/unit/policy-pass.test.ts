@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
-import { ackPolicyPass, PendingUnreadableError, policyBatchReadable, preparePolicyPass } from '../../server/domains/policyPass.js';
+import { ackPolicyPass, PendingUnreadableError, PolicyQueueBusyError, policyBatchReadable, preparePolicyPass, recordDonePolicyBatch } from '../../server/domains/policyPass.js';
+import { acquirePipelineLock } from '../../../../pipeline-lock.mjs';
 import type { Exec } from '../../server/routes/system.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -27,37 +28,37 @@ function dataRoot(pending?: string, seen?: string): string {
 const EVENING = new Date('2026-10-06T02:00:00.000Z');
 
 describe('preparePolicyPass', () => {
-  it('given queued items, when a pass is prepared, then a batch file holds exactly those items in the shape watch.mjs --ack reads', () => {
+  it('given queued items, when a pass is prepared, then a batch file holds exactly those items in the shape watch.mjs --ack reads', async () => {
     const root = dataRoot(JSON.stringify(ITEMS));
-    const pass = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    const pass = await preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
     expect(pass.batch).toMatch(/^data\/immigration\/batches\/20261005T190000-cc-[0-9a-f]{8}\.json$/);
     const batch = JSON.parse(fs.readFileSync(path.join(root, pass.batch!), 'utf8')) as { date: string; new_items: unknown[] };
     expect(batch).toEqual({ date: '2026-10-05', news_since: '2026-10-02', new_items: ITEMS });
   });
 
-  it('given a last successful pass weeks ago in seen.json, when a pass is prepared, then its prompt searches the news back to that day (SW8-scripts-01)', () => {
+  it('given a last successful pass weeks ago in seen.json, when a pass is prepared, then its prompt searches the news back to that day (SW8-scripts-01)', async () => {
     const root = dataRoot(JSON.stringify(ITEMS), JSON.stringify({ ids: [], last_pass: '2026-09-20' }));
-    const { prompt } = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    const { prompt } = await preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
     expect(prompt).toContain('"news_since": "2026-09-20"');
   });
 
-  it('given no recorded pass (no seen.json, or one without last_pass) or one from yesterday, when a pass is prepared, then its prompt searches at least the last three days', () => {
+  it('given no recorded pass (no seen.json, or one without last_pass) or one from yesterday, when a pass is prepared, then its prompt searches at least the last three days', async () => {
     for (const seen of [undefined, JSON.stringify({ ids: [] }), JSON.stringify({ ids: [], last_pass: '2026-10-04' })]) {
-      const { prompt } = preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot(JSON.stringify(ITEMS), seen), EVENING);
+      const { prompt } = await preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot(JSON.stringify(ITEMS), seen), EVENING);
       expect(prompt).toContain('"news_since": "2026-10-02"');
     }
   });
 
-  it('given a seen.json that cannot be read for its last pass, when a pass is prepared, then it is refused with the reason', () => {
-    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{ not json'), EVENING)).toThrow(PendingUnreadableError);
-    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{ not json'), EVENING)).toThrow('data/immigration/seen.json is not valid JSON; fix or remove it, then run the pass again');
-    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{"ids": [], "last_pass": "yesterday"}'), EVENING)).toThrow('data/immigration/seen.json has a last_pass that is not a YYYY-MM-DD date; fix or remove it, then run the pass again');
-    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{"ids": [], "last_pass": "2026-02-30"}'), EVENING)).toThrow('data/immigration/seen.json has a last_pass that is not a YYYY-MM-DD date; fix or remove it, then run the pass again');
+  it('given a seen.json that cannot be read for its last pass, when a pass is prepared, then it is refused with the reason', async () => {
+    await expect(preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{ not json'), EVENING)).rejects.toThrow(PendingUnreadableError);
+    await expect(preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{ not json'), EVENING)).rejects.toThrow('data/immigration/seen.json is not valid JSON; fix or remove it, then run the pass again');
+    await expect(preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{"ids": [], "last_pass": "yesterday"}'), EVENING)).rejects.toThrow('data/immigration/seen.json has a last_pass that is not a YYYY-MM-DD date; fix or remove it, then run the pass again');
+    await expect(preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('[]', '{"ids": [], "last_pass": "2026-02-30"}'), EVENING)).rejects.toThrow('data/immigration/seen.json has a last_pass that is not a YYYY-MM-DD date; fix or remove it, then run the pass again');
   });
 
-  it('given queued items, when a pass is prepared, then its prompt is daily-prompt.md with today, the data paths and the items filled in', () => {
+  it('given queued items, when a pass is prepared, then its prompt is daily-prompt.md with today, the data paths and the items filled in', async () => {
     const root = dataRoot(JSON.stringify(ITEMS));
-    const { prompt } = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    const { prompt } = await preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
     expect(prompt).not.toContain('{{');
     expect(prompt).toContain('Today is 2026-10-05.');
     expect(prompt).toContain(`\`${path.join(root, 'config', 'profile.yml')}\``);
@@ -66,23 +67,23 @@ describe('preparePolicyPass', () => {
     expect(prompt).toContain('SUMMARY: <n> policy changes, <m> company alerts');
   });
 
-  it('given a prompt-like value in an item, when it is filled in, then replacement patterns such as $& stay literal', () => {
+  it('given a prompt-like value in an item, when it is filled in, then replacement patterns such as $& stay literal', async () => {
     const root = dataRoot(JSON.stringify([{ ...ITEMS[0], title: 'Fee rule $& {{TODAY}} $1' }]));
-    const { prompt } = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    const { prompt } = await preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
     expect(prompt).toContain('"title": "Fee rule $& {{TODAY}} $1"');
   });
 
-  it('given a code root without daily-prompt.md, when a pass is prepared, then it is refused and leaves no batch file for a later pass to find as a leftover', () => {
+  it('given a code root without daily-prompt.md, when a pass is prepared, then it is refused and leaves no batch file for a later pass to find as a leftover', async () => {
     const root = dataRoot(JSON.stringify(ITEMS));
     const codeRoot = tempDir('cc-policy-pass-code-');
-    expect(() => preparePolicyPass(codeRoot, root, EVENING)).toThrow(/daily-prompt\.md/);
+    await expect(preparePolicyPass(codeRoot, root, EVENING)).rejects.toThrow(/daily-prompt\.md/);
     const batches = path.join(root, 'data', 'immigration', 'batches');
     expect(fs.existsSync(batches) ? fs.readdirSync(batches) : []).toEqual([]);
   });
 
-  it('given nothing queued (no pending.json, or an empty list), when a pass is prepared, then it still runs the news search and writes a batch with no items, so a done pass records its day (R22-srv-dom-b-L2-01)', () => {
+  it('given nothing queued (no pending.json, or an empty list), when a pass is prepared, then it still runs the news search and writes a batch with no items, so a done pass records its day (R22-srv-dom-b-L2-01)', async () => {
     for (const root of [dataRoot(), dataRoot('[]\n')]) {
-      const pass = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+      const pass = await preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
       expect(pass.prompt).toContain('"new_items": []');
       expect(pass.batch).toMatch(/^data\/immigration\/batches\/20261005T190000-cc-[0-9a-f]{8}\.json$/);
       expect(JSON.parse(fs.readFileSync(path.join(root, pass.batch!), 'utf8'))).toEqual({ date: '2026-10-05', news_since: '2026-10-02', new_items: [] });
@@ -90,11 +91,63 @@ describe('preparePolicyPass', () => {
     }
   });
 
-  it('given a pending.json that is not a list of items, when a pass is prepared, then it is refused with the reason', () => {
+  it('given a pending.json that is not a list of items, when a pass is prepared, then it is refused with the reason', async () => {
     const malformed = dataRoot('{ not json');
-    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, malformed, EVENING)).toThrow(PendingUnreadableError);
-    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, malformed, EVENING)).toThrow('data/immigration/pending.json is not valid JSON; fix or remove it, then run the pass again');
-    expect(() => preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('{"items": []}'), EVENING)).toThrow('data/immigration/pending.json is not a list of items; fix or remove it, then run the pass again');
+    await expect(preparePolicyPass(DEFAULT_CODE_ROOT, malformed, EVENING)).rejects.toThrow(PendingUnreadableError);
+    await expect(preparePolicyPass(DEFAULT_CODE_ROOT, malformed, EVENING)).rejects.toThrow('data/immigration/pending.json is not valid JSON; fix or remove it, then run the pass again');
+    await expect(preparePolicyPass(DEFAULT_CODE_ROOT, dataRoot('{"items": []}'), EVENING)).rejects.toThrow('data/immigration/pending.json is not a list of items; fix or remove it, then run the pass again');
+  });
+});
+
+describe('preparePolicyPass with a done pass whose ack has not landed (R29-srv-dom-b-L1-01)', () => {
+  /** A done pass's batch holding `items`, marked done as finalize marks it, its ack still owed. */
+  function doneBatch(root: string, name: string, body: string): void {
+    const batch = path.join('data', 'immigration', 'batches', name);
+    fs.mkdirSync(path.join(root, 'data', 'immigration', 'batches'), { recursive: true });
+    fs.writeFileSync(path.join(root, batch), body);
+    recordDonePolicyBatch(root, batch);
+  }
+  const newItems = (root: string, batch: string) => (JSON.parse(fs.readFileSync(path.join(root, batch), 'utf8')) as { new_items: unknown[] }).new_items;
+
+  it('given an item a done pass already handled still queued, when a new pass is prepared, then that item is left out of its batch and prompt', async () => {
+    const root = dataRoot(JSON.stringify(ITEMS));
+    doneBatch(root, '20261004T090000-cc-aaaaaaaa.json', JSON.stringify({ date: '2026-10-04', news_since: '2026-10-01', new_items: [ITEMS[0]] }));
+    const pass = await preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    expect(newItems(root, pass.batch)).toEqual([ITEMS[1]]);
+    expect(pass.prompt).not.toContain(ITEMS[0]!.title);
+  });
+
+  it('given a done batch that cannot be read (never acknowledged, so its items stay queued for a pass), when a new pass is prepared, then its items are still sent', async () => {
+    const root = dataRoot(JSON.stringify(ITEMS));
+    doneBatch(root, '20261004T090000-cc-bbbbbbbb.json', '{ not json');
+    const pass = await preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    expect(newItems(root, pass.batch)).toEqual(ITEMS);
+  });
+
+  it('given pending.json.lock held by an ack, when a pass is prepared, then it reads the queue only once the ack has written it', async () => {
+    const root = dataRoot(JSON.stringify(ITEMS));
+    const pending = path.join(root, 'data', 'immigration', 'pending.json');
+    const lock = await acquirePipelineLock(pending);
+    const prepared = preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING);
+    await new Promise((r) => setTimeout(r, 150));
+    // The ack drops the first item and records last_pass, then lets go of the lock.
+    fs.writeFileSync(pending, JSON.stringify([ITEMS[1]]));
+    fs.writeFileSync(path.join(root, 'data', 'immigration', 'seen.json'), JSON.stringify({ ids: [], last_pass: '2026-10-05' }));
+    lock.release();
+    const pass = await prepared;
+    expect(JSON.parse(fs.readFileSync(path.join(root, pass.batch), 'utf8'))).toEqual({ date: '2026-10-05', news_since: '2026-10-02', new_items: [ITEMS[1]] });
+  });
+
+  it('given pending.json.lock held past the wait, when a pass is prepared, then it is refused as busy and leaves no batch', async () => {
+    const root = dataRoot(JSON.stringify(ITEMS));
+    const lock = await acquirePipelineLock(path.join(root, 'data', 'immigration', 'pending.json'));
+    try {
+      await expect(preparePolicyPass(DEFAULT_CODE_ROOT, root, EVENING, { lockTimeoutMs: 200 })).rejects.toThrow(PolicyQueueBusyError);
+    } finally {
+      lock.release();
+    }
+    const batches = path.join(root, 'data', 'immigration', 'batches');
+    expect(fs.existsSync(batches) ? fs.readdirSync(batches) : []).toEqual([]);
   });
 });
 
