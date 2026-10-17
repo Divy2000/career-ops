@@ -371,6 +371,18 @@ describe('preflight read-confinement gates', () => {
     expect(r.errors.join('\n')).toMatch(/could not read managed settings/);
   });
 
+  it('says a managed-settings problem stops the whole Control Center, which is what a failed preflight does (R27-supervisor-L2-01)', async () => {
+    for (const body of ['{ not json', JSON.stringify({ disableAllHooks: true }), '[]']) {
+      const dir = tmp('cc-managed-');
+      fs.writeFileSync(path.join(dir, 'managed-settings.json'), body);
+      const r = await preflight({ ...ok, exec: versionExec('2.1.289 (Claude Code)'), managedSettings: { dir, plists: [] } });
+      expect(r.ok, body).toBe(false);
+      expect(r.errors, body).toHaveLength(1);
+      expect(r.errors[0], body).toContain('The Control Center does not start until this is fixed');
+      expect(r.errors[0], body).not.toContain('Sessions are refused');
+    }
+  });
+
   it('checks a managed preferences plist (MDM profile) through plutil', async () => {
     const dir = tmp('cc-managed-');
     const plist = path.join(dir, 'com.anthropic.claudecode.plist');

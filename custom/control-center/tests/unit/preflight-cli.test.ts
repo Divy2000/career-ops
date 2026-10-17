@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runPreflightCli } from '../../supervisor/preflight-cli.js';
+import { chooseClaudeBin } from '../../supervisor/preflight.js';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -45,6 +46,16 @@ describe('runPreflightCli', () => {
     expect(r.output).toContain('warning: Claude Code 2.1.290 is not approved');
     expect(r.output).not.toContain('error:');
     expect(r.output).toContain('preflight ok');
+  });
+
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and finds claude on PATH (R27-supervisor-L2-03)', async () => {
+    const dir = path.dirname(fakeClaude("console.log('0.0.0-fake');"));
+    for (const value of ['', '  ']) {
+      const r = await runPreflightCli({ env: { CC_CLAUDE_BIN: value, PATH: dir, NODE_ENV: 'test' }, nodeVersion: 'v26.0.0', ...host() });
+      expect(r.code, JSON.stringify(value)).toBe(0);
+      expect(r.output, JSON.stringify(value)).toContain('preflight ok');
+      expect(chooseClaudeBin({ CC_CLAUDE_BIN: value, PATH: dir }).claudeBin, JSON.stringify(value)).toBe(path.join(dir, 'claude'));
+    }
   });
 
   it('keeps warnings in the output but exits 0', async () => {

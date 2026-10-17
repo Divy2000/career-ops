@@ -3,7 +3,7 @@
 // install without starting the server.
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { preflight, formatPreflight, resolveClaudeBin, claudeCandidates, testHost } from './preflight.js';
+import { preflight, formatPreflight, chooseClaudeBin, testHost } from './preflight.js';
 
 export interface PreflightCliInput {
   env: NodeJS.ProcessEnv;
@@ -14,9 +14,7 @@ export interface PreflightCliInput {
 }
 
 export async function runPreflightCli(input: PreflightCliInput): Promise<{ code: number; output: string }> {
-  const claudeBin = resolveClaudeBin(input.env.CC_CLAUDE_BIN ?? 'claude', { env: input.env });
-  // An explicit CC_CLAUDE_BIN is a decision; only an automatic pick warns about the alternatives.
-  const alternatives = input.env.CC_CLAUDE_BIN ? [] : claudeCandidates('claude', { env: input.env });
+  const { claudeBin, alternatives } = chooseClaudeBin(input.env);
   // The host the test pins (NODE_ENV=test only), as the supervisor's own preflight does; explicit inputs still win.
   const pinned = testHost(input.env);
   const pf = await preflight({ claudeBin, nodeVersion: input.nodeVersion, env: input.env, claudeCandidates: alternatives, platform: input.platform ?? pinned.platform, managedSettings: input.managedSettings ?? pinned.managedSettings });

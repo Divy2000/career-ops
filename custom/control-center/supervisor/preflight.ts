@@ -187,6 +187,17 @@ export function resolveClaudeBin(bin: string, opts: { env?: NodeJS.ProcessEnv; h
   return claudeCandidates(bin, opts)[0] ?? bin;
 }
 
+/**
+ * The claude binary CC_CLAUDE_BIN picks, and the other installs to warn about. An empty or blank CC_CLAUDE_BIN means
+ * unset, as in the shell scripts (`${CC_CLAUDE_BIN:-}`); an explicit one is a decision, so only an automatic pick lists
+ * the alternatives.
+ */
+export function chooseClaudeBin(env: NodeJS.ProcessEnv, opts: { home?: string; candidates?: string[] } = {}): { claudeBin: string; alternatives: string[] } {
+  const explicit = env.CC_CLAUDE_BIN?.trim();
+  if (explicit) return { claudeBin: resolveClaudeBin(explicit, { ...opts, env }), alternatives: [] };
+  return { claudeBin: resolveClaudeBin('claude', { ...opts, env }), alternatives: claudeCandidates('claude', { ...opts, env }) };
+}
+
 function claudeFailure(bin: string, p: Probe, timeoutMs: number): string {
   const detail = p.enoent
     ? 'not found (ENOENT)'
@@ -268,7 +279,7 @@ export async function managedSettingsProblems(opts: { dir?: string; plists?: str
     try {
       names = fs.readdirSync(dropIns);
     } catch (err) {
-      return [`could not read managed settings in ${dropIns}: ${(err as Error).message}. Sessions are refused until it can be checked.`];
+      return [`could not read managed settings in ${dropIns}: ${(err as Error).message}.`];
     }
     for (const name of names.filter((n) => !n.startsWith('.') && n.endsWith('.json')).sort()) {
       const file = path.join(dropIns, name);
@@ -282,11 +293,11 @@ export async function managedSettingsProblems(opts: { dir?: string; plists?: str
     try {
       doc = JSON.parse(await src.read());
     } catch (err) {
-      problems.push(`could not read managed settings in ${src.file}: ${(err as Error).message}. Sessions are refused until it can be checked.`);
+      problems.push(`could not read managed settings in ${src.file}: ${(err as Error).message}.`);
       continue;
     }
     if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
-      problems.push(`could not read managed settings in ${src.file}: not a JSON object. Sessions are refused until it can be checked.`);
+      problems.push(`could not read managed settings in ${src.file}: not a JSON object.`);
       continue;
     }
     for (const rule of UNCONFINABLE) if (rule.set(doc as Record<string, unknown>)) problems.push(`managed Claude Code settings in ${src.file} set ${rule.key}: ${rule.why}. Remove it, or sessions cannot be confined to the repo and data roots.`);
@@ -338,7 +349,8 @@ export async function preflight(input: PreflightInput): Promise<PreflightResult>
     const problem = keychainProblem(typeof out === 'number' ? { code: out } : out, keychainTimeoutMs);
     if (problem) errors.push(problem);
   }
-  errors.push(...(await managedSettingsProblems(input.managedSettings)));
+  // A failed preflight stops the supervisor, and with it the whole app: say so, not just that sessions are refused.
+  for (const p of await managedSettingsProblems(input.managedSettings)) errors.push(`${p} The Control Center does not start until this is fixed, so that no session runs unconfined.`);
   const others = (input.claudeCandidates ?? []).filter((c) => c !== input.claudeBin);
   if (others.length > 0) {
     warnings.push(`Several claude binaries are installed. Using ${input.claudeBin}; also found ${others.join(', ')}. Set CC_CLAUDE_BIN to choose another.`);
