@@ -2,9 +2,10 @@
 // key, under every report-gated mode (R28-feat-b-L2-01).
 import { describe, expect, it } from 'vitest';
 import type { SessionMeta } from '@shared/api';
-import { evaluatingTargets, isReportGatedMode } from '../../web/features/pipeline/evaluating';
+import { evaluatingTargets, isProcessInboxMode, isReportGatedMode } from '../../web/features/pipeline/evaluating';
+import { livePipelineId } from '../../web/features/pipeline/InboxAi';
 import { isReportGated } from '../../server/claude/honesty';
-import { MODES } from '../../server/claude/modes';
+import { MODES, englishModeOf } from '../../server/claude/modes';
 
 const session = (mode: string, target: SessionMeta['target'], status = 'running'): SessionMeta => ({ id: `s-${mode}`, mode, status, target }) as SessionMeta;
 
@@ -53,5 +54,21 @@ describe('isReportGatedMode', () => {
 describe('evaluatingTargets target types', () => {
   it('Given an evaluation of pasted JD text, When a URL with that text is looked up, Then it is free (the server keys no posting for it)', () => {
     expect(evaluatingTargets([session('oferta', { type: 'text', value: 'https://jobs.example.com/a' })]).has('https://jobs.example.com/a')).toBe(false);
+  });
+});
+
+describe('isProcessInboxMode', () => {
+  it('agrees with the server Process inbox check for every mode id and its language-directory spellings (R30-feat-b-X-01)', () => {
+    const ids = new Set<string>(['pipeline', 'de/pipeline', 'zh-TW/pipeline', 'es/pipeline', 'regional/pipeline', 'de/angebot', 'pipelines', 'xpipeline']);
+    for (const m of MODES) {
+      ids.add(m.id);
+      ids.add(`de/${m.id}`);
+      ids.add(`zh-TW/${m.id}`);
+    }
+    for (const id of ids) expect(isProcessInboxMode(id), id).toBe(englishModeOf(id) === 'pipeline');
+  });
+
+  it('Given a live de/pipeline session, When the live Process inbox is looked up, Then it is found', () => {
+    expect(livePipelineId([session('de/pipeline', { type: 'none', value: null })])).toBe('s-de/pipeline');
   });
 });

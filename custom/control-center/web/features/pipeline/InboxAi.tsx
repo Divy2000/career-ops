@@ -6,7 +6,7 @@ import { Pill } from '../../components/ui';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { fanOut, useSessions } from '../../lib/sessions';
 import { usePipeline } from '../../lib/queries';
-import { evaluatingTargets } from './evaluating';
+import { evaluatingTargets, isProcessInboxMode } from './evaluating';
 import { localJdPath } from '@shared/local-jd';
 import { dedupUrlKey } from '@shared/dedup-url';
 import { describeError } from '../../lib/actions';
@@ -25,7 +25,7 @@ const LIVE = new Set(['queued', 'running', 'awaiting_user']);
 
 /** The live Process inbox (pipeline) session the server lists, other than `except`: it owns the pending rows. */
 export const livePipelineId = (sessions: SessionMeta[] | undefined, except: string | null = null): string | null =>
-  (sessions ?? []).find((s) => s.mode === 'pipeline' && LIVE.has(s.status) && s.id !== except)?.id ?? null;
+  (sessions ?? []).find((s) => isProcessInboxMode(s.mode) && LIVE.has(s.status) && s.id !== except)?.id ?? null;
 
 // Pipeline > Batch fan-outs in flight: their sessions are in no list yet. Kept in memory for as long as the request
 // runs (reserving the report numbers and starting up to BATCH_MAX_URLS sessions can take a while), and a reload, which
