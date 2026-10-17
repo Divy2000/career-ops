@@ -934,3 +934,61 @@ test('given a private config/local-paths.txt, when local-paths adds custom/, the
   assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
   assert.equal(fs.statSync(f).mode & 0o777, 0o600);
 });
+
+// projects-rule and cv-write --replace swap in a new copy, which must land at the file a symlink points to and keep the
+// user's mode, as local-paths keeps them (R29-scripts-b-L2-02).
+test('given modes/_custom.md is a symlink to a dotfiles copy, when projects-rule adds the rule, then the dotfiles copy gets it and the link is kept (R29-scripts-b-L2-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const shared = put(path.join(d, 'dotfiles', '_custom.md'), fs.readFileSync(CUSTOM_TEMPLATE, 'utf8'));
+  fs.chmodSync(shared, 0o600);
+  const link = path.join(data, 'modes', '_custom.md');
+  fs.mkdirSync(path.dirname(link), { recursive: true });
+  fs.symlinkSync(path.relative(path.dirname(link), shared), link);
+  assert.equal(seed(['projects-rule', '--data', data, '--template', RULE_TEMPLATE]).stdout.trim(), 'added');
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link was replaced by a regular file');
+  assert.ok(fs.readFileSync(shared, 'utf8').includes(fs.readFileSync(RULE_TEMPLATE, 'utf8').trimEnd()));
+  assert.equal(fs.statSync(shared).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(path.dirname(link)), ['_custom.md']);
+  assert.deepEqual(fs.readdirSync(path.dirname(shared)), ['_custom.md']);
+});
+
+test('given a private (0600) modes/_custom.md, when projects-rule adds the rule, then the file stays 0600 (R29-scripts-b-L2-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const file = put(path.join(data, 'modes', '_custom.md'), fs.readFileSync(CUSTOM_TEMPLATE, 'utf8'));
+  fs.chmodSync(file, 0o600);
+  assert.equal(seed(['projects-rule', '--data', data, '--template', RULE_TEMPLATE]).stdout.trim(), 'added');
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+test('given a private (0600) cv.md behind a symlink, when cv-write --replace replaces it, then the linked file gets the resume, keeps 0600 and the link is kept (R29-scripts-b-L2-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const real = put(path.join(d, 'dotfiles', 'cv.md'), '# Old\n');
+  fs.chmodSync(real, 0o600);
+  const link = path.join(data, 'cv.md');
+  fs.mkdirSync(data, { recursive: true });
+  fs.symlinkSync(real, link);
+  const r = put(path.join(d, 'new.md'), '# New\n');
+  const res = seed(['cv-write', '--data', data, '--resume', r, '--replace']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.split('\t')[0], 'replaced');
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link was replaced by a regular file');
+  assert.equal(fs.readFileSync(real, 'utf8'), '# New\n');
+  assert.equal(fs.statSync(real).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(path.dirname(real)), ['cv.md']);
+  const backup = res.stdout.trim().split('\t')[1];
+  assert.equal(fs.readFileSync(backup, 'utf8'), '# Old\n');
+});
+
+test('given a private (0600) cv.md, when cv-write --replace replaces it, then it stays 0600 (R29-scripts-b-L2-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const cv = put(path.join(data, 'cv.md'), '# Old\n');
+  fs.chmodSync(cv, 0o600);
+  const r = put(path.join(d, 'new.md'), '# New\n');
+  assert.equal(seed(['cv-write', '--data', data, '--resume', r, '--replace']).status, 0);
+  assert.equal(fs.readFileSync(cv, 'utf8'), '# New\n');
+  assert.equal(fs.statSync(cv).mode & 0o777, 0o600);
+});
