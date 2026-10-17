@@ -211,6 +211,11 @@ function runClaude(name, opts) {
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
     const timer = setTimeout(() => child.kill('SIGKILL'), 300_000);
+    // A spawn failure (ENOENT, EAGAIN) emits 'error'; unheard it would crash the probe past its cleanup.
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ name, sessionId, status: null, stdout: '', stderr: redact(err?.message ?? err), events: [], hook: [], prep });
+    });
     child.on('close', (status) => {
       clearTimeout(timer);
       const events = stdout.split('\n').filter(Boolean).map((l) => {

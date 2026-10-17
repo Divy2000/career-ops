@@ -52,3 +52,22 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
     for (const lines of calls.filter((l) => l[0] === 'ARG1=-p')) expect(lines).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${FAKE_TOKEN}`);
   });
 });
+
+describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
+  it('still removes the home and ~/.claude canaries and prints the summary when the CLI cannot be spawned', () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    // Answers --version, then disappears, so every case's spawn fails with ENOENT.
+    fs.writeFileSync(claude, '#!/bin/sh\nrm -f "$0"\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
+    const r = runProbe('claude-probe-reads.mjs', box, claude);
+    expect(r.stderr).not.toMatch(/ENOENT[\s\S]*at onErrorNT/);
+    expect(r.status).toBe(1);
+    const summary = JSON.parse(r.stdout);
+    expect(summary.version).toBe('9.9.9');
+    expect(Object.keys(summary.cases).length).toBeGreaterThan(1);
+    expect(Object.values(summary.details).some((d) => /not attempted/.test(String((d as { why?: unknown }).why)))).toBe(true);
+    expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+  });
+});
