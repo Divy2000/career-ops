@@ -734,7 +734,8 @@ describe('Claude sessions', () => {
     const a = await makeTestApp({ dataRoot, guardRoot }, { exec: counting });
     let b: TestApp | null = null;
     try {
-      // A report number as only a fan-out reserves it: in process, since a session start over HTTP cannot name one.
+      // A report number as only a fan-out reserves it (its sentinel first): in process, since a session start over HTTP cannot name one.
+      fs.writeFileSync(path.join(dataRoot, 'reports', '060-RESERVED.md'), JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date().toISOString() }));
       const { id } = await withScenario(scenarioFile(SLOW), async () => a.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 60 }));
       await until(() => a.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta'));
       // The overlap the handover prevents, forced: a second server reconciles while the first still tracks.
@@ -1252,6 +1253,8 @@ describe('read confinement (BUG-06)', () => {
     };
     const { app, settle: settleThere } = await ownApp({ exec: rejecting });
     try {
+      // Reserved as a fan-out reserves it, sentinel first: a release only removes a sentinel that is still the session's.
+      fs.writeFileSync(path.join(app.cfg.dataRoot, 'reports', '062-RESERVED.md'), JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date().toISOString() }));
       const { id } = await withScenario(scenarioFile(SLOW), async () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: 62 }));
       const meta = await settleThere(id);
       expect(meta.status).toBe('done');

@@ -2,12 +2,13 @@
 // through the runner (Claude slot cap applies), the Keychain token is read at
 // spawn and only ever lives in the child's env, stdout is normalized into
 // events.ndjson, and the honesty gate decides done / awaiting_user.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
-import type { Runner } from '../runner/runner.js';
+import { pidAlive, type Runner } from '../runner/runner.js';
 import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
@@ -33,6 +34,8 @@ const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_MS = 250;
 /** How long a turn that failed after its run started waits for that stopped run to end before giving its number back. */
 const RUN_END_WAIT_MS = 10_000;
+/** A running turn's reservation sentinel older than this is refreshed: well inside the stale GC's four hours. */
+const RESERVATION_REFRESH_AGE_MS = 60 * 60_000;
 /** A done pass whose ack failed is acknowledged again after this delay, doubling up to the cap while it keeps failing. */
 const POLICY_ACK_RETRY_MS = 60_000;
 const POLICY_ACK_RETRY_CAP_MS = 30 * 60_000;
@@ -107,7 +110,38 @@ interface TurnProgress {
   rawOffset: number;
 }
 
-function readProgress(file: string): TurnProgress | null {
+/** How old a progress temp file of a live process may get before it counts as left behind (a save takes milliseconds). */
+const PROGRESS_TMP_STALE_MS = 10 * 60_000;
+
+/**
+ * A save that died between its write and its rename leaves its temp file; each has its own name, so none is ever reused.
+ * Housekeeping only: a sweep that fails is warned of and never fails the turn reading its progress.
+ */
+function sweepProgressTemps(file: string): void {
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.tmp-`;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[sessions] could not list ${dir} to sweep left-behind progress files: ${(err as Error).message}`);
+    return;
+  }
+  for (const name of names) {
+    const m = name.startsWith(prefix) ? /^(\d+)-[0-9a-f]+$/.exec(name.slice(prefix.length)) : null;
+    if (!m) continue;
+    const tmp = path.join(dir, name);
+    try {
+      if (pidAlive(Number(m[1])) && Date.now() - fs.statSync(tmp).mtimeMs < PROGRESS_TMP_STALE_MS) continue;
+      fs.rmSync(tmp, { force: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[sessions] could not remove the left-behind progress file ${tmp}: ${(err as Error).message}`);
+    }
+  }
+}
+
+export function readProgress(file: string): TurnProgress | null {
+  sweepProgressTemps(file);
   try {
     const p = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<TurnProgress>;
     return typeof p.rawSeq === 'number' && typeof p.rawOffset === 'number' ? { rawSeq: p.rawSeq, rawOffset: p.rawOffset } : null;
@@ -117,9 +151,21 @@ function readProgress(file: string): TurnProgress | null {
   }
 }
 
-function writeProgress(file: string, p: TurnProgress): void {
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(p));
-  fs.renameSync(`${file}.tmp`, file);
+/** A temp name of its own, so a blue/green peer saving the same turn never writes into or renames away this one's. */
+export function writeProgress(file: string, p: TurnProgress): void {
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(p));
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch (cleanup) {
+      // The save's own failure is what the caller acts on; a later read sweeps this temp file.
+      console.warn(`[sessions] could not remove the progress temp file ${tmp}: ${(cleanup as Error).message}`);
+    }
+    throw err;
+  }
 }
 
 export interface ManagerDeps {
@@ -139,6 +185,8 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
+  /** Reservation warnings already given (a session and number, or a session's refresh failure): the tracker ticks every poll. */
+  private reservationWarned = new Set<string>();
   /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
@@ -224,9 +272,14 @@ export class SessionManager {
     if (key === null) return null;
     const cls = evaluationClass(mode);
     for (const m of this.store.list()) {
-      if (m.id !== exceptId && evaluationClass(m.mode) === cls && LIVE_STATUSES.has(m.status) && postingKey(m.mode, m.target) === key) return m.id;
+      if (m.id !== exceptId && evaluationClass(m.mode) === cls && this.isLive(m) && postingKey(m.mode, m.target) === key) return m.id;
     }
     return null;
+  }
+
+  /** Live, or a cancelled turn still stopping (its process lives until SIGKILL) or finalizing: it may yet write its report. */
+  private isLive(m: SessionMeta): boolean {
+    return LIVE_STATUSES.has(m.status) || this.active.has(m.id);
   }
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
@@ -336,7 +389,7 @@ export class SessionManager {
     const cls = evaluationClass(input.mode);
     const key = (url: string) => `${cls}\0${postingKey(input.mode, { type: 'url', value: url })}`;
     const live = new Map<string, string>();
-    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(key(m.target.value), m.id);
+    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && this.isLive(m)) live.set(key(m.target.value), m.id);
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
     // Two spellings of one posting in this batch (a tracking param, a trailing slash) are one evaluation: the first starts.
@@ -470,9 +523,9 @@ export class SessionManager {
     const meta = this.store.read(id);
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
-    const credited = num !== null && meta?.creditedReport?.num === num;
-    // Taken before the delete removes the record of when the session got the number. A credited report holds the
-    // number, so no other reservation can have claimed it.
+    const credited = num !== null && this.creditedHolds(meta!, num);
+    // Taken before the delete removes the record of when the session got the number. A credited report still there
+    // holds the number, so no other reservation can have claimed it.
     const owns = num !== null && !credited ? this.reservationOwnership(meta!, num) : undefined;
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
@@ -485,6 +538,7 @@ export class SessionManager {
         if (released.startsWith('could not') || released.includes('already lost')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
     }
+    for (const key of this.reservationWarned) if (key.startsWith(`${id}\0`)) this.reservationWarned.delete(key);
     if (deleted && batch !== null) this.dropUnheldPolicyBatch(batch);
     return deleted;
   }
@@ -693,19 +747,10 @@ export class SessionManager {
    */
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
-    if (num === null || meta.creditedReport?.num === num) return meta;
-    const sentinel = this.sentinelPath(num);
-    const createdAt = readSentinelCreatedAt(sentinel);
-    if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
-      const now = new Date();
-      try {
-        fs.utimesSync(sentinel, now, now);
-        // Collected and claimed again between the read and the refresh: the refreshed sentinel is someone else's.
-        if (readSentinelCreatedAt(sentinel) === createdAt) return meta;
-      } catch (err) {
-        // Collected between the read and the refresh: the number is lost like any other.
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      }
+    if (num === null || this.creditedHolds(meta, num)) return meta;
+    if (this.refreshReservation(meta, num)) {
+      this.forgetReservationLosses(meta.id);
+      return meta;
     }
     // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
     this.store.setReportNum(meta.id, null);
@@ -725,11 +770,77 @@ export class SessionManager {
       } finally {
         this.recordedReportNums(fresh);
       }
+      // A new reservation, possibly of the same number: losing it is a new loss, said again.
+      this.forgetReservationLosses(meta.id);
     } else {
       this.recordedReportNums(fresh);
       console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
     }
     return this.store.read(meta.id)!;
+  }
+
+  /** Refreshes `num`'s sentinel when it is still the session's (written no later than the session got the number); false when it is not. */
+  private refreshReservation(meta: SessionMeta, num: number): boolean {
+    const sentinel = this.sentinelPath(num);
+    const createdAt = readSentinelCreatedAt(sentinel);
+    if (createdAt === null || createdAt > this.reservedAt(meta, num)) return false;
+    const now = new Date();
+    try {
+      fs.utimesSync(sentinel, now, now);
+      // Collected and claimed again between the read and the refresh: the refreshed sentinel is someone else's.
+      return readSentinelCreatedAt(sentinel) === createdAt;
+    } catch (err) {
+      // Collected between the read and the refresh: the number is lost like any other.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      return false;
+    }
+  }
+
+  /**
+   * A running turn keeps its reserved number's sentinel younger than the stale-sentinel GC's age threshold: the
+   * allocator process that wrote it has exited, so age alone would let a GC free the number while the turn may still
+   * write its report under it.
+   */
+  private keepReservationFresh(id: string): void {
+    let num: number | null = null;
+    try {
+      // Read inside the try: the tracker tick calling this must never throw (an unreadable record waits for the next tick).
+      const meta = this.store.read(id);
+      num = meta?.reportNum ?? null;
+      if (meta && num !== null && !this.creditedHolds(meta, num)) {
+        const sentinel = this.sentinelPath(num);
+        if (Date.now() - fs.statSync(sentinel).mtimeMs >= RESERVATION_REFRESH_AGE_MS) {
+          if (this.refreshReservation(meta, num)) this.forgetReservationLosses(id);
+          else this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
+        }
+      }
+      // A tick that got through: a later failure is a new one, said again.
+      this.reservationWarned.delete(`${id}\0refresh`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' && num !== null) this.warnReservationLost(id, num, 'was collected while its turn runs; the number may be handed out again');
+      else this.warnOnce(`${id}\0refresh`, `[sessions] session ${id}: could not refresh the reservation for report number ${num ?? '(unknown)'}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Said once per session and number: the tracker ticks again every poll. Finalize then leaves the number alone. */
+  private warnReservationLost(id: string, num: number, why: string): void {
+    this.warnOnce(`${id}\0${num}\0${why}`, `[sessions] session ${id}: its reservation of report number ${num} ${why}`);
+  }
+
+  /** The session's reservation-loss warnings (not its refresh failure), forgotten once it holds a reservation again. */
+  private forgetReservationLosses(id: string): void {
+    for (const key of this.reservationWarned) if (key.startsWith(`${id}\0`) && key !== `${id}\0refresh`) this.reservationWarned.delete(key);
+  }
+
+  private warnOnce(key: string, message: string): void {
+    if (this.reservationWarned.has(key)) return;
+    this.reservationWarned.add(key);
+    console.warn(message);
+  }
+
+  /** A report credited under `num` that is still there holds the number; one the user deleted holds nothing. */
+  private creditedHolds(meta: SessionMeta, num: number): boolean {
+    return meta.creditedReport?.num === num && fs.existsSync(path.join(this.cfg.dataRoot, 'reports', meta.creditedReport.file));
   }
 
   private sentinelPath(num: number): string {
@@ -999,6 +1110,7 @@ export class SessionManager {
     };
     const timer = setInterval(() => {
       safePull();
+      this.keepReservationFresh(id);
       let run: RunMeta | null;
       try {
         run = this.runner.store.read(runId);
@@ -1007,7 +1119,8 @@ export class SessionManager {
         // stopped run has ended, so it may still write its report: the session keeps its number.
         fail(err);
         clearInterval(timer);
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.active.delete(id));
+        // Still tracked until the runner stops following its process: the duplicate checks count it live until then.
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.untilRunStops(id, runId));
         return;
       }
       // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
@@ -1052,9 +1165,10 @@ export class SessionManager {
       let reason = cancelled ? `cancelled by the user; ${why}` : why;
       const num = meta.reportNum;
       if (num !== null && r.keepReservation !== true) {
-        // Claimed before the await, as finalize does, so the number is released once.
+        // Claimed before the await, as finalize does, so the number is released once, and only while it is still the session's.
+        const owns = this.creditedHolds(meta, num) ? undefined : this.reservationOwnership(meta, num);
         this.store.setReportNum(id, null);
-        reason += `; ${await this.releaseReportNum(num, null)}`;
+        reason += `; ${await this.releaseReportNum(num, null, owns)}`;
       }
       if (this.turnEnded(id, n)) return;
       const status = cancelled ? 'cancelled' : 'error';
@@ -1077,6 +1191,43 @@ export class SessionManager {
       if (Date.now() > deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+  }
+
+  /**
+   * Keeps the session in `active` while the runner still follows the run's process, then drops it. Meanwhile the stop
+   * that failed while the record could not be read is tried again, and the number the session kept stays reserved.
+   */
+  private untilRunStops(id: string, runId: string): void {
+    if (this.closed) return;
+    let stopped = false;
+    const following = () => {
+      if (!stopped) {
+        try {
+          this.runner.cancel(runId);
+          stopped = true;
+        } catch {
+          /* the run record is still unreadable: tried again on the next tick */
+        }
+      }
+      try {
+        return this.runner.ending(runId);
+      } catch {
+        // Its record is unreadable and the runner does not follow it: nothing here can tell it is still alive.
+        return false;
+      }
+    };
+    if (!following()) {
+      this.active.delete(id);
+      return;
+    }
+    const timer = setInterval(() => {
+      this.keepReservationFresh(id);
+      if (following()) return;
+      clearInterval(timer);
+      this.active.delete(id);
+    }, this.deps.pollMs ?? 250);
+    timer.unref();
+    this.active.set(id, { timer });
   }
 
   private turnEnded(id: string, n: number): boolean {
@@ -1121,9 +1272,15 @@ export class SessionManager {
     let reason = outcome.reason;
     const num = meta.reportNum;
     if (num !== null && outcome.status !== 'awaiting_user') {
+      // An earlier turn's credited report holds the number as well as this turn's own new one, while it is still there.
+      const creditedHeld = this.creditedHolds(meta, num);
+      const used = newReports.some((x) => x.num === num) || creditedHeld;
+      // A report holding the number means no other reservation can have claimed it; otherwise the stale GC may have, and
+      // the sentinel now there (or the one a reservation writes before the release runs) is someone else's.
+      const owns = used ? undefined : this.reservationOwnership(meta, num);
       // Claimed before the await, so no other finalize of this turn can release the number again.
       this.store.setReportNum(id, null);
-      reason += `; ${await this.releaseReportNum(num, newReports.some((x) => x.num === num))}`;
+      reason += `; ${await this.releaseReportNum(num, used, owns)}`;
     }
     // Only a pass that ends done acknowledges the items it was given; any other outcome leaves them queued for the next run.
     const batch = meta.policyBatch ?? null;
