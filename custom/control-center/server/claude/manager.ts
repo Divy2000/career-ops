@@ -575,30 +575,46 @@ export class SessionManager {
    */
   reconcile(): void {
     for (const meta of this.store.list()) {
-      const live = meta.status === 'running' || meta.status === 'queued';
-      const turn = meta.turns.at(-1);
-      if (!live && (!turn || turn.endedAt)) continue;
-      if (this.active.has(meta.id)) continue;
-      const run = turn ? this.runner.store.read(turn.runId) : null;
-      if (!turn || !run) {
-        // Already settled (a status other than running or queued) with no run to follow: nothing more to record.
-        if (!live) continue;
-        const reason = 'run record missing after a restart';
-        this.store.setStatus(meta.id, 'error', reason);
-        // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
-        if (meta.reportNum !== null) {
-          const since = this.ownedSince(meta, meta.reportNum);
-          this.store.setReportNum(meta.id, null);
-          void this.releaseReportNum(meta.reportNum, false, since);
-        }
-        this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
-        continue;
+      // One session that cannot be settled must not stop the server's start, the other sessions or the policy-pass acks.
+      try {
+        this.reconcileSession(meta);
+      } catch (err) {
+        console.error(`[sessions] session ${meta.id} could not be reconciled: ${(err as Error).stack ?? String(err)}`);
       }
-      const policy = this.effectivePolicy(meta.mode) ?? policyForClass(meta.policyClass);
-      const state = this.readTurnState(meta.id, turn.n);
-      this.track(meta.id, turn.n, run.id, policy, state, '');
     }
     this.runLeftoverPolicyAcks();
+  }
+
+  private reconcileSession(meta: SessionMeta): void {
+    const live = meta.status === 'running' || meta.status === 'queued';
+    const turn = meta.turns.at(-1);
+    if (!live && (!turn || turn.endedAt)) return;
+    if (this.active.has(meta.id)) return;
+    let recorded: boolean;
+    try {
+      recorded = turn !== undefined && this.runner.store.read(turn.runId) !== null;
+    } catch {
+      // A run record that exists but cannot be read (half-written, unreadable): the turn is tracked all the same, and
+      // the tracker's first tick ends it in error while the session keeps its number, as when the read fails mid-turn.
+      recorded = true;
+    }
+    if (!turn || !recorded) {
+      // Already settled (a status other than running or queued) with no run to follow: nothing more to record.
+      if (!live) return;
+      const reason = 'run record missing after a restart';
+      this.store.setStatus(meta.id, 'error', reason);
+      // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
+      if (meta.reportNum !== null) {
+        const since = this.ownedSince(meta, meta.reportNum);
+        this.store.setReportNum(meta.id, null);
+        void this.releaseReportNum(meta.reportNum, false, since);
+      }
+      this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
+      return;
+    }
+    const policy = this.effectivePolicy(meta.mode) ?? policyForClass(meta.policyClass);
+    const state = this.readTurnState(meta.id, turn.n);
+    this.track(meta.id, turn.n, turn.runId, policy, state, '');
   }
 
   close(): void {

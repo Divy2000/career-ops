@@ -1158,6 +1158,23 @@ describe('read confinement (BUG-06)', () => {
     expect(statuses()).toHaveLength(1);
   });
 
+  it('a half-written run record does not stop reconcile: that turn ends in error, and the other sessions are still settled (R28-claude-L1-01)', async () => {
+    const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    const run = t.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT } });
+    t.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'x' });
+    t.sessions.store.setStatus(meta.id, 'running');
+    await until(() => t.runner.store.read(run.id)!.endedAt !== null && !t.runner.ending(run.id));
+    // A power loss mid-write leaves the run's meta.json truncated.
+    fs.writeFileSync(path.join(t.runner.store.dirOf(run.id), 'meta.json'), `{"id":"${run.id}","status":"runn`);
+    const other = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    t.sessions.store.beginTurn(other.id, { runId: 'r-gone-beside-unreadable', userText: 'x' });
+    t.sessions.store.setStatus(other.id, 'running');
+    expect(() => t.sessions.reconcile()).not.toThrow();
+    expect(t.sessions.read(other.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
+    await until(() => t.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+    expect(t.sessions.read(meta.id)!.status).toBe('error');
+  });
+
   it('a session already settled after its run record went missing is not settled again at the next reconcile', () => {
     const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
     t.sessions.store.beginTurn(meta.id, { runId: 'r-gone-twice', userText: 'x' });
