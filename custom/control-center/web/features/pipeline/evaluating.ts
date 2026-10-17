@@ -17,6 +17,14 @@ export function isReportGatedMode(mode: string): boolean {
   return english === 'oferta' || english === 'auto-pipeline' || mode.endsWith('/oferta');
 }
 
+/**
+ * Process inbox: pipeline mode or a language-directory spelling of it (de/pipeline), as the server's isProcessInbox
+ * reads it through englishModeOf. No translated mode stands for pipeline.
+ */
+export function isProcessInboxMode(mode: string): boolean {
+  return mode.replace(LANGUAGE_DIR, '') === 'pipeline';
+}
+
 // What the server's duplicate guard compares (manager.ts postingKey): a saved JD by its jds/ file, a posting by its
 // dedup key, so two spellings of one posting are one.
 function targetKey(ref: string): string {
