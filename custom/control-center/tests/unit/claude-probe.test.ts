@@ -173,7 +173,8 @@ syncBuiltinESMExports();
       const claude = path.join(box.bin, 'claude');
       // Answers --version; every case call starts a child of its own (a hook, a Bash-tool command), records both pids
       // and hangs, as a real call does for minutes.
-      fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nsleep 60 &\n: > "${box.calls}/$!"\n: > "${box.calls}/$$"\nwait\n`, { mode: 0o755 });
+      // The real CLI creates its project folder (named after the cwd) before any hook runs, so no hook log names it.
+      fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nmkdir -p "$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"\nsleep 60 &\n: > "${box.calls}/$!"\n: > "${box.calls}/$$"\nwait\n`, { mode: 0o755 });
       const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
         env: { ...process.env, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -207,10 +208,8 @@ syncBuiltinESMExports();
     }, 40_000);
   }
 
-  it('says which canaries may remain when the cleanup after a signal fails (R28-supervisor-L1-01 review)', async () => {
-    const box = sandbox();
-    const claude = path.join(box.bin, 'claude');
-    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+  /** A preload under which removing the home canary dir fails with EBUSY. */
+  function homeRmFails(box: ReturnType<typeof sandbox>) {
     const preload = path.join(box.root, 'rm-fails.mjs');
     fs.writeFileSync(
       preload,
@@ -224,12 +223,43 @@ fs.rmSync = (target, ...rest) => {
 syncBuiltinESMExports();
 `,
     );
+    return preload;
+  }
+
+  /** The cleanup steps after the failing one still ran: the summary is out and the other canaries are gone. */
+  function expectRestCleaned(box: ReturnType<typeof sandbox>, stdout: string) {
+    expect(JSON.parse(stdout).version).toBe('9.9.9');
+    expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+    expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+  }
+
+  it('finishes the rest of the cleanup and says which canaries may remain when a step fails at the end of a run (R28-supervisor-L1-01 review)', () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, '#!/bin/sh\nrm -f "$0"\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
+    const r = runProbe('claude-probe-reads.mjs', box, claude, { NODE_OPTIONS: `--import=${pathToFileURL(homeRmFails(box)).href}` });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/cleanup failed: .*EBUSY/);
+    expect(r.stderr).toContain(path.join(box.home, '.cc-probe-'));
+    expect(r.stderr).not.toMatch(/\n\s+at /);
+    expectRestCleaned(box, r.stdout);
+    fs.rmSync(box.home, { recursive: true, force: true });
+  });
+
+  it('says which canaries may remain when the cleanup after a signal fails (R28-supervisor-L1-01 review)', async () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const preload = homeRmFails(box);
     const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
       env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';
+    let stdout = '';
     child.stderr.on('data', (d) => (stderr += d));
+    child.stdout.on('data', (d) => (stdout += d));
     const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
     const deadline = Date.now() + 20_000;
     while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
@@ -238,6 +268,7 @@ syncBuiltinESMExports();
     expect(stderr).toMatch(/cleanup failed: .*EBUSY/);
     expect(stderr).toContain(path.join(box.home, '.cc-probe-'));
     expect(stderr).not.toContain(FAKE_TOKEN);
+    expectRestCleaned(box, stdout);
     fs.rmSync(box.home, { recursive: true, force: true });
   }, 40_000);
 });
