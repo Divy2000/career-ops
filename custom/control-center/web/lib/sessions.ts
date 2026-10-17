@@ -167,6 +167,9 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
     let pending: StoredEvent[] = [];
     let failures = 0;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    // Loads overlap (the mount and the stream's first open, say). Only the latest one's answer counts: an older one was
+    // read before frames that wait in pending, so taking them in would move `last` past the events in between.
+    let generation = 0;
     const apply = (events: StoredEvent[]) => {
       // The stored events and the frames that waited for them overlap: one event per seq.
       const fresh = [...new Map(events.filter((e) => e.seq > last).map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
@@ -178,9 +181,10 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
     };
     const load = (): void => {
       clearTimeout(retry);
-      void apiGet<{ meta?: SessionMeta; events: StoredEvent[] }>(`/api/sessions/${id}`).then(
+      const asked = ++generation;
+      void apiGet<{ meta?: SessionMeta; events: StoredEvent[] }>(`/api/sessions/${encodeURIComponent(id)}`).then(
         (r) => {
-          if (closed) return;
+          if (closed || asked !== generation) return;
           failures = 0;
           if (!r.meta) {
             // Not a session at all (another route under /api/sessions/, such as engine): nothing to follow, and meta
@@ -208,7 +212,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
           if ((ended && waiting.length > 0) || stale) void qc.invalidateQueries({ queryKey: ['sessions'] });
         },
         (err: unknown) => {
-          if (closed) return;
+          if (closed || asked !== generation) return;
           if (err instanceof ApiError && err.status === 404) {
             // The server does not have it (deleted, or a stale id): an answer, not an outage. Nothing more to follow.
             closed = true;
@@ -299,14 +303,14 @@ export function startTailoredCvSession(n: string): Promise<SessionMeta> {
 }
 export async function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${encodeURIComponent(id)}/turns`, { prompt, ...unlock.body }, unlock.headers);
 }
 export function forkSession(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/fork`, { prompt, ...unlock.body }, unlock.headers);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${encodeURIComponent(id)}/fork`, { prompt, ...unlock.body }, unlock.headers);
 }
 export function cancelSession(id: string): Promise<SessionMeta> {
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/cancel`);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`);
 }
 export function fanOut(mode: string, urls: string[]): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
   return apiSend('POST', '/api/sessions/fanout', { mode, urls });

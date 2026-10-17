@@ -193,7 +193,7 @@ export function SessionDetailPage() {
   const [deletedId, setDeletedId] = useState<string | null>(null);
   const deleted = deletedId === id;
   // Off once deleted: any turn ending invalidates the ['sessions'] prefix, and the refetch would 404 over "Session deleted.".
-  const q = useQuery({ queryKey: ['sessions', id], queryFn: () => apiGet<{ meta: SessionMeta }>(`/api/sessions/${id}`), enabled: !deleted });
+  const q = useQuery({ queryKey: ['sessions', id], queryFn: () => apiGet<{ meta: SessionMeta }>(`/api/sessions/${encodeURIComponent(id)}`), enabled: !deleted });
   const confirm = useConfirm();
   const navigate = useNavigate();
   // A fork is a new session: the page follows it instead of showing the source.
@@ -218,7 +218,7 @@ export function SessionDetailPage() {
   const removeAsked = async () => {
     if (!(await confirm({ title: 'Delete this session?', body: 'The transcript and its events are removed. Runs it started are kept.', confirmLabel: 'Delete', danger: true }))) return;
     try {
-      await apiSend('DELETE', `/api/sessions/${id}`, {});
+      await apiSend('DELETE', `/api/sessions/${encodeURIComponent(id)}`, {});
     } catch (err) {
       toast.error(`Could not delete the session: ${describeError(err)}`);
       return;
