@@ -140,7 +140,12 @@ async function importInto({ entries, blocks, wholeText, write, merge }) {
     return;
   }
   const tmp = `${TARGET}.tmp-${process.pid}`;
-  await writeFile(tmp, next);
+  try {
+    await writeFile(tmp, next);
+  } catch (err) {
+    removeQuietly(tmp, 'temp library');
+    throw err;
+  }
   publish(tmp, base, merge);
   process.stdout.write(`wrote ${plural(kept.length)} to ${TARGET}\n`);
 }
@@ -171,7 +176,9 @@ function publish(tmp, base, merge) {
         try {
           renameSync(tmp, TARGET);
         } catch (e) {
-          rmSync(TARGET, { force: true });
+          if (!removeQuietly(TARGET, 'placeholder library')) {
+            e.message += `; an empty placeholder library was left at ${TARGET}, delete it before rerunning`;
+          }
           throw e;
         }
       }
@@ -182,7 +189,19 @@ function publish(tmp, base, merge) {
     }
     renameSync(tmp, TARGET);
   } finally {
-    rmSync(tmp, { force: true });
+    removeQuietly(tmp, 'temp library');
+  }
+}
+
+// Cleanup after a failure (or a finished rename) must not replace the error the user needs to see, so a removal that
+// fails too is only noted. Returns whether the file is gone.
+function removeQuietly(file, what) {
+  try {
+    rmSync(file, { force: true });
+    return true;
+  } catch (err) {
+    process.stderr.write(`note: could not remove the ${what} ${file}: ${err.message}\n`);
+    return false;
   }
 }
 

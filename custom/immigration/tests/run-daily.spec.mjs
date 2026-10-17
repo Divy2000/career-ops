@@ -72,7 +72,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   const nodeLog = path.join(T, 'step-nodes.log');
   // ... and which Anthropic or Claude Code variables reached them, by name.
   const envLog = path.join(T, 'step-env.log');
-  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\nfs.appendFileSync(${JSON.stringify(envLog)}, ${JSON.stringify(name)} + ' ' + Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)).sort().join(',') + '\\n');\n`;
+  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\nfs.appendFileSync(${JSON.stringify(envLog)}, ${JSON.stringify(name)} + ' ' + Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_|CC_OAUTH_TOKEN$)/.test(k)).sort().join(',') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
@@ -284,6 +284,53 @@ jobTest('an unapproved Claude Code skips the pass, not the job: a clear log line
   assert.doesNotMatch(r.log, /!!! step failed: rank/);
   assert.doesNotMatch(r.steps, /^rank-pipeline\.mjs/m);
   assert.deepEqual(r.leftovers, []);
+});
+
+jobTest('an unapproved Claude Code whose digest note cannot be moved into place fails the step and leaves no temp digest in data/immigration (R27-scripts-a-L1-02)', () => {
+  const w = dailyWorld();
+  const preload = path.join(w.T, 'rename-eio.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (String(to).endsWith('policy-digest.md')) { const err = new Error('i/o error'); err.code = 'EIO'; throw err; }
+  return real(from, to);
+};
+syncBuiltinESMExports();
+`);
+  const r = w.run({ FAKE_CLAUDE_VERSION: '2.1.290 (Claude Code)', NODE_OPTIONS: `--import ${preload}` });
+  assert.match(r.log, /policy pass skipped: Claude Code 2\.1\.290 is not approved/);
+  assert.match(r.log, /EIO/, 'the failed rename reached the log');
+  assert.match(r.log, /^!!! step failed: policy watch$/m, 'the failed note fails the step');
+  assert.equal(r.digest, null, 'no digest was published');
+  assert.deepEqual(fs.readdirSync(r.imm).filter((f) => f.includes('.tmp-')), [], 'the failed note left its temp digest behind');
+});
+
+jobTest('an unapproved Claude Code whose digest note cannot be moved into place logs the rename error, not a failed temp cleanup (R27-scripts-a-L1-02 review)', () => {
+  const w = dailyWorld();
+  const preload = path.join(w.T, 'rename-eio-rm-eacces.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRename = fs.renameSync;
+const realRm = fs.rmSync;
+fs.renameSync = (from, to) => {
+  if (String(to).endsWith('policy-digest.md')) { const err = new Error('i/o error'); err.code = 'EIO'; throw err; }
+  return realRename(from, to);
+};
+fs.rmSync = (target, opts) => {
+  if (String(target).includes('policy-digest.md.tmp-')) { const err = new Error('permission denied'); err.code = 'EACCES'; throw err; }
+  return realRm(target, opts);
+};
+syncBuiltinESMExports();
+`);
+  const r = w.run({ FAKE_CLAUDE_VERSION: '2.1.290 (Claude Code)', NODE_OPTIONS: `--import ${preload}` });
+  assert.match(r.log, /policy pass skipped: Claude Code 2\.1\.290 is not approved/);
+  assert.match(r.log, /EIO/, 'the failed rename reached the log');
+  assert.match(r.log, /^!!! step failed: policy watch$/m, 'the failed note fails the step');
+  assert.match(r.log, /^Error: i\/o error$/m, 'the step failed on the rename error');
+  assert.doesNotMatch(r.log, /^Error: permission denied$/m, 'the failed cleanup replaced the rename error');
+  assert.match(r.log, /could not remove the temp digest .*policy-digest\.md\.tmp-\d+: permission denied/, 'the failed cleanup is noted');
+  assert.equal(r.digest, null, 'no digest was published');
 });
 
 jobTest('a Claude Code whose version cannot be read fails the step and never runs the pass', () => {
@@ -951,6 +998,46 @@ jobTest('no step sees an inherited ANTHROPIC_* variable or a credential CLAUDE_C
   }
   assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
   assert.equal(r.rankCalls[0].token, true, 'the rank call gets the token through the shim');
+});
+
+jobTest('an exported CC_OAUTH_TOKEN in the job environment reaches no step: the Keychain token reassigned to it stays in the script (R27-scripts-a-H-01)', () => {
+  const w = dailyWorld();
+  const r = w.run({ CC_OAUTH_TOKEN: 'inherited-from-launchd' });
+  assert.equal(r.status, 0, r.log);
+  const lines = r.stepEnv.split('\n');
+  for (const step of ['watch', 'scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) {
+    const line = lines.find((l) => l.startsWith(`${step} `));
+    assert.ok(line, `${step} did not run:\n${r.stepEnv}`);
+    assert.ok(!line.split(/[ ,]/).includes('CC_OAUTH_TOKEN'), `${step} saw CC_OAUTH_TOKEN: ${line}`);
+  }
+  assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
+  assert.equal(r.rankCalls[0].token, true, 'the rank call gets the token through the shim');
+});
+
+jobTest('an exported CC_OAUTH_TOKEN never reaches the data-root resolver that runs before the lock re-exec (R27-scripts-a-H-01 review)', () => {
+  const w = dailyWorld();
+  const seen = path.join(w.T, 'resolver-env.log');
+  const resolver = path.join(w.root, 'path-resolver.mjs');
+  fs.appendFileSync(resolver, `\nimport { appendFileSync as __log } from 'node:fs';\n__log(${JSON.stringify(seen)}, (process.env.CC_OAUTH_TOKEN ? 'token' : 'none') + '\\n');\n`);
+  const r = w.run({ CC_OAUTH_TOKEN: 'inherited-from-launchd' });
+  assert.equal(r.status, 0, r.log);
+  const lines = readFileSync(seen, 'utf8').trim().split('\n');
+  assert.ok(lines.length >= 1 && lines[0] !== '', 'the resolver ran');
+  assert.deepEqual([...new Set(lines)], ['none'], `the resolver saw CC_OAUTH_TOKEN: ${lines}`);
+});
+
+jobTest('an inherited ANTHROPIC_* or credential CLAUDE_CODE_* variable never reaches the data-root resolver that runs before the lock re-exec (R27-scripts-a-H-01 review)', () => {
+  const w = dailyWorld();
+  const seen = path.join(w.T, 'resolver-env.log');
+  const resolver = path.join(w.root, 'path-resolver.mjs');
+  fs.appendFileSync(resolver, `\nimport { appendFileSync as __log } from 'node:fs';\nif (process.argv[1] === undefined) __log(${JSON.stringify(seen)}, Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)).sort().join(',') + '\\n');\n`);
+  const r = w.run({ ANTHROPIC_API_KEY: 'inherited-key', CLAUDE_CODE_OAUTH_TOKEN: 'inherited-token', CLAUDE_CODE_ENTRYPOINT: 'cli' });
+  assert.equal(r.status, 0, r.log);
+  // Only the script's own resolver call (node -e, once before the lock re-exec and once after it) is logged: the claude
+  // shim imports the resolver too, and it is meant to hold the Keychain token.
+  const lines = readFileSync(seen, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 2, `the resolver ran before and after the re-exec: ${lines}`);
+  assert.deepEqual([...new Set(lines)], ['CLAUDE_CODE_ENTRYPOINT'], `the resolver saw an Anthropic credential: ${lines}`);
 });
 
 test('the daily policy pass and the Control Center immigration-policy session may write exactly the same files (parity with modes.ts)', () => {
