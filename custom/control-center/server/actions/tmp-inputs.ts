@@ -74,8 +74,9 @@ export function uploadsNamedBySessions(dataRoot: string): Set<string> {
     const st = fs.statSync(path.join(dir, entry.name), { throwIfNoEntry: false });
     if (st && Date.now() - st.mtimeMs < 60_000) throw new Error(`session ${entry.name} is still being created`);
   }
-  // Listing reads only the data root; the guard root is for turn policies, which this never touches.
-  for (const meta of new SessionStore(dataRoot, '').list()) {
+  // Listing reads only the data root; the guard root is for turn policies, which this never touches. Strict: a meta.json
+  // that does not read may name any upload.
+  for (const meta of new SessionStore(dataRoot, '').list({ strict: true })) {
     if (meta.target?.type !== 'text' || !meta.target.value) continue;
     const target = uploadTarget(dataRoot, meta.target.value);
     if (target.kind === 'upload') out.add(target.path);

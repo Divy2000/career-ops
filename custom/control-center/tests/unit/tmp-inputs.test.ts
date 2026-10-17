@@ -67,6 +67,21 @@ describe('action input files', () => {
     expect([...uploadsNamedBySessions(root)]).toEqual([]);
   });
 
+  it('keeps every old upload when a session meta.json does not parse, since that session may name one (R29-srv-core-L1-02)', () => {
+    const root = tempDir('cc-tmp-sweep-torn-');
+    fs.mkdirSync(uploadsDir(root), { recursive: true });
+    const oldUpload = path.join(uploadsDir(root), '1-cv.pdf');
+    fs.writeFileSync(oldUpload, '%PDF');
+    const past = new Date(Date.now() - 25 * HOUR);
+    fs.utimesSync(oldUpload, past, past);
+    const torn = path.join(root, 'data', 'control-center', 'sessions', 's-torn');
+    fs.mkdirSync(torn, { recursive: true });
+    fs.writeFileSync(path.join(torn, 'meta.json'), '{"id":"s-torn","target":{"type":"te');
+    expect(() => uploadsNamedBySessions(root)).toThrow();
+    sweepStaleInputs(root, 24 * HOUR);
+    expect(fs.existsSync(oldUpload)).toBe(true);
+  });
+
   it('sweeps nothing and does not fail when the dirs do not exist yet', () => {
     expect(() => sweepStaleInputs(tempDir('cc-tmp-empty-'), HOUR)).not.toThrow();
   });
