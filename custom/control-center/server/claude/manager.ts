@@ -791,6 +791,8 @@ export class SessionManager {
    * is never refreshed after its age was read. Throws when the refresh could not be run (the tracker lock stayed busy).
    */
   private async refreshReservation(meta: SessionMeta, num: number): Promise<boolean> {
+    // A sentinel gone or unreadable is not the session's, whatever its record of when it got the number says.
+    if (readSentinelCreatedAt(this.sentinelPath(num)) === null) return false;
     const since = this.reservedAt(meta, num);
     if (!this.sentinelOwned(num, since)) return false;
     const r = await this.settleSentinel('refresh', num, since);
