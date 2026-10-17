@@ -826,6 +826,7 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
       await act(async () => new Promise((r) => setTimeout(r, 20)));
       expect(item.dataset.proposalState).toBe('done');
       expect(seen.at(-1)).toBe(false);
+      expect(calls).toContain('POST /api/sessions/fanout');
       expect(calls.slice(calls.indexOf('POST /api/sessions/fanout'))).toContain('GET /api/sessions');
     } finally {
       // A failed run must not leave the shared mark set for the next test.
