@@ -343,6 +343,22 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(String(call![1]!.body)).toContain('attach the CV PDF output/cv-b.pdf');
   });
 
+  it('Given a draft that named no CV PDF, When a reply is sent to it and a newer CV arrives, Then the newer one is preselected (R28-feat-a-L2-01 review)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: null, cover: null }));
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme.pdf', 'the suggested CV');
+    // A reply sent from the panel reports the session it runs in, the same draft.
+    await act(async () => applyPanel()!.onStarting!());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-v2.pdf'], covers: [], suggestedPdf: 'output/cv-acme-v2.pdf', suggestedCover: null };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme-v2.pdf', 'the newer CV preselected');
+  });
+
   it('Given a draft deleted elsewhere, When it reports gone, Then its kept documents are let go too (R28-feat-a-L2-01 review)', async () => {
     sessionStorage.setItem('cc.apply.12', 's-apply-12');
     sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-acme.pdf', cover: null }));

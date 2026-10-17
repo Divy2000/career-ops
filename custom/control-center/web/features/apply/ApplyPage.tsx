@@ -210,11 +210,12 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const onSessionId = useCallback(
     (sid: string) => {
       if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
-      // An empty value the user did not pick is no choice, so it is kept as null.
-      writeDraftDocs(sid, { pdf: pdf || (pickedPdf === '' ? '' : null), cover: cover || (pickedCover === '' ? '' : null) });
+      // An empty value the user did not pick is no choice, so it is kept as null. A reply reports the draft it runs in:
+      // its prompt named no documents, so the draft's own are left as they are.
+      if (sid !== sessionId) writeDraftDocs(sid, { pdf: pdf || (pickedPdf === '' ? '' : null), cover: cover || (pickedCover === '' ? '' : null) });
       rememberSessionId(sid);
     },
-    [typedUrl, pdf, cover, pickedPdf, pickedCover, rememberSessionId],
+    [typedUrl, sessionId, pdf, cover, pickedPdf, pickedCover, rememberSessionId],
   );
   // A pick made after the draft started is the one Fill attaches, so it is kept for the re-attached draft as well.
   const pickDoc = (kind: keyof DraftDocs, value: string) => {
