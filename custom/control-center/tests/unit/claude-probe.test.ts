@@ -74,14 +74,16 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
     expect(summary.probeA.stderrTail).toMatch(/ENOENT/);
     expect(summary.probeB.stderrTail).toMatch(/ENOENT/);
   });
+
 });
 
 describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
   it('treats an empty or blank CC_CLAUDE_BIN as unset and runs the claude on PATH (R27-sup1-rev-01)', () => {
     for (const value of ['', '  ']) {
       const box = sandbox();
-      // Answers --version, then disappears, as below: only the version read matters here.
-      fs.writeFileSync(path.join(box.bin, 'claude'), '#!/bin/sh\nrm -f "$0"\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
+      // Answers --version and fails every other call: only the version read matters here. It must not delete itself,
+      // because a bare `claude` would then resolve to the real CLI further down PATH and make network calls.
+      fs.writeFileSync(path.join(box.bin, 'claude'), '#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nexit 1\n', { mode: 0o755 });
       const r = runProbe('claude-probe-reads.mjs', box, value);
       expect(JSON.parse(r.stdout).version, JSON.stringify(value) + r.stderr).toBe('9.9.9');
     }
