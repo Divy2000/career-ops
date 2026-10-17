@@ -57,6 +57,7 @@ async function startHeldFanOut() {
   await until(() => release, 'the fan-out request');
 }
 
+const allStarted = { sessions: [session('s1', 'https://jobs.example.com/1', 'queued', 12), session('s2', 'https://jobs.example.com/2', 'queued', 13)], reserved: [12, 13] };
 const partlyFailed = { sessions: [session('s1', 'https://jobs.example.com/1', 'queued', 12), session('s2', 'https://jobs.example.com/2', 'error', null)], reserved: [12, 13] };
 
 beforeEach(() => {
@@ -158,5 +159,15 @@ describe('Pipeline > Batch left while a fan-out runs (R27-feat-b-L1-02)', () => 
     await render(true);
     await until(() => host.querySelector('[role="alert"]'), 'the error');
     expect(textarea().value).toBe(typed);
+  });
+
+  it('shown again before a fan-out that starts every URL answers: the shown tab stays, since only the tab that started it moves to Sessions', async () => {
+    await startHeldFanOut();
+    await render(false);
+    await render(true);
+    await act(async () => release!(allStarted));
+    const status = await until(() => host.querySelector('[role="status"]'), 'the outcome');
+    expect(status.textContent).toMatch(/Started 2 evaluations with report numbers 12, 13\./);
+    expect(started).toBe(0);
   });
 });
