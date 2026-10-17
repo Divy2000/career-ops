@@ -305,6 +305,32 @@ syncBuiltinESMExports();
   assert.deepEqual(fs.readdirSync(r.imm).filter((f) => f.includes('.tmp-')), [], 'the failed note left its temp digest behind');
 });
 
+jobTest('an unapproved Claude Code whose digest note cannot be moved into place logs the rename error, not a failed temp cleanup (R27-scripts-a-L1-02 review)', () => {
+  const w = dailyWorld();
+  const preload = path.join(w.T, 'rename-eio-rm-eacces.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRename = fs.renameSync;
+const realRm = fs.rmSync;
+fs.renameSync = (from, to) => {
+  if (String(to).endsWith('policy-digest.md')) { const err = new Error('i/o error'); err.code = 'EIO'; throw err; }
+  return realRename(from, to);
+};
+fs.rmSync = (target, opts) => {
+  if (String(target).includes('policy-digest.md.tmp-')) { const err = new Error('permission denied'); err.code = 'EACCES'; throw err; }
+  return realRm(target, opts);
+};
+syncBuiltinESMExports();
+`);
+  const r = w.run({ FAKE_CLAUDE_VERSION: '2.1.290 (Claude Code)', NODE_OPTIONS: `--import ${preload}` });
+  assert.match(r.log, /policy pass skipped: Claude Code 2\.1\.290 is not approved/);
+  assert.match(r.log, /EIO/, 'the failed rename reached the log');
+  assert.match(r.log, /^Error: i\/o error$/m, 'the step failed on the rename error');
+  assert.doesNotMatch(r.log, /^Error: permission denied$/m, 'the failed cleanup replaced the rename error');
+  assert.match(r.log, /could not remove the temp digest .*policy-digest\.md\.tmp-\d+: permission denied/, 'the failed cleanup is noted');
+  assert.equal(r.digest, null, 'no digest was published');
+});
+
 jobTest('a Claude Code whose version cannot be read fails the step and never runs the pass', () => {
   const w = dailyWorld();
   const r = w.run({ FAKE_CLAUDE_VERSION: 'Claude Code is updating...' });

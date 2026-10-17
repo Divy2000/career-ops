@@ -285,8 +285,14 @@ if (after !== before) {
   try {
     fs.writeFileSync(tmp, after);
     fs.renameSync(tmp, FILE);
-  } finally {
-    fs.rmSync(tmp, { force: true });
+  } catch (err) {
+    // The write or rename error is the one the log must show; a cleanup that fails too is only noted.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch (cleanupErr) {
+      console.error(`run-daily: could not remove the temp digest ${tmp}: ${cleanupErr.message}`);
+    }
+    throw err;
   }
 }
 ' || return 1
