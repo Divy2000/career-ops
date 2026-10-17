@@ -297,8 +297,11 @@ function partCopies(manifest) {
   });
 }
 
-/** How a case- and normalization-insensitive disk (APFS) compares names: "Poster.jpg" is "poster.jpg", NFC "é" is NFD "é". */
-const diskKey = (name) => name.normalize('NFC').toLowerCase();
+/**
+ * How a case- and normalization-insensitive disk (APFS) compares names: "Poster.jpg" is "poster.jpg", NFC "é" is NFD "é".
+ * Upper-casing first folds what lower-casing alone keeps apart, such as "ς" and "σ" or "ſ" and "s".
+ */
+const diskKey = (name) => name.normalize('NFC').toUpperCase().toLowerCase();
 
 /** One file on disk, whatever the path spelling: on a case-insensitive disk "Poster.jpg" and "poster.jpg" are. */
 function sameFile(a, b) {

@@ -311,9 +311,11 @@ describe('installTutorial with a quick guide', () => {
     expect(r.files.filter((n) => n === 'poster.jpg')).toHaveLength(1);
   });
 
-  it('refuses two different files whose names differ only in Unicode normalization', () => {
-    const nfc = 'caf\u00e9.jpg';
-    const nfd = 'cafe\u0301.jpg';
+  it.each([
+    ['Unicode normalization', 'caf\u00e9.jpg', 'cafe\u0301.jpg'],
+    ['a final and a medial sigma', '\u03c3.jpg', '\u03c2.jpg'],
+    ['a long s', 's.jpg', '\u017f.jpg'],
+  ])('refuses two different files whose names differ only in %s', (_label, nfc, nfd) => {
     folder({ manifest: { ...manifest, poster: nfc }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: nfd }] }) });
     write(nfc, 'TUTORIAL-POSTER');
     if (!fs.readdirSync(src()).includes(nfd) && !fs.existsSync(path.join(src(), nfd))) write(nfd, 'GUIDE-POSTER');
