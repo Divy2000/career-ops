@@ -284,6 +284,28 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(String(call![1]!.body)).not.toContain('gone');
   });
 
+  it('Given None picked for the cover letter and no PDF for a draft, When the page comes back, Then the row\'s suggestions do not replace those choices (R28-feat-a-L2-01 review)', async () => {
+    docs = { pdfs: ['output/cv-acme.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: 'output/cover-acme.md' };
+    await openApply();
+    for (const label of ['CV PDF to attach', 'Cover letter text']) {
+      await until(() => host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)?.value, label);
+      const select = host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
+      await act(async () => {
+        select.value = '';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]'), 'the cover letter select');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')!.value).toBe('');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('');
+  });
+
   it('Given New draft after picking documents, When the next draft starts, Then the earlier draft\'s picks are let go with it (R28-feat-a-L2-01)', async () => {
     sessionStorage.setItem('cc.apply.12', 's-apply-12');
     sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-old.pdf', cover: '' }));

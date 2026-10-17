@@ -122,8 +122,9 @@ function writeTypedUrl(sid: string, url: string | null): void {
 }
 
 // The CV PDF and cover letter a draft's prompt named, by its session id, so a re-attached draft fills with the documents
-// its answers were drafted for, not the row's suggested ones.
-type DraftDocs = { pdf: string; cover: string };
+// its answers were drafted for, not the row's suggested ones. '' is an explicit "none"; null is no choice made, which
+// leaves room for a document generated since.
+type DraftDocs = { pdf: string | null; cover: string | null };
 const draftDocsKey = (sid: string) => `cc.apply.docs.${sid}`;
 function readDraftDocs(sid: string | null): DraftDocs | null {
   if (!sid) return null;
@@ -131,7 +132,8 @@ function readDraftDocs(sid: string | null): DraftDocs | null {
     const raw = sessionStorage.getItem(draftDocsKey(sid));
     if (raw === null) return null;
     const parsed = JSON.parse(raw) as Partial<DraftDocs>;
-    return typeof parsed.pdf === 'string' && typeof parsed.cover === 'string' ? { pdf: parsed.pdf, cover: parsed.cover } : null;
+    const pick = (v: unknown) => (typeof v === 'string' ? v : null);
+    return { pdf: pick(parsed.pdf), cover: pick(parsed.cover) };
   } catch {
     return null;
   }
@@ -194,10 +196,11 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const [pickedPdf, setPickedPdf] = useState<string | null>(null);
   const [pickedCover, setPickedCover] = useState<string | null>(null);
   const storedDocs = readDraftDocs(sessionId);
-  // A draft that named no document, or one no longer in output/, leaves the choice open, so the listing's suggestion is
-  // preselected rather than a file Fill could not attach.
-  const storedPdf = storedDocs?.pdf && docs.data?.pdfs.includes(storedDocs.pdf) ? storedDocs.pdf : null;
-  const storedCover = storedDocs?.cover && docs.data?.covers.includes(storedDocs.cover) ? storedDocs.cover : null;
+  // A draft that made no choice, or named a file no longer in output/, leaves the choice open, so the listing's
+  // suggestion is preselected rather than a file Fill could not attach.
+  const stored = (v: string | null | undefined, listed: string[] | undefined) => (v === '' || (v && listed?.includes(v)) ? v : null);
+  const storedPdf = stored(storedDocs?.pdf, docs.data?.pdfs);
+  const storedCover = stored(storedDocs?.cover, docs.data?.covers);
   const pdf = pickedPdf ?? storedPdf ?? docs.data?.suggestedPdf ?? '';
   const cover = pickedCover ?? storedCover ?? docs.data?.suggestedCover ?? '';
   // The panel's start holds the callback of the render it was sent from, so the link and documents kept are the ones its
@@ -206,10 +209,11 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const onSessionId = useCallback(
     (sid: string) => {
       if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
-      writeDraftDocs(sid, { pdf, cover });
+      // An empty value the user did not pick is no choice, so it is kept as null.
+      writeDraftDocs(sid, { pdf: pdf || (pickedPdf === '' ? '' : null), cover: cover || (pickedCover === '' ? '' : null) });
       rememberSessionId(sid);
     },
-    [typedUrl, pdf, cover, rememberSessionId],
+    [typedUrl, pdf, cover, pickedPdf, pickedCover, rememberSessionId],
   );
   const [summary, setSummary] = useState<string | null>(null);
   const blockers = prefillBlockers({ url, pdf, cover, pdfCount: docs.data?.pdfs.length ?? 0, company });
