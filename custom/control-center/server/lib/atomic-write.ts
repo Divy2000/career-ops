@@ -70,8 +70,8 @@ export function writeFileAtomic(abs: string, text: string, opts: { within: Array
   const real = containedTarget(abs, opts);
   fs.mkdirSync(path.dirname(real), { recursive: true });
   const tmp = `${real}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
-  fs.writeFileSync(tmp, text);
   try {
+    fs.writeFileSync(tmp, text);
     const mode = fs.statSync(real, { throwIfNoEntry: false })?.mode;
     if (mode !== undefined) fs.chmodSync(tmp, mode & 0o7777);
     fs.renameSync(tmp, real);

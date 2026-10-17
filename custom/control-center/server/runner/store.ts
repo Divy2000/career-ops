@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { replaceFile } from '../../supervisor/recovery.js';
 
 export type RunStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'lost';
 export type Cost = 'free' | 'network' | 'tokens';
@@ -86,6 +87,7 @@ export function unended(meta: RunMeta): boolean {
 }
 
 const RUN_ID = /^[\w-]+$/;
+
 /** The file in a run's folder that asks its wrapper to stop (wrapper.mjs reads the same name). */
 export const CANCEL_FILE = 'cancel';
 
@@ -131,9 +133,7 @@ export class RunStore {
 
   write(meta: RunMeta): void {
     const p = path.join(this.dirOf(meta.id), 'meta.json');
-    const tmp = `${p}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(meta, null, 2));
-    fs.renameSync(tmp, p);
+    replaceFile(p, JSON.stringify(meta, null, 2));
   }
 
   read(id: string): RunMeta | null {
@@ -179,9 +179,7 @@ export class RunStore {
   /** What the run was started with that it needs to start in another process: its env, secrets left out by name. */
   writeRequest(id: string, request: RunRequest): void {
     const p = path.join(this.dirOf(id), 'request.json');
-    const tmp = `${p}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(request));
-    fs.renameSync(tmp, p);
+    replaceFile(p, JSON.stringify(request));
   }
 
   /** The run's start request, or null when it has none (a run from before it was recorded). Other read errors throw. */

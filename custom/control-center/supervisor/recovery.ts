@@ -256,6 +256,23 @@ function fileHash(abs: string): string | null {
 }
 
 /**
+ * Replaces `p` through a temp file named for this process plus a random suffix: two processes (blue/green servers, the
+ * supervisor) writing one file at once must not share a temp file, or one rename finds it gone. A failed write removes
+ * its temp. No containment check: for app-owned state files whose path the caller built itself. It lives here, not in
+ * server/lib, because the supervisor may load only files Dev Chat cannot edit.
+ */
+export function replaceFile(p: string, text: string): void {
+  const tmp = `${p}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, p);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+/**
  * Writes turns/<n>/after.json: for every file the turn changed, the sha256 its
  * last write left (null for absent), as the hook recorded it at write time. The
  * disk is not read here: finalizing late (after a restart) must not adopt edits
@@ -271,8 +288,7 @@ export function recordTurnAfter(sessionDir: string, n: number, fromLine: number)
   const turnDir = path.join(sessionDir, 'turns', String(n));
   fs.mkdirSync(turnDir, { recursive: true });
   const file = path.join(turnDir, 'after.json');
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify({ files, at: new Date().toISOString() }, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  replaceFile(file, JSON.stringify({ files, at: new Date().toISOString() }, null, 2));
 }
 
 function readJson<T>(file: string): T | null {
@@ -511,11 +527,9 @@ export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
     if (!meta || meta.status !== 'queued') continue;
     if ((meta.params as { sessionId?: unknown } | undefined)?.sessionId !== sessionId) continue;
     if (!fs.existsSync(path.join(dir, 'request.json'))) continue;
-    const tmp = path.join(dir, 'meta.json.tmp');
     const lost = { ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'the server was down and this queued run was reverted before it started' };
     try {
-      fs.writeFileSync(tmp, JSON.stringify(lost, null, 2));
-      fs.renameSync(tmp, path.join(dir, 'meta.json'));
+      replaceFile(path.join(dir, 'meta.json'), JSON.stringify(lost, null, 2));
     } catch {
       /* Best effort: a run that cannot be marked still does not block the revert (runEnded already said it ended). */
     }
