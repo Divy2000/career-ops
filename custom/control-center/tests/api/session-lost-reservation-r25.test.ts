@@ -83,6 +83,8 @@ describe('a session whose reserved report number was collected and claimed again
       app.sessions.store.setStatus(meta.id, 'awaiting_user');
       app.sessions.store.setReportNum(meta.id, 73);
       app.sessions.store.setCreditedReport(meta.id, { num: 73, file: '073-acme-2026-10-11.md' });
+      fs.mkdirSync(path.join(app.cfg.dataRoot, 'reports'), { recursive: true });
+      fs.writeFileSync(path.join(app.cfg.dataRoot, 'reports', '073-acme-2026-10-11.md'), '# Acme\n');
 
       expect(await app.sessions.delete(meta.id)).toBe(true);
       expect(warn.mock.calls.flat().join('\n')).not.toMatch(/already lost/);

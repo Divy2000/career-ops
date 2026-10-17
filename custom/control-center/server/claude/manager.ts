@@ -487,9 +487,9 @@ export class SessionManager {
     const meta = this.store.read(id);
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
-    const credited = num !== null && meta?.creditedReport?.num === num;
-    // Taken before the delete removes the record of when the session got the number. A credited report holds the
-    // number, so no other reservation can have claimed it.
+    const credited = num !== null && this.creditedHolds(meta!, num);
+    // Taken before the delete removes the record of when the session got the number. A credited report still there
+    // holds the number, so no other reservation can have claimed it.
     const owns = num !== null && !credited ? this.reservationOwnership(meta!, num) : undefined;
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
@@ -711,7 +711,7 @@ export class SessionManager {
    */
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
-    if (num === null || meta.creditedReport?.num === num) return meta;
+    if (num === null || this.creditedHolds(meta, num)) return meta;
     if (this.refreshReservation(meta, num)) return meta;
     // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
     this.store.setReportNum(meta.id, null);
@@ -765,13 +765,13 @@ export class SessionManager {
     try {
       // Read inside the try: the tracker tick calling this must never throw (an unreadable record waits for the next tick).
       const meta = this.store.read(id);
-      // Read again: a later failure is a new one, said again.
-      this.reservationWarned.delete(`${id}\0refresh`);
       num = meta?.reportNum ?? null;
-      if (!meta || num === null || meta.creditedReport?.num === num) return;
-      const sentinel = this.sentinelPath(num);
-      if (Date.now() - fs.statSync(sentinel).mtimeMs < RESERVATION_REFRESH_AGE_MS) return;
-      if (!this.refreshReservation(meta, num)) this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
+      if (meta && num !== null && !this.creditedHolds(meta, num)) {
+        const sentinel = this.sentinelPath(num);
+        if (Date.now() - fs.statSync(sentinel).mtimeMs >= RESERVATION_REFRESH_AGE_MS && !this.refreshReservation(meta, num)) this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
+      }
+      // A tick that got through: a later failure is a new one, said again.
+      this.reservationWarned.delete(`${id}\0refresh`);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' && num !== null) this.warnReservationLost(id, num, 'was collected while its turn runs; the number may be handed out again');
       else this.warnOnce(`${id}\0refresh`, `[sessions] session ${id}: could not refresh the reservation for report number ${num ?? '(unknown)'}: ${(err as Error).message}`);
@@ -787,6 +787,11 @@ export class SessionManager {
     if (this.reservationWarned.has(key)) return;
     this.reservationWarned.add(key);
     console.warn(message);
+  }
+
+  /** A report credited under `num` that is still there holds the number; one the user deleted holds nothing. */
+  private creditedHolds(meta: SessionMeta, num: number): boolean {
+    return meta.creditedReport?.num === num && fs.existsSync(path.join(this.cfg.dataRoot, 'reports', meta.creditedReport.file));
   }
 
   private sentinelPath(num: number): string {
@@ -1218,7 +1223,7 @@ export class SessionManager {
     const num = meta.reportNum;
     if (num !== null && outcome.status !== 'awaiting_user') {
       // An earlier turn's credited report holds the number as well as this turn's own new one, while it is still there.
-      const creditedHeld = meta.creditedReport?.num === num && fs.existsSync(path.join(this.cfg.dataRoot, 'reports', meta.creditedReport.file));
+      const creditedHeld = this.creditedHolds(meta, num);
       const used = newReports.some((x) => x.num === num) || creditedHeld;
       // A report holding the number means no other reservation can have claimed it; otherwise the stale GC may have, and
       // the sentinel now there (or the one a reservation writes before the release runs) is someone else's.

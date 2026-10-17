@@ -162,5 +162,63 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
       warn.mockRestore();
     }
   }, 30_000);
-});
+  it('given a running Batch evaluate turn whose aged sentinel keeps failing to read with an I/O error, when the tracker ticks, then the failure is said once, not on every tick', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-eisdir');
+      await until(() => app.sessions.read(id)?.conversationStarted === true);
+      fs.rmSync(sentinelPath(app, n));
+      fs.mkdirSync(sentinelPath(app, n));
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
+      fs.utimesSync(sentinelPath(app, n), fiveHoursAgo, fiveHoursAgo);
+      const said = () => warn.mock.calls.flat().filter((m) => String(m).includes('could not refresh the reservation')).length;
+      await until(() => said() >= 1);
+      await wait(1500);
+      expect(said()).toBe(1);
+      fs.rmSync(sentinelPath(app, n), { recursive: true });
+      go();
+      await settleOn(app, id);
+    } finally {
+      await app.close();
+      warn.mockRestore();
+    }
+  }, 30_000);
 
+  it('given a running turn credited a report under its number that the user then deleted, when its sentinel ages past the stale GC threshold, then the sentinel is still refreshed', async () => {
+    const app = await makeTestApp();
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-credited-gone');
+      app.sessions.store.setCreditedReport(id, { num: n, file: `${String(n).padStart(3, '0')}-deleted-by-user.md` });
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
+      fs.utimesSync(sentinelPath(app, n), fiveHoursAgo, fiveHoursAgo);
+
+      await until(() => Date.now() - fs.statSync(sentinelPath(app, n)).mtimeMs < 60_000);
+      go();
+      await settleOn(app, id);
+    } finally {
+      await app.close();
+    }
+  }, 30_000);
+
+  it('given a waiting session credited a report the user deleted and whose number another reservation then claimed, when the session is deleted, then the other reservation is left alone', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-delete-credited');
+      go();
+      await settleOn(app, id);
+      // Left as a session awaiting the user holds it: the number still its own, credited a report since deleted.
+      app.sessions.store.setReportNum(id, n);
+      app.sessions.store.setCreditedReport(id, { num: n, file: `${String(n).padStart(3, '0')}-deleted-by-user.md` });
+      fs.writeFileSync(sentinelPath(app, n), JSON.stringify({ pid: process.pid, token: 'someone-else', created_at: new Date(Date.now() + 1000).toISOString() }));
+
+      expect((await app.app.inject({ method: 'DELETE', url: `/api/sessions/${id}`, headers: app.authedWrite, payload: {} })).statusCode).toBeLessThan(300);
+      expect(app.sessions.read(id)).toBeNull();
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+    } finally {
+      await app.close();
+      warn.mockRestore();
+    }
+  }, 30_000);
+});
