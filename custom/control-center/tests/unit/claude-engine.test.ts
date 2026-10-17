@@ -526,16 +526,38 @@ describe('guard hook', () => {
     expect(Date.now() - at).toBeLessThan(5_000);
   }, 20_000);
 
-  it('given a hold lock a live hook holds, however old, when another release runs, then the lock is never taken from it (R28-cl2-rev-01)', () => {
+  it('given a hold lock a live hook holds, younger than a hook may live, when another release runs, then the lock is never taken from it (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-live-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
     reserveAs(73, '2026-10-17T10:01:13.000Z');
     recordHeldReportNums(dir, [73], realRoot);
     lockedBy(dir, psStart(process.pid));
-    const old = new Date(Date.now() - 60_000);
+    // The CLI stops a hook after HOOK_TIMEOUT_S (30s): only a lock younger than that can still be a live hook's.
+    const old = new Date(Date.now() - 20_000);
     fs.utimesSync(path.join(dir, 'held-report-nums.lock'), old, old);
     expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 073' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'held-report-nums.lock'), 'utf8'))).toMatchObject({ nonce: 'other-hook' });
+  }, 30_000);
+
+  it('given a hold lock older than a hook may live whose holder recorded no start, its pid since reused, when a release runs, then the lock is replaced (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-nostart-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(72, '2026-10-17T10:01:12.000Z');
+    recordHeldReportNums(dir, [72], realRoot);
+    fs.writeFileSync(path.join(dir, 'held-report-nums.lock'), JSON.stringify({ pid: process.pid, start: null, nonce: 'ps-failed' }));
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(path.join(dir, 'held-report-nums.lock'), old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 072' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
+  }, 30_000);
+
+  it('given a held number whose sentinel cannot be read, when the session releases it, then it is refused as not held (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-unreadable-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    fs.writeFileSync(path.join(dir, 'held-report-nums.log'), '+81=1792231281000;');
+    fs.mkdirSync(path.join(realRoot, 'reports', '081-RESERVED.md'), { recursive: true });
+    const r = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 081' }, cwd: realRoot, session_id: 's' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/not held: 081/);
   }, 30_000);
 
   it('given a range release that failed after deleting part of the range, when the session retries, then the refusal names the numbers it no longer holds and the rest may go (R28-cl2-rev-01)', () => {

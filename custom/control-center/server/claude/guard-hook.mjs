@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { HOOK_TIMEOUT_S } from './confinement.mjs';
 import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, narrowGrepInput, PLAYWRIGHT_TOOL_PREFIX, readUrlList, findSnapshot, snapshotKey, tokenize, urlListFilesIn, writeTarget } from './guard-policy.mjs';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -62,6 +63,8 @@ const HELD_LOCK_UNREADABLE_MS = 2_000;
 // Waited out for the lock: past the age an unreadable lock is replaced at, and well inside the hook's own timeout.
 const HELD_LOCK_WAIT_MS = 7_000;
 const PS_PATH = '/bin/ps';
+// The CLI stops a hook after HOOK_TIMEOUT_S, so a lock older than that is a dead hook's whatever its pid names now.
+const HELD_LOCK_MAX_MS = (HOOK_TIMEOUT_S + 5) * 1000;
 // Held while one waiter replaces a dead hook's lock, so two never replace it at once; replaced as a dead hook's lock is.
 const HELD_TAKEOVER_FILE = 'held-report-nums.lock.takeover';
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
@@ -118,8 +121,8 @@ function sentinelCreatedAt(dataRoot, num) {
     if (Date.now() - fs.statSync(file).mtimeMs >= RELEASE_MAX_SENTINEL_AGE_MS) return null;
     text = fs.readFileSync(file, 'utf8');
   } catch (err) {
-    if (err.code === 'ENOENT') return 'gone';
-    throw err;
+    // One that cannot be read (a folder in its place, no permission) is no reservation this session can be shown to hold.
+    return err.code === 'ENOENT' ? 'gone' : null;
   }
   try {
     const at = Date.parse(JSON.parse(text).created_at ?? '');
@@ -150,7 +153,8 @@ function processStart(pid) {
 
 /**
  * Whether the hook a lock names is gone: its process dead, or its pid since reused by a process that started at another
- * time. A live holder keeps the lock however long it takes; a lock with no readable holder is gone once it is old.
+ * time, or older than a hook may live. A live holder keeps the lock as long as it runs; a lock with no readable holder is
+ * gone once it is old.
  */
 function lockHolderGone(lock, text) {
   let holder = null;
@@ -159,7 +163,9 @@ function lockHolderGone(lock, text) {
   } catch {
     /* written only partly */
   }
-  if (!Number.isInteger(holder?.pid) || holder.pid <= 0) return Date.now() - fs.statSync(lock).mtimeMs >= HELD_LOCK_UNREADABLE_MS;
+  const age = Date.now() - fs.statSync(lock).mtimeMs;
+  if (!Number.isInteger(holder?.pid) || holder.pid <= 0) return age >= HELD_LOCK_UNREADABLE_MS;
+  if (age >= HELD_LOCK_MAX_MS) return true;
   const start = processStart(holder.pid);
   if (start === null) return true;
   return start !== 'unknown' && typeof holder.start === 'string' && start !== holder.start;
