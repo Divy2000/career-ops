@@ -19,6 +19,7 @@ import path from 'node:path';
 const IMM = path.join('data', 'immigration');
 const LIVE_SESSION = new Set(['queued', 'running', 'awaiting_user']);
 const STARTING_MS = 2 * 60_000;
+const LEGACY_START_MS = 24 * 60 * 60_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10_000;
 // The recover guard lives for a stat and an rm, so one older than this was left by a claimant killed while breaking.
@@ -96,8 +97,10 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
         const at = Date.parse(claim.at);
         return Number.isFinite(at) && now - at < STARTING_MS;
       }
+      // A reused pid started a whole quarter-hour away matches by chance, so the match holds for a day, not for good.
       const offset = wall - started;
-      return Math.abs(offset) <= 14 * 3600 && offset % 900 === 0;
+      const at = Date.parse(claim.at);
+      return Math.abs(offset) <= 14 * 3600 && offset % 900 === 0 && Number.isFinite(at) && now - at < LEGACY_START_MS;
     }
     // Only ps naming another start time is proof the pid was reused; a ps that cannot run says nothing.
     return started === undefined || typeof claim.pidStart !== 'number' || started === claim.pidStart;

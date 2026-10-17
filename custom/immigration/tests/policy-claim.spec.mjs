@@ -244,13 +244,13 @@ test('a start claim in the earlier format on a reused pid is taken over once it 
   const old = new Date(Date.now() - 60 * 60_000).toISOString();
   plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
   assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
-  // The same format naming this process's start as ps prints it here still holds, however long it waits.
+  // The same format naming this process's start as ps prints it here still holds past the recent window.
   const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim();
   plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: lstart });
   assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
 });
 
-test('a start claim in the earlier format written in another zone holds while its process runs, however old (R28-tests-custom-L1-01 review 2)', () => {
+test('a start claim in the earlier format written in another zone holds while its process runs, past the recent window (R28-tests-custom-L1-01 review 2)', () => {
   const r = root();
   const old = new Date(Date.now() - 60 * 60_000).toISOString();
   for (const zone of ['Pacific/Kiritimati', 'Pacific/Pago_Pago', 'Asia/Kolkata']) {
@@ -267,6 +267,14 @@ test('a start claim in the earlier format holds when ps cannot run, however old 
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, PATH: tempDir('no-ps-') }, encoding: 'utf8' });
   assert.equal(child.status, 0, child.stderr);
   assert.equal(child.stdout, 'false');
+});
+
+test('a start claim in the earlier format is taken over once a day old, even when its text names this process (R28-tests-custom-L1-01 review 3)', () => {
+  const r = root();
+  // A zone offset that matches by chance (a reused pid started a whole quarter-hour away) must not hold for good.
+  const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'Pacific/Kiritimati' } }).trim();
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(), pid: process.pid, pidStart: lstart });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
 });
 
 test('many processes claiming at once: exactly one gets it', async () => {
