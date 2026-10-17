@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
@@ -457,15 +457,33 @@ describe('guard hook', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-held-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
     const bash = (command: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: realRoot, session_id: 's' });
-    // The app's records: 60 held, 59 held and let go again, and a record cut short.
-    fs.writeFileSync(path.join(dir, 'held-report-nums.log'), '+60;\n+59;\n-59;\n+61');
+    // The app's records: 60 held, 59 held and let go again, 58 held since longer than a sentinel lives, and a record cut short.
+    const now = Date.now();
+    fs.writeFileSync(path.join(dir, 'held-report-nums.log'), `+60~${now};\n+59~${now};\n-59;\n+58~${now - 4 * 3_600_000};\n+61~${now}`);
     for (const cmd of ['node reserve-report-num.mjs --release 060', 'node reserve-report-num.mjs', 'node reserve-report-num.mjs --count 3', 'node reserve-report-num.mjs --gc']) expect(bash(cmd).status, cmd).toBe(0);
     // Let go once, 60 is no longer held: another evaluation may reserve it next.
-    for (const cmd of ['node reserve-report-num.mjs --release 60-60', `node reserve-report-num.mjs '--release' "059"`, 'node reserve-report-num.mjs --release 061']) {
+    for (const cmd of ['node reserve-report-num.mjs --release 60-60', `node reserve-report-num.mjs '--release' "059"`, 'node reserve-report-num.mjs --release 058', 'node reserve-report-num.mjs --release 061']) {
       const r = bash(cmd);
       expect(r.status, cmd).toBe(2);
       expect(r.stderr).toMatch(/releases only the report numbers it holds/);
     }
+  }, 40_000);
+
+  it('given a held report number, when several releases of it run at once, then exactly one is let through (R28-cl2-rev-01)', async () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-parallel-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    recordHeldReportNums(dir, [80]);
+    const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 080' }, cwd: realRoot, session_id: 's' });
+    const env: NodeJS.ProcessEnv = { ...process.env, CC_POLICY_FILE: pf.file, CC_POLICY_SHA256: pf.sha256, CC_SESSION_DIR: dir };
+    delete env.CC_TURN_DIR;
+    const one = () => new Promise<number | null>((resolve) => {
+      const child = spawn(process.execPath, [GUARD_HOOK_PATH], { env, stdio: ['pipe', 'ignore', 'ignore'] });
+      child.on('close', (code) => resolve(code));
+      child.stdin.end(payload);
+    });
+    const codes = await Promise.all(Array.from({ length: 6 }, one));
+    expect(codes.filter((c) => c === 0)).toHaveLength(1);
+    expect(codes.filter((c) => c === 2)).toHaveLength(5);
   }, 30_000);
 
   it('given a release the hook let through that then failed, when the app restores its hold, then the retry may run, and only that call\'s hold comes back (R28-cl2-rev-01)', () => {

@@ -101,4 +101,25 @@ describe('a session releases only the report numbers it holds (R28-cl2-rev-01)',
       await app.close();
     }
   });
+
+  it('given a number a session reserved in an earlier turn, when a later turn releases it, then it may', async () => {
+    const app = await makeTestApp();
+    try {
+      otherHolds(app, 60);
+      const id = await withScenario([INIT, { __bash: 'node reserve-report-num.mjs' }, { type: 'result', subtype: 'success', result: 'Reserved 061. Which posting should I evaluate?', total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false }], async () =>
+        (await call(app, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate' })).json().id as string,
+      );
+      const [reserve] = results(await settleOn(app, id));
+      expect(reserve).toMatchObject({ ok: true, summary: expect.stringMatching(/\b061\b/) });
+      const events = await withScenario([INIT, { __bash: 'node reserve-report-num.mjs --release 061' }, RESULT], async () => {
+        expect((await call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Never mind, give the number back.' })).statusCode).toBe(202);
+        return settleOn(app, id);
+      });
+      const own = results(events).at(-1);
+      expect(own, own?.summary).toMatchObject({ ok: true });
+      expect(fs.existsSync(sentinel(app, 61))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
 });

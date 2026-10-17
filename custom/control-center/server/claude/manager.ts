@@ -177,26 +177,27 @@ export function writeProgress(file: string, p: TurnProgress): void {
 }
 
 /**
- * The report numbers a turn holds, logged in its turn folder (outside every write scope) as `+N;` and `-N;` records:
- * the app adds the one it reserved for the session and the ones the turn's own reserve-report-num.mjs runs printed,
- * and guard-hook.mjs, which lets a turn release only numbers it holds (reserve-report-num.mjs --release deletes
- * whichever sentinels it names), removes each one it lets go. Per turn: a number left over may be anyone's later.
+ * The report numbers a session holds, logged in its guard folder (outside every write scope): the app adds the one it
+ * reserved for the session and the ones its own reserve-report-num.mjs runs printed (`+N~<ms>;`), and guard-hook.mjs,
+ * which lets a session release only numbers it holds (reserve-report-num.mjs --release deletes whichever sentinels it
+ * names), removes each one it lets go. A hold ends before the allocator would collect its sentinel.
  */
 export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
 
-export function recordHeldReportNums(turnDir: string, nums: readonly number[]): void {
-  fs.mkdirSync(turnDir, { recursive: true });
-  fs.appendFileSync(path.join(turnDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n};`).join(''));
+export function recordHeldReportNums(sessionDir: string, nums: readonly number[]): void {
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const at = Date.now();
+  fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n}~${at};`).join(''));
 }
 
 /**
  * Gives back the holds a release took (guard-hook.mjs logs each as `-N@<tool id>;`) when that release failed, so the
- * turn may retry it: the hook honours `+N@<tool id>;` only right after that same call's `-N@<tool id>;`.
+ * session may retry it: the hook honours `+N@<tool id>;` only right after that same call's `-N@<tool id>;`.
  */
-export function restoreHeldReportNums(turnDir: string, nums: readonly number[], toolUseId: string): void {
+export function restoreHeldReportNums(sessionDir: string, nums: readonly number[], toolUseId: string): void {
   if (!TOOL_USE_ID.test(toolUseId)) return;
-  fs.mkdirSync(turnDir, { recursive: true });
-  fs.appendFileSync(path.join(turnDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n}@${toolUseId};`).join(''));
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n}@${toolUseId};`).join(''));
 }
 
 /** The tool ids the CLI hands out (toolu_...); anything else is never written into a hold record. */
@@ -1156,7 +1157,7 @@ export class SessionManager {
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
       if (n > 1) meta = await this.reassertReservation(meta);
-      if (meta.reportNum !== null) recordHeldReportNums(turnDir, [meta.reportNum]);
+      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum]);
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
@@ -1303,12 +1304,12 @@ export class SessionManager {
           if (released.length) releaseRuns.set(ev.id, released);
         }
         if (ev.type === 'tool.result') {
-          const turnDir = path.join(this.store.guardDirOf(id), 'turns', String(n));
+          const sessionDir = this.store.guardDirOf(id);
           const nums = reserveRuns.delete(ev.id) && ev.ok ? printedReservation(ev.summary) : [];
-          if (nums.length) recordHeldReportNums(turnDir, nums);
+          if (nums.length) recordHeldReportNums(sessionDir, nums);
           const released = releaseRuns.get(ev.id);
           releaseRuns.delete(ev.id);
-          if (released && !ev.ok) restoreHeldReportNums(turnDir, released, ev.id);
+          if (released && !ev.ok) restoreHeldReportNums(sessionDir, released, ev.id);
         }
         if (ev.type === 'turn.done') {
           turnDone = ev;

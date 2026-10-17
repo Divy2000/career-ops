@@ -46,52 +46,89 @@ function endsTorn(file) {
   }
 }
 
-// The report numbers the turn holds, logged in its turn folder (manager.ts HELD_REPORT_NUMS_FILE): `+N;` from the app,
-// `-N;` from here once a release lets one go, each on a line of its own. A record cut short (no `;`) holds nothing, and
-// the next one starts its own line rather than joining it.
+// The report numbers the session holds, logged in its folder (manager.ts HELD_REPORT_NUMS_FILE), each record on a line
+// of its own: `+N~<ms>;` from the app (taken then), `-N@<tool id>;` from here once a release lets one go, and the app's
+// `+N@<tool id>;` that gives a failed release's hold back, honoured only right after that same call's `-N`. A record cut
+// short (no `;`) holds nothing, and the next one starts its own line rather than joining it.
 const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
-// A release's `-N@<tool id>;` can be undone by the app's `+N@<tool id>;` once that call failed, and only right after it.
-const HELD_RECORD = /^([+-])(\d+)(?:@([A-Za-z0-9_-]{1,100}))?;$/;
+const HELD_RECORD = /^([+-])(\d+)(?:~(\d+)|@([A-Za-z0-9_-]{1,100}))?;$/;
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
+// reserve-report-num.mjs collects a sentinel 4 hours old, and another evaluation may then reserve its number: a hold
+// ends well before that.
+const HOLD_MAX_AGE_MS = 3.5 * 60 * 60 * 1000;
+// Held while one release checks and consumes holds, so two releases of one number at once never both pass.
+const HELD_LOCK_FILE = 'held-report-nums.lock';
+const HELD_LOCK_STALE_MS = 10_000;
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
 const RELEASE_ARG = /^(\d+)(?:-(\d+))?$/;
 const RELEASE_MAX = 50;
-// The app records a number the turn reserved once the run's result reaches it (it polls the output): a release right
-// after the reservation waits for that record this long before it is refused.
+// The app records a number the session reserved once the run's result reaches it (it polls the output): a release
+// right after the reservation waits for that record this long before it is refused.
 const HELD_WAIT_MS = 3000;
 
-function heldReportNums(file) {
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** The numbers held now, each with when it was taken. */
+function heldReportNums(file, now) {
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch (err) {
-    if (err.code === 'ENOENT') return new Set();
+    if (err.code === 'ENOENT') return new Map();
     throw err;
   }
-  const held = new Set();
-  // The tool id of the release that last let each number go.
-  const letGoBy = new Map();
+  const held = new Map();
+  // The release that last let each number go, and when the hold it ended was taken.
+  const letGo = new Map();
   for (const line of text.split('\n')) {
     const m = line.match(HELD_RECORD);
     if (!m) continue;
     const num = Number(m[2]);
     if (m[1] === '-') {
+      letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
       held.delete(num);
-      letGoBy.set(num, m[3] ?? null);
-    } else if (m[3] === undefined || (letGoBy.get(num) === m[3] && !held.has(num))) {
-      held.add(num);
-      letGoBy.delete(num);
+    } else if (m[3] !== undefined) {
+      held.set(num, Number(m[3]));
+      letGo.delete(num);
+    } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num).at !== null && !held.has(num)) {
+      held.set(num, letGo.get(num).at);
+      letGo.delete(num);
     }
   }
+  for (const [num, at] of held) if (now - at >= HOLD_MAX_AGE_MS) held.delete(num);
   return held;
 }
 
+/** Runs `fn` holding the session's hold lock (one taken by a process that died is replaced once it is stale). */
+async function withHeldLock(dir, fn) {
+  const lock = path.join(dir, HELD_LOCK_FILE);
+  for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(20)) {
+    try {
+      fs.closeSync(fs.openSync(lock, 'wx'));
+      break;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+    try {
+      if (Date.now() - fs.statSync(lock).mtimeMs >= HELD_LOCK_STALE_MS) fs.rmSync(lock, { force: true });
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    if (Date.now() > deadline) throw new Error('the report number holds are locked by another release');
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+}
+
 /**
- * reserve-report-num.mjs --release deletes the sentinels it names whoever reserved them, so a turn releases only the
- * numbers it holds: the one the app reserved for the session, and the ones its own reservations printed. A number let
- * go is no longer held: another evaluation may reserve it next.
+ * reserve-report-num.mjs --release deletes the sentinels it names whoever reserved them, so a session releases only
+ * the numbers it holds: the one the app reserved for it, and the ones its own reservations printed. A number let go
+ * is no longer held: another evaluation may reserve it next.
  */
-async function releaseReason(command, turnDir, toolUseId) {
+async function releaseReason(command, sessionDir, toolUseId) {
   const tokens = tokenize(command);
   if (!tokens || tokens[0] !== 'node' || tokens[1] !== 'reserve-report-num.mjs' || tokens[2] !== '--release') return null;
   const m = (tokens[3] ?? '').match(RELEASE_ARG);
@@ -100,14 +137,16 @@ async function releaseReason(command, turnDir, toolUseId) {
   const end = m[2] === undefined ? start : Number(m[2]);
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start + 1 > RELEASE_MAX) return null;
   const nums = Array.from({ length: end - start + 1 }, (_, i) => start + i);
-  const file = path.join(turnDir, HELD_REPORT_NUMS_FILE);
-  for (const deadline = Date.now() + HELD_WAIT_MS; ; await new Promise((r) => setTimeout(r, 100))) {
-    const held = heldReportNums(file);
-    if (nums.every((n) => held.has(n))) {
-      const tag = typeof toolUseId === 'string' && TOOL_USE_ID.test(toolUseId) ? `@${toolUseId}` : '';
+  const file = path.join(sessionDir, HELD_REPORT_NUMS_FILE);
+  const tag = typeof toolUseId === 'string' && TOOL_USE_ID.test(toolUseId) ? `@${toolUseId}` : '';
+  for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(100)) {
+    const taken = await withHeldLock(sessionDir, () => {
+      const held = heldReportNums(file, Date.now());
+      if (!nums.every((n) => held.has(n))) return false;
       fs.appendFileSync(file, nums.map((n) => `\n-${n}${tag};`).join(''));
-      return null;
-    }
+      return true;
+    });
+    if (taken) return null;
     if (Date.now() > deadline) break;
   }
   return 'Bash: a session releases only the report numbers it holds (the one reserved for it, or one its own reserve-report-num.mjs run printed); every other sentinel is another evaluation\'s reservation';
@@ -186,7 +225,7 @@ async function main() {
 
   if (tool === 'Bash') {
     const command = String(input.command ?? '');
-    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, snapDir, payload.tool_use_id));
+    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, sessionDir, payload.tool_use_id));
     if (reason) deny(reason);
     // URLs a script reads from a list file it was given get the same checks as its URL arguments.
     const listed = [];
