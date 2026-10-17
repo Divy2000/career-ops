@@ -413,12 +413,16 @@ describe('a refresh still waiting when its turn gives the number back (R27-mgr-r
     let id = '';
     let n = 0;
     let raced = false;
+    let refreshDone = false;
     const releasing: Exec = async (cmd, args, opts) => {
       if (args.includes('--refresh') && !raced) {
         raced = true;
         // The turn ended and released its number while this refresh waited for the tracker lock.
         app!.sessions.store.setReportNum(id, null);
         fs.rmSync(sentinelPath(app!, n), { force: true });
+        const r = await execNoShell(cmd, args, opts);
+        refreshDone = true;
+        return r;
       }
       return execNoShell(cmd, args, opts);
     };
@@ -430,8 +434,9 @@ describe('a refresh still waiting when its turn gives the number back (R27-mgr-r
       n = held.n;
       const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
       fs.utimesSync(sentinelPath(app, n), fiveHoursAgo, fiveHoursAgo);
-      await until(() => raced);
-      await wait(500);
+      // The loss decision is made only after the refresh child returns, once the manager's refresh has finished.
+      const refreshing = (app.sessions as unknown as { refreshing: Set<string> }).refreshing;
+      await until(() => refreshDone && !refreshing.has(id), 20_000);
       expect(warn.mock.calls.flat().join('\n')).not.toMatch(/was collected while its turn runs/);
       held.go();
       await settleOn(app, id);
