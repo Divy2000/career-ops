@@ -297,11 +297,11 @@ export class ScheduleService {
       if (disable.code !== 0) return failed(`launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, disable.stderr.trim());
       disabledNow = true;
     }
-    // bootout fails when the job is not loaded; that is the expected state before the first install. A loaded job is
-    // gone after a failed bootout only if print says so (113, no such service): one still loaded, or whose state print
-    // could not read, may keep firing on its old schedule, so that is a failed save.
+    // bootout fails when the job is not loaded; that is the expected state before the first install, when print already
+    // said so. Otherwise the job is gone after a failed bootout only if print now says so (no such service): one still
+    // loaded, or whose state print could not read, may keep firing on its old schedule, so that is a failed save.
     const bootout = await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
-    if (bootout.code !== 0 && wasLoaded && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code !== LAUNCHCTL_NO_SUCH_SERVICE) {
+    if (bootout.code !== 0 && print.code !== LAUNCHCTL_NO_SUCH_SERVICE && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code !== LAUNCHCTL_NO_SUCH_SERVICE) {
       return failed(`launchctl bootout failed (exit ${bootout.code}) and the job may still be loaded`, bootout.stderr.trim());
     }
     if (input.enabled) {
