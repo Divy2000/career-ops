@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, type TestApp } from '../helpers/app.js';
+import { runsEnded } from '../helpers/runs.js';
 import { tempDir } from '../helpers/tmp.js';
 import { BusyError } from '../../server/claude/manager.js';
 import { processStartTime } from '../../supervisor/instance-lock.js';
@@ -56,11 +57,13 @@ describe('a reply sent to one session through two server processes at once (R28-
     } finally {
       await a.close();
       await b.close();
+      await runsEnded(dataRoot);
     }
   });
 
   it('given a turn claim left by a server process that died, when a reply is sent, then the turn starts', async () => {
-    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-r28-claim-guard-') });
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-r28-claim-guard-') });
     try {
       const meta = await withScenario([INIT, result('Which company is this for?')], () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: null }));
       expect(await settled(app, meta.id)).toBe('awaiting_user');
@@ -70,11 +73,13 @@ describe('a reply sent to one session through two server processes at once (R28-
       expect(next.turns).toHaveLength(2);
     } finally {
       await app.close();
+      await runsEnded(dataRoot);
     }
   });
 
   it('given a turn claim a live server process has held for a long time, when a reply is sent, then it is refused as busy: age alone never frees a live claim', async () => {
-    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-r28-claim-guard-') });
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-r28-claim-guard-') });
     try {
       const meta = await withScenario([INIT, result('Which company is this for?')], () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: null }));
       expect(await settled(app, meta.id)).toBe('awaiting_user');
@@ -85,11 +90,13 @@ describe('a reply sent to one session through two server processes at once (R28-
       expect(app.sessions.read(meta.id)!.turns).toHaveLength(1);
     } finally {
       await app.close();
+      await runsEnded(dataRoot);
     }
   });
 
   it('given a dead process\'s turn claim that a peer is replacing right now, when a reply is sent, then it is refused as busy rather than replacing it too', async () => {
-    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-r28-claim-guard-') });
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-r28-claim-guard-') });
     try {
       const meta = await withScenario([INIT, result('Which company is this for?')], () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: null }));
       expect(await settled(app, meta.id)).toBe('awaiting_user');
@@ -106,6 +113,7 @@ describe('a reply sent to one session through two server processes at once (R28-
       expect(next.turns).toHaveLength(2);
     } finally {
       await app.close();
+      await runsEnded(dataRoot);
     }
   });
 });
