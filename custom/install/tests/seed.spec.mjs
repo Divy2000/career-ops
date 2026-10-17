@@ -369,3 +369,43 @@ for (const which of ['writeFileSync', 'renameSync']) {
     assert.deepEqual(fs.readdirSync(path.join(data, 'modes')), ['_custom.md']);
   });
 }
+
+// Preloaded into the seed process: linkSync on the temp file fails the way a volume without hard links makes it fail,
+// optionally after another writer creates the target, or the temp file cannot be removed once it is linked.
+const linkFs = (dir, mode) => put(path.join(dir, 'link-fs.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realLink = fs.linkSync, realRm = fs.rmSync;
+const tmpFile = (p) => String(p).includes('.tmp-');
+fs.linkSync = (...args) => {
+  if (${JSON.stringify(mode)} === 'rm-fails' || !tmpFile(args[0])) return realLink(...args);
+  if (${JSON.stringify(mode)} === 'eperm-raced') fs.writeFileSync(args[1], 'THEIRS\\n');
+  const err = new Error('EPERM: operation not permitted, link'); err.code = 'EPERM'; throw err;
+};
+fs.rmSync = (...args) => {
+  if (${JSON.stringify(mode)} === 'rm-fails' && tmpFile(args[0])) { const err = new Error('EBUSY: resource busy'); err.code = 'EBUSY'; throw err; }
+  return realRm(...args);
+};
+syncBuiltinESMExports();
+`);
+
+test('given the volume refuses hard links, when cv-write seeds an absent cv.md, then it renames the temp file into place (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'eperm'), ['cv-write', '--data', data, '--resume', r]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'created');
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), '# New resume\n');
+  assert.deepEqual(fs.readdirSync(data), ['cv.md']);
+});
+
+test('given the volume refuses hard links and cv.md appears meanwhile, when cv-write seeds it, then it fails and keeps the other writer\'s cv.md (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'eperm-raced'), ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /appeared while it was being written/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
+  assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
+});
