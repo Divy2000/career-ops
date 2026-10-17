@@ -284,6 +284,7 @@ test('a claude whose approval the live checkout withdrew during the baseline sui
   const r = handoff({ version: '2.1.300', approved: ['2.1.302'] });
   assert.equal(r.gotToken, false, r.stdout + r.stderr);
   assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^!!! claude .* is no longer approved at the token handoff: Claude Code 2\.1\.300 is not approved/m);
 });
 
 test('a claude still approved at the handoff gets the token as before (R27-scrb-rev-01)', () => {
