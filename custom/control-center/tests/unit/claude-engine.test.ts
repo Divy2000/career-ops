@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
@@ -511,28 +511,31 @@ describe('guard hook', () => {
     expect(release('toolu_e')).toBe(2);
   }, 20_000);
 
-  it('given a hold lock left by a hook that died, its pid since reused by a live process, when a release runs, then the old lock is replaced (R28-cl2-rev-01)', () => {
+  /** A hold lock as a hook writes it: its pid and that process's start as ps prints it. */
+  const psStart = (pid: number) => execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { LC_ALL: 'C', TZ: 'UTC' } }).trim();
+  const lockedBy = (dir: string, start: string) => fs.writeFileSync(path.join(dir, 'held-report-nums.lock'), JSON.stringify({ pid: process.pid, start, nonce: 'other-hook' }));
+
+  it('given a hold lock left by a hook that died, its pid since reused by a live process, when a release runs, then the old lock is replaced at once (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-reused-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
     reserveAs(74, '2026-10-17T10:01:14.000Z');
     recordHeldReportNums(dir, [74], realRoot);
-    const lock = path.join(dir, 'held-report-nums.lock');
-    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, nonce: 'dead-hook' }));
-    const old = new Date(Date.now() - 120_000);
-    fs.utimesSync(lock, old, old);
+    lockedBy(dir, 'Thu Jan  1 00:00:00 1970');
+    const at = Date.now();
     expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 074' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
+    expect(Date.now() - at).toBeLessThan(5_000);
   }, 20_000);
 
-  it('given a hold lock left by a dead hook younger than the old 30s bound, when a release runs, then it waits the lock out instead of failing (R28-cl2-rev-01)', () => {
-    const dir = fs.realpathSync(tempDir('cc-hook-young-'));
+  it('given a hold lock a live hook holds, however old, when another release runs, then the lock is never taken from it (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-live-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
     reserveAs(73, '2026-10-17T10:01:13.000Z');
     recordHeldReportNums(dir, [73], realRoot);
-    const lock = path.join(dir, 'held-report-nums.lock');
-    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, nonce: 'dead-hook' }));
-    const old = new Date(Date.now() - 10_000);
-    fs.utimesSync(lock, old, old);
-    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 073' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
+    lockedBy(dir, psStart(process.pid));
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(path.join(dir, 'held-report-nums.lock'), old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 073' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'held-report-nums.lock'), 'utf8'))).toMatchObject({ nonce: 'other-hook' });
   }, 30_000);
 
   it('given a range release that failed after deleting part of the range, when the session retries, then the refusal names the numbers it no longer holds and the rest may go (R28-cl2-rev-01)', () => {

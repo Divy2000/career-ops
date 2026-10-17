@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, narrowGrepInput, PLAYWRIGHT_TOOL_PREFIX, readUrlList, findSnapshot, snapshotKey, tokenize, urlListFilesIn, writeTarget } from './guard-policy.mjs';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -58,11 +59,10 @@ const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const HELD_LOCK_FILE = 'held-report-nums.lock';
 // A lock whose content never got written (its hook died between creating and writing it) is replaced this old.
 const HELD_LOCK_UNREADABLE_MS = 2_000;
-// A hook holds the lock for milliseconds: one this old is a dead hook's, even if its pid now names another process.
-const HELD_LOCK_MAX_MS = 5_000;
-// Waited out for the lock: past the age a dead hook's lock is replaced at, and well inside the hook's own timeout.
-const HELD_LOCK_WAIT_MS = HELD_LOCK_MAX_MS + 2_000;
-// Held while one waiter replaces a dead hook's lock, so two never replace it at once; stale as an unreadable lock is.
+// Waited out for the lock: past the age an unreadable lock is replaced at, and well inside the hook's own timeout.
+const HELD_LOCK_WAIT_MS = 7_000;
+const PS_PATH = '/bin/ps';
+// Held while one waiter replaces a dead hook's lock, so two never replace it at once; replaced as a dead hook's lock is.
 const HELD_TAKEOVER_FILE = 'held-report-nums.lock.takeover';
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
 const RELEASE_ARG = /^(\d+)(?:-(\d+))?$/;
@@ -120,23 +120,40 @@ function sentinelCreatedAt(dataRoot, num) {
   }
 }
 
-/** Whether the process a lock names is gone; a lock with no readable holder is gone once it is old. */
-function lockHolderGone(lock, text) {
-  let pid = null;
+/**
+ * When process `pid` started, as ps prints it: null when it does not run, 'unknown' when ps cannot tell (the kernel is
+ * asked whether it runs instead).
+ */
+function processStart(pid) {
   try {
-    pid = JSON.parse(text).pid;
+    const out = execFileSync(PS_PATH, ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { LC_ALL: 'C', TZ: 'UTC' } }).trim();
+    if (out) return out;
+  } catch (err) {
+    if (err.status === 1 && !err.signal && !String(err.stdout ?? '').trim()) return null;
+  }
+  try {
+    process.kill(pid, 0);
+    return 'unknown';
+  } catch (err) {
+    return err.code === 'ESRCH' ? null : 'unknown';
+  }
+}
+
+/**
+ * Whether the hook a lock names is gone: its process dead, or its pid since reused by a process that started at another
+ * time. A live holder keeps the lock however long it takes; a lock with no readable holder is gone once it is old.
+ */
+function lockHolderGone(lock, text) {
+  let holder = null;
+  try {
+    holder = JSON.parse(text);
   } catch {
     /* written only partly */
   }
-  const age = Date.now() - fs.statSync(lock).mtimeMs;
-  if (!Number.isInteger(pid) || pid <= 0) return age >= HELD_LOCK_UNREADABLE_MS;
-  if (age >= HELD_LOCK_MAX_MS) return true;
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (err) {
-    return err.code === 'ESRCH';
-  }
+  if (!Number.isInteger(holder?.pid) || holder.pid <= 0) return Date.now() - fs.statSync(lock).mtimeMs >= HELD_LOCK_UNREADABLE_MS;
+  const start = processStart(holder.pid);
+  if (start === null) return true;
+  return start !== 'unknown' && typeof holder.start === 'string' && start !== holder.start;
 }
 
 /** A file's text, or null once it is gone. */
@@ -153,15 +170,19 @@ function readIfPresent(file) {
  * Removes a dead holder's lock `seen`, holding the takeover marker so no other waiter replaces it meanwhile: while the
  * marker is held the lock changes only by its holder, and a dead holder never removes it.
  */
-function takeOverLock(dir, lock, seen) {
+function takeOverLock(dir, lock, seen, mine) {
   const marker = path.join(dir, HELD_TAKEOVER_FILE);
-  const mine = JSON.stringify({ pid: process.pid, nonce: crypto.randomUUID() });
   try {
     fs.writeFileSync(marker, mine, { flag: 'wx' });
   } catch (err) {
     if (err.code !== 'EEXIST') throw err;
+    // Another waiter's marker, gone already when it finished: the next try takes it.
     const other = readIfPresent(marker);
-    if (other !== null && Date.now() - fs.statSync(marker).mtimeMs >= HELD_LOCK_UNREADABLE_MS && readIfPresent(marker) === other) fs.rmSync(marker, { force: true });
+    try {
+      if (other !== null && lockHolderGone(marker, other) && readIfPresent(marker) === other) fs.rmSync(marker, { force: true });
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
     return;
   }
   try {
@@ -174,7 +195,8 @@ function takeOverLock(dir, lock, seen) {
 /** Runs `fn` holding the session's hold lock; one whose hook process died is replaced. */
 async function withHeldLock(dir, fn) {
   const lock = path.join(dir, HELD_LOCK_FILE);
-  const text = JSON.stringify({ pid: process.pid, nonce: crypto.randomUUID() });
+  const own = processStart(process.pid);
+  const text = JSON.stringify({ pid: process.pid, start: typeof own === 'string' && own !== 'unknown' ? own : null, nonce: crypto.randomUUID() });
   for (const deadline = Date.now() + HELD_LOCK_WAIT_MS; ; await sleepMs(20)) {
     try {
       fs.writeFileSync(lock, text, { flag: 'wx' });
@@ -184,7 +206,7 @@ async function withHeldLock(dir, fn) {
     }
     try {
       const seen = fs.readFileSync(lock, 'utf8');
-      if (lockHolderGone(lock, seen)) takeOverLock(dir, lock, seen);
+      if (lockHolderGone(lock, seen)) takeOverLock(dir, lock, seen, text);
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
