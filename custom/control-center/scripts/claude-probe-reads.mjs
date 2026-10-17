@@ -208,11 +208,12 @@ function runClaude(name, opts) {
     const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (d) => (stdout += d));
-    child.stderr.on('data', (d) => (stderr += d));
+    // On EMFILE/ENFILE Node reports the spawn failure before it creates the pipes, so they can be null.
+    child.stdout?.on('data', (d) => (stdout += d));
+    child.stderr?.on('data', (d) => (stderr += d));
     const timer = setTimeout(() => child.kill('SIGKILL'), 300_000);
     let settled = false;
-    // A spawn failure (ENOENT, EAGAIN) emits 'error'; unheard it would crash the probe past its cleanup.
+    // A spawn failure (ENOENT, EAGAIN, EMFILE) emits 'error'; unheard it would crash the probe past its cleanup.
     // An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' still settles that case.
     child.on('error', (err) => {
       stderr += `\n${err?.message ?? err}`;
