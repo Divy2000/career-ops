@@ -1,5 +1,30 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { lastSession, START_REPORT_WINDOW_MS, subscribeSession } from './lastSession';
+
+// Each start records a token under `${key}:start` (this browser tab), so a start's report can tell whether a newer start
+// was sent since: a POST that outlived START_REPORT_WINDOW_MS lets the page start again, and its late answer must not
+// replace the newer session or clear the newer start's mark. A storage that cannot hold the token supersedes nothing.
+function startToken(key: string): string | null {
+  try {
+    return sessionStorage.getItem(`${key}:start`);
+  } catch {
+    return null;
+  }
+}
+function newStartToken(key: string): string | null {
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    sessionStorage.setItem(`${key}:start`, token);
+    return token;
+  } catch {
+    try {
+      sessionStorage.removeItem(`${key}:start`);
+    } catch {
+      // storage refused: no start can be told apart, so none is superseded
+    }
+    return null;
+  }
+}
 
 /**
  * A page's paid session that must survive leaving the page: the last one started under `key` (this browser tab) is
@@ -17,6 +42,12 @@ export function useRememberedSession(key: string, { holdWhileAwaiting = false }:
   const [startingHere, setStartingHere] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [startFailed, setStartFailed] = useState(false);
+  // This mount's latest start's token: its report is stale once the stored token is another start's.
+  const ownStart = useRef<string | null>(null);
+  const superseded = useCallback(() => {
+    const latest = startToken(key);
+    return ownStart.current !== null && latest !== null && latest !== ownStart.current;
+  }, [key]);
   useEffect(() => {
     const sync = () => {
       setId(store.read());
@@ -57,29 +88,34 @@ export function useRememberedSession(key: string, { holdWhileAwaiting = false }:
   );
   const onSessionId = useCallback(
     (sid: string) => {
+      setStartingHere(false);
+      // A newer start was sent (from this tab, after this one's window ran out): its session is the one to hold.
+      if (superseded()) return;
       store.write(sid);
       store.setStarting(false);
-      setStartingHere(false);
       // A new session (a start or a fork) has not reported yet: the one held before it may have ended, which must not
       // read as this one's end. A reply reports the same session, whose status the stream may already have shown.
       if (sid !== id) setStatus(null);
       setId(sid);
     },
-    [store, id],
+    [store, id, superseded],
   );
   // The panel shows why the start failed; the button comes back for another try.
   const onStartFailed = useCallback(() => {
-    store.setStarting(false);
     setStartingHere(false);
+    if (superseded()) return;
+    store.setStarting(false);
     setStartFailed(true);
-  }, [store]);
+  }, [store, superseded]);
   // The panel started a session from its own form: marked like start(), so a page mounted meanwhile waits for it.
   const onStarting = useCallback(() => {
+    ownStart.current = newStartToken(key);
     store.setStarting(true);
     setStartingHere(true);
     setStartFailed(false);
-  }, [store]);
+  }, [key, store]);
   const start = () => {
+    ownStart.current = newStartToken(key);
     store.write(null);
     store.setStarting(true);
     setStartingHere(true);
