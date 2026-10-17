@@ -797,6 +797,9 @@ if ! lib node-supported "$NODE_VERSION" "$NODE_RANGE"; then
 fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
+# Again now node can read a .career-ops-data marker, before the daily lock or the log is taken under the root.
+DATA="$(effective_data_root)"
+refuse_unconfinable_root "$DATA"
 validate_inputs
 check_projects fetch
 
@@ -887,6 +890,7 @@ fi
 
 if [ "$DRY_RUN" = 0 ]; then
   DATA="$(effective_data_root)"
+  refuse_unconfinable_root "$DATA"
   LOG_FILE="$DATA/data/install/install-$(date +%Y-%m-%d).log"
   mkdir -p "$(dirname "$LOG_FILE")"
   printf '%s' "$LOG_BUF" >> "$LOG_FILE"
@@ -955,6 +959,7 @@ else
     fi
   fi
   DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+  refuse_unconfinable_root "$DATA"
   mkdir -p "$DATA"
   # same-path resolves letter case too (realpathSync.native), as pwd -P does not on a case-insensitive volume.
   if [ -n "$DATA_ROOT_ARG" ] && ! lib same-path "$DATA" "$DATA_REQ"; then

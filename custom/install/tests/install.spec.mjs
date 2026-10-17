@@ -2305,6 +2305,21 @@ test('a data root next to the home directory is fine', () => {
   assert.ok(fs.existsSync(path.join(w.home, 'career-data', 'modes', '_custom.md')));
 });
 
+test('a checkout marker naming the home directory is refused once node is installed, before the log or the daily lock lands in home (R30-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ tools: ['git', 'security', 'uname', 'launchctl', 'plutil', 'claude'], keychain: true });
+  const stubs = path.join(INSTALL_DIR, 'tests', 'stubs');
+  // brew install node puts node and npm on the PATH, as Homebrew does.
+  fs.writeFileSync(path.join(w.bin, 'brew'), `#!/bin/bash\necho "brew $*" >> "$STUB_LOG"\nif [ "$*" = "install node" ]; then ln -sf ${stubs}/node ${w.bin}/node; ln -sf ${stubs}/npm ${w.bin}/npm; fi\nexit 0\n`, { mode: 0o755 });
+  w.makeCheckout(D, { files: { '.career-ops-data': `${w.home}\n` } });
+  const r = w.run(['--dir', D, '--install-missing', ...QUIET], { tty: 'y\ny\nn\nn\nn\n' });
+  assert.ok(w.calls('brew').includes('brew install node'), r.out);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /error: the data root .* is your home directory or contains it/);
+  assert.ok(!fs.existsSync(path.join(w.home, 'data')), 'nothing written under the home directory');
+  assert.ok(!fs.existsSync(path.join(w.home, 'modes')), 'nothing written under the home directory');
+  assert.ok(!w.log().some((l) => l.startsWith('git pull') || l.startsWith('npm')), w.log().join('\n'));
+});
+
 test('a data root that does not exist yet, named with a trailing slash in CAREER_OPS_ROOT, is that folder, not its parent (review of R19-scripts-b-L3-01)', () => {
   const { w, D } = fresh({ keychain: true });
   const root = path.join(w.home, 'new-root');
