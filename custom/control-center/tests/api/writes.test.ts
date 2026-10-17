@@ -504,6 +504,13 @@ describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
     expect(tracker()).not.toContain('Longname');
   });
 
+  it('given a link whose label names another report, when the page confirms the report the link points at, then the delete goes through (R29-srv-dom-b-L2-01)', async () => {
+    fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), '| 32 | 2026-10-07 | Labelled Corp | - | Engineer | 3.0/5 | Evaluated | ❌ | [22](../reports/023-labelled.md) | |\n');
+    const r = await confirmDelete({ n: 32, expectCompany: 'Labelled Corp', expectRole: 'Engineer', expectReport: 23 });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(tracker()).not.toContain('Labelled Corp');
+  });
+
   it('given a "025" row ahead of #25 that the page shows as #25, when it is confirmed, then the refusal names the spelling to fix', async () => {
     fs.appendFileSync(
       path.join(d.cfg.dataRoot, 'data', 'applications.md'),
