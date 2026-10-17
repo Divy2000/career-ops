@@ -114,6 +114,13 @@ describe('Danger zone delete', () => {
       expect(host.querySelector('[aria-label="Delete preview"]')).toBeNull();
     });
 
+    it('a previewed row without a report says so, so a re-added row that has one is not taken for it', async () => {
+      await act(async () => qc.setQueryData(['tracker', 'row', '4'], { row: { ...initech, report: null } }));
+      await click('Preview delete (dry run)');
+      await click('Confirm delete #4');
+      expect(posts[1]).toEqual({ n: 4, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: null });
+    });
+
     it('keeps the preview when the same row is refetched', async () => {
       await click('Preview delete (dry run)');
       await act(async () => qc.setQueryData(['tracker', 'row', '4'], { row: { ...initech } }));

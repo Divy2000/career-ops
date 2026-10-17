@@ -35,7 +35,7 @@ export function DangerZone({ n }: { n: number }) {
       // "Confirm delete" is the user's confirmation, which the real delete must carry; the dry run needs none.
       const expected = dryRun ? null : (taken?.of ?? null);
       const params = expected
-        ? { n, dryRun, expectCompany: expected.company, expectRole: expected.role, ...(expected.report === null ? {} : { expectReport: expected.report }) }
+        ? { n, dryRun, expectCompany: expected.company, expectRole: expected.role, expectReport: expected.report }
         : { n, dryRun };
       const r = await apiSend<{ result: unknown; stderr?: string }>('POST', '/api/actions/tracker.delete', dryRun ? { params } : { params, confirmed: true });
       const text = `${typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2)}\n${r.stderr ?? ''}`.trim();

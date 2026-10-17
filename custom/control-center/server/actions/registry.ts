@@ -251,7 +251,7 @@ export const ACTIONS: ActionDef[] = [
       dryRun: z.boolean().default(false),
       expectCompany: z.string().max(500).optional(),
       expectRole: z.string().max(500).optional(),
-      expectReport: positive.optional(),
+      expectReport: positive.nullable().optional(),
     }),
     preview: (p) => p.dryRun,
     check: async (p, ctx) => {
@@ -260,9 +260,10 @@ export const ACTIONS: ActionDef[] = [
       const rows = tracker.kind === 'ok' ? tracker.rows.filter((r) => r.num === p.n) : [];
       const matches = (r: (typeof rows)[number]) =>
         (p.expectCompany === undefined || r.company === p.expectCompany) && (p.expectRole === undefined || r.role === p.expectRole) && (p.expectReport === undefined || r.report === p.expectReport);
-      const now = rows[0];
-      if (!now || rows.some(matches)) return null;
-      return { status: 409, error: `Row #${p.n} is now ${now.company} (${now.role}), not the row you previewed. Preview the delete again.` };
+      // tracker.mjs deletes every row numbered n, so each of them must be the previewed one.
+      const other = rows.find((r) => !matches(r));
+      if (!other) return null;
+      return { status: 409, error: `Row #${p.n} now holds ${other.company} (${other.role}), not only the row you previewed. Preview the delete again.` };
     },
     build: (p, ctx) => node(ctx, 'tracker', ['delete', '--num', String(p.n), ...flag(p.dryRun, '--dry-run')]),
   }),

@@ -415,11 +415,46 @@ describe('tracker delete', () => {
     // The page previewed #3 as some other application; #3 is now Globex Payments, which the user never approved deleting.
     const stale = await post('/api/actions/tracker.delete', { params: { n: 3, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 }, confirmed: true });
     expect(stale.statusCode, stale.body).toBe(409);
-    expect(stale.json().error).toMatch(/#3 is now Globex Payments/);
+    expect(stale.json().error).toMatch(/#3 now holds Globex Payments/);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 3)).toBe(true);
     const current = await post('/api/actions/tracker.delete', { params: { n: 3, dryRun: false, expectCompany: 'Globex Payments', expectRole: 'Staff Software Engineer', expectReport: 3 }, confirmed: true });
     expect(current.statusCode, current.body).toBe(200);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 3)).toBe(false);
+  });
+});
+
+describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
+  let d: TestApp;
+  const tracker = () => fs.readFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), 'utf8');
+  beforeAll(async () => {
+    d = await makeTestApp();
+    fs.appendFileSync(
+      path.join(d.cfg.dataRoot, 'data', 'applications.md'),
+      [
+        // Two rows share #20: tracker.mjs delete --num 20 removes both, so naming one of them does not approve the other.
+        '| 20 | 2026-10-01 | Hooli | - | SRE | 3.0/5 | Evaluated | ❌ | [9](../reports/009-hooli.md) | |',
+        '| 20 | 2026-10-01 | Initech Cloud | - | Backend Engineer II | 3.0/5 | Evaluated | ❌ | [4](../reports/004-initech-cloud.md) | |',
+        // #21 is a re-added row that now carries a report; the page previewed it without one.
+        '| 21 | 2026-10-02 | Acme Robotics | - | Engineer | 3.0/5 | Evaluated | ❌ | [12](../reports/012-acme.md) | |',
+        '',
+      ].join('\n'),
+    );
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+  const confirmDelete = (params: Record<string, unknown>) => d.app.inject({ method: 'POST', url: '/api/actions/tracker.delete', headers: d.authedWrite, payload: { params: { dryRun: false, ...params }, confirmed: true } });
+
+  it('refuses when the number holds another row besides the previewed one', async () => {
+    const r = await confirmDelete({ n: 20, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(tracker()).toContain('| 20 | 2026-10-01 | Hooli |');
+  });
+
+  it('refuses when the previewed row had no report and the row under that number now has one', async () => {
+    const r = await confirmDelete({ n: 21, expectCompany: 'Acme Robotics', expectRole: 'Engineer', expectReport: null });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(tracker()).toContain('| 21 | 2026-10-02 | Acme Robotics |');
   });
 });
 
