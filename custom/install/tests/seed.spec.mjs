@@ -651,6 +651,46 @@ fs.writeFileSync(${JSON.stringify(data)} + '/.article-digest.md.tmp-' + process.
   assert.deepEqual(temps.map((n) => fs.readFileSync(path.join(data, n), 'utf8')), ['PARTIAL'], 'only the crashed run\'s temp file is left');
 });
 
+test('given a config/local-paths.txt the user cannot write, when local-paths runs, then it fails naming the file and leaves it as it was (R28-scripts-b-L1-01 review 3)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.chmodSync(f, 0o444);
+  try {
+    const res = seed(['local-paths', '--dir', d]);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /local-paths\.txt/);
+    assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\n');
+    assert.equal(fs.statSync(f).mode & 0o777, 0o444);
+  } finally {
+    fs.chmodSync(f, 0o644);
+  }
+});
+
+test('given config/local-paths.txt is hard-linked elsewhere, when local-paths adds custom/, then both names still show the same file (R28-scripts-b-L1-01 review 3)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const other = path.join(d, 'shared-paths.txt');
+  fs.linkSync(f, other);
+  assert.equal(seed(['local-paths', '--dir', d]).stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(other, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.statSync(f).ino, fs.statSync(other).ino);
+});
+
+test('given config/ is a directory symlink and local-paths.txt links upward from it, when local-paths adds custom/, then the file the kernel resolves gets the line (R28-scripts-b-L1-01 review 3)', () => {
+  const d = tmp();
+  const checkout = path.join(d, 'checkout');
+  const real = path.join(d, 'elsewhere', 'config');
+  const shared = put(path.join(d, 'elsewhere', 'shared', 'paths.txt'), 'notes/\n');
+  fs.mkdirSync(real, { recursive: true });
+  fs.mkdirSync(checkout);
+  fs.symlinkSync(real, path.join(checkout, 'config'));
+  fs.symlinkSync('../shared/paths.txt', path.join(real, 'local-paths.txt'));
+  assert.equal(seed(['local-paths', '--dir', checkout]).stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(shared, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.existsSync(path.join(checkout, 'shared')), false);
+  assert.ok(fs.lstatSync(path.join(real, 'local-paths.txt')).isSymbolicLink());
+});
+
 test('given a private config/local-paths.txt, when local-paths writes the merged text, then its temp file is never readable by others (R28-scripts-b-L1-01 review 2)', () => {
   const d = tmp();
   const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');

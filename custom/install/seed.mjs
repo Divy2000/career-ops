@@ -27,10 +27,30 @@ function localPaths(dir) {
   if (merged === null) return out('present');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const target = linkTarget(file);
-  // The rename replaces the file, so the replacement takes the user's permissions on it.
-  const mode = exists(target) ? fs.statSync(target).mode & 0o7777 : null;
+  const st = exists(target) ? fs.statSync(target) : null;
+  if (st) {
+    // A rename would replace a file the user cannot write; it fails as the write in place would.
+    try {
+      fs.accessSync(target, fs.constants.W_OK);
+    } catch (err) {
+      throw new Error(`cannot write ${target}: ${err.code}`);
+    }
+    // A rename would split a hard-linked file from its other names, so that one is written in place.
+    if (st.nlink > 1) {
+      fs.writeFileSync(target, merged);
+      return out('added');
+    }
+  }
+  // The rename replaces the file, so the replacement takes the user's permissions and, where allowed, owner.
+  const mode = st ? st.mode & 0o7777 : null;
   writeAtomic(target, merged, (tmp) => {
-    if (mode !== null) fs.chmodSync(tmp, mode);
+    if (!st) return;
+    fs.chmodSync(tmp, mode);
+    try {
+      fs.chownSync(tmp, st.uid, st.gid);
+    } catch {
+      // Only root can give a file away; the mode still carries the user's intent.
+    }
   }, fs.renameSync, mode ?? 0o666);
   out('added');
 }
@@ -46,9 +66,20 @@ function linkTarget(file) {
       if (err.code === 'EINVAL' || err.code === 'ENOENT') return target;
       throw err;
     }
-    target = path.resolve(path.dirname(target), link);
+    // The kernel resolves a relative link from the real folder holding it, which differs when that folder is reached
+    // through a symlink and the link climbs with `..`.
+    target = path.resolve(realDir(path.dirname(target)), link);
   }
   throw new Error(`${file} is a symlink loop`);
+}
+
+function realDir(dir) {
+  try {
+    return fs.realpathSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return dir;
+    throw err;
+  }
 }
 
 function customTemplate(data, template) {
