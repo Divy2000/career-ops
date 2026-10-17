@@ -251,11 +251,15 @@ function printedReservation(output: string): number[] {
  * marks it running): two server processes on one data root (blue/green) would otherwise both start a paid turn on it.
  */
 const TURN_CLAIM_FILE = 'turn.claim';
-/** Preparing a turn takes seconds; a claim this old was left by a process that never released it. */
+/** A claim whose holder cannot be told apart from a later process under its PID (ps cannot answer) is freed this old. */
 const TURN_CLAIM_STALE_MS = 15 * 60_000;
 let ownStart: ProcessStart | undefined;
 
-/** Whether the process a turn claim names is gone: dead, a reused PID, or the claim is cut short or stale. */
+/**
+ * Whether the process a turn claim names is gone: dead or a reused PID. A live holder keeps its claim however long it
+ * prepares (a slow token read), since a peer starting the turn beside it would run two turns. One whose start cannot be
+ * compared counts as gone once the claim is stale, and a claim cut short once the unreadable grace has passed.
+ */
 function turnClaimGone(file: string, text: string): boolean {
   let holder: { pid?: unknown; start?: unknown; at?: unknown };
   try {
@@ -264,10 +268,10 @@ function turnClaimGone(file: string, text: string): boolean {
     return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
   }
   if (!Number.isInteger(holder.pid) || typeof holder.at !== 'number') return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
-  if (Date.now() - holder.at >= TURN_CLAIM_STALE_MS) return true;
   const start = processStartTime(holder.pid as number);
   if (start === null) return true;
-  return typeof start === 'number' && typeof holder.start === 'number' && start !== holder.start;
+  if (typeof start === 'number' && typeof holder.start === 'number') return start !== holder.start;
+  return Date.now() - holder.at >= TURN_CLAIM_STALE_MS;
 }
 
 export interface ManagerDeps {

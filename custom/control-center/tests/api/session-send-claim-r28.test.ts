@@ -5,6 +5,7 @@ import path from 'node:path';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import { BusyError } from '../../server/claude/manager.js';
+import { processStartTime } from '../../supervisor/instance-lock.js';
 
 // R28-claude-X-01: two server processes on one data root (blue/green) each see a session waiting for the user; a reply
 // sent to both at once must start one paid turn, not two.
@@ -67,6 +68,21 @@ describe('a reply sent to one session through two server processes at once (R28-
       fs.writeFileSync(path.join(app.sessions.store.guardDirOf(meta.id), 'turn.claim'), JSON.stringify({ pid: dead, start: 1, at: Date.now(), nonce: 'gone' }));
       const next = await withScenario([INIT, result('Researched Acme.')], () => app.sessions.send(meta.id, 'Acme'));
       expect(next.turns).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a turn claim a live server process has held for a long time, when a reply is sent, then it is refused as busy: age alone never frees a live claim', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-r28-claim-guard-') });
+    try {
+      const meta = await withScenario([INIT, result('Which company is this for?')], () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: null }));
+      expect(await settled(app, meta.id)).toBe('awaiting_user');
+      const start = processStartTime(process.pid);
+      expect(typeof start).toBe('number');
+      fs.writeFileSync(path.join(app.sessions.store.guardDirOf(meta.id), 'turn.claim'), JSON.stringify({ pid: process.pid, start, at: Date.now() - 3_600_000, nonce: 'slow-peer' }));
+      await expect(app.sessions.send(meta.id, 'Acme')).rejects.toBeInstanceOf(BusyError);
+      expect(app.sessions.read(meta.id)!.turns).toHaveLength(1);
     } finally {
       await app.close();
     }
