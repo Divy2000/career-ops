@@ -1840,6 +1840,31 @@ test('a Control Center lock that cannot be read is treated as running: no npm ci
   assert.doesNotMatch(r.out, /was running|already running|stop it/, `nothing may be running, so the run does not say it is (R27 merge review)\n${r.out}`);
 });
 
+test('given the Control Center lock becomes unreadable after its npm ci ran, the run does not start it and leaves removing the lock as a pending action (R27 merge review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_MKDIR: lock } });
+  assert.equal(r.status, 3, r.out);
+  assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'its npm ci ran before the lock appeared');
+  assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+  assert.match(r.out, /\d+\. The Control Center lock .*supervisor\.lock'? cannot be read, so it was not started: if no Control Center is running, remove that lock, then start it: .*bin\/cc/);
+  assert.doesNotMatch(r.out, /dependencies were not reinstalled|already running/);
+});
+
+test('given its npm ci was skipped for an unreadable lock that is gone by the end of a --no-start run, the pending action does not say the Control Center was running (R27 merge review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_REMOVE: lock } });
+  assert.equal(r.status, 3, r.out);
+  assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'a --no-start run does not install it');
+  assert.match(r.out, /\d+\. The Control Center lock could not be read, so its dependencies were not reinstalled; it is gone now: run npm --prefix .*custom\/control-center'? ci, then start it: .*bin\/cc/);
+  assert.doesNotMatch(r.out, /was running/);
+});
+
 test('a Control Center that stops after its npm ci was skipped gets that npm ci before the installer starts it (R18-scripts-b-review-06)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });

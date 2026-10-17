@@ -84,6 +84,8 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.STUB_LOG, 'doctor ' + args.join(' ') + '\\n');
 // A file the run's later state depends on going away mid-install (a Control Center that stops, say).
 if (process.env.FAKE_DOCTOR_REMOVE) fs.rmSync(process.env.FAKE_DOCTOR_REMOVE, { force: true });
+// Or a folder appearing in a file's place (a Control Center lock that cannot be read).
+if (process.env.FAKE_DOCTOR_MKDIR) fs.mkdirSync(process.env.FAKE_DOCTOR_MKDIR, { recursive: true });
 // A daily job that starts once the dependency step is over: the step after it (--init-templates) signals, then waits
 // for the test's holder to take the lock.
 if (process.env.FAKE_DOCTOR_SIGNAL && args.includes('--init-templates')) {
