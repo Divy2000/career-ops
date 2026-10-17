@@ -136,8 +136,13 @@ try {
       // The rename goes to the real file, so a follow-ups.md symlink stays a link.
       fs.mkdirSync(path.dirname(req.target), { recursive: true });
       const tmp = req.target + '.tmp-' + process.pid;
-      fs.writeFileSync(tmp, r.text);
-      fs.renameSync(tmp, req.target);
+      try {
+        fs.writeFileSync(tmp, r.text);
+        fs.renameSync(tmp, req.target);
+      } catch (e) {
+        fs.rmSync(tmp, { force: true });
+        throw e;
+      }
     }
     return r;
   }, { timeoutMs: req.timeoutMs, retryMs: 50 });

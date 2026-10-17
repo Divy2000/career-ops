@@ -267,6 +267,31 @@ describe('follow-up edits that cannot write (SW2-tests-23)', () => {
   });
 });
 
+describe('a follow-up edit whose rename fails (R27-srv-dom-a-L1-02)', () => {
+  it('given the rename onto follow-ups.md fails, when an override is saved, then it is a 500 and no temp file is left beside it', async () => {
+    const dataRoot = path.join(tempDir('cc-fu-rename-'), 'root');
+    fs.cpSync(path.join(t.cfg.dataRoot), dataRoot, { recursive: true });
+    // The edit runs in a child: a preload makes its rename onto follow-ups.md fail, as a full disk or an EXDEV would.
+    const preload = path.join(tempDir('cc-fu-preload-'), 'fail-rename.mjs');
+    fs.writeFileSync(preload, `import fs from 'node:fs';\nconst real = fs.renameSync;\nfs.renameSync = (from, to) => { if (String(to).endsWith('follow-ups.md')) throw Object.assign(new Error('EIO: injected rename failure'), { code: 'EIO' }); return real(from, to); };\n`);
+    const own = await makeTestApp({ dataRoot });
+    const saved = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = `${saved ?? ''} --import ${pathToFileURL(preload).href}`.trim();
+    try {
+      const before = fs.readFileSync(path.join(dataRoot, 'data', 'follow-ups.md'), 'utf8');
+      const res = await own.app.inject({ method: 'POST', url: '/api/followups/override', headers: own.authedWrite, payload: { appNum: 1, date: '2026-10-20' } });
+      expect(res.statusCode, res.body).toBe(500);
+      expect(res.body).toMatch(/injected rename failure/);
+      expect(fs.readdirSync(path.join(dataRoot, 'data')).filter((f) => f.startsWith('follow-ups.md.tmp'))).toEqual([]);
+      expect(fs.readFileSync(path.join(dataRoot, 'data', 'follow-ups.md'), 'utf8')).toBe(before);
+    } finally {
+      if (saved === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = saved;
+      await own.close();
+    }
+  }, 30_000);
+});
+
 describe('follow-up writes', () => {
   it('logs a follow-up, shows it on the application timeline and deletes it again', async () => {
     const r = await post('/api/followups/log', { appNum: 6, date: '2026-10-03', channel: 'Email', contact: 'HM', notes: 'sent deck' });
