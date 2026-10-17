@@ -79,4 +79,17 @@ describe('deleting a session another server process is starting a turn on (R28-c
       await app.close();
     }
   });
+
+  it('given a session whose turn runs in another server process, when it is deleted here, then it is refused as busy', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', 'setTimeout(() => {}, 2000)'], cwd: process.cwd() } });
+      app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      await expect(app.sessions.delete(meta.id)).rejects.toThrow(/running/);
+      expect(app.sessions.read(meta.id)).not.toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
 });
