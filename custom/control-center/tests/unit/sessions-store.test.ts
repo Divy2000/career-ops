@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { SessionStore, sessionsDir } from '../../server/claude/sessions.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -89,6 +91,53 @@ describe('session store', () => {
     expect(store.appendEvent(s.id, { type: 'text.delta', text: 'c' })).toBe(3);
     expect(other.appendEvent(s.id, { type: 'text.delta', text: 'd' })).toBe(4);
     expect(store.readEvents(s.id).map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+  });
+  it('servers appending to one session at once never hand out the same seq (R28-claude-X-02)', async () => {
+    const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+    const scripts = tempDir('cc-sessions-append-');
+    const worker = path.join(scripts, 'append.mts');
+    const sessionsModule = pathToFileURL(path.resolve('server/claude/sessions.ts')).href;
+    fs.writeFileSync(
+      worker,
+      `import { SessionStore } from ${JSON.stringify(sessionsModule)};
+const [root, guardRoot, id, startAt, count] = process.argv.slice(2);
+const store = new SessionStore(root, guardRoot);
+while (Date.now() < Number(startAt)) {}
+for (let i = 0; i < Number(count); i++) store.appendEvent(id, { type: 'text.delta', text: String(i) });
+`,
+    );
+    const servers = 4;
+    const perServer = 150;
+    const startAt = Date.now() + 1500;
+    const tsx = path.resolve('node_modules/tsx/dist/esm/index.mjs');
+    const exits = await Promise.all(
+      Array.from({ length: servers }, () => {
+        const child = spawn(process.execPath, ['--import', pathToFileURL(tsx).href, worker, root, guardRoot, s.id, String(startAt), String(perServer)], {
+          stdio: ['ignore', 'ignore', 'pipe'],
+          // tsx caches transforms under TMPDIR: inside this test's temp dir, the run leaves nothing behind.
+          env: { ...process.env, TMPDIR: scripts },
+        });
+        let stderr = '';
+        child.stderr.on('data', (d) => (stderr += d));
+        return new Promise<{ code: number | null; stderr: string }>((resolve) => child.on('close', (code) => resolve({ code, stderr })));
+      }),
+    );
+    expect(exits).toEqual(Array.from({ length: servers }, () => ({ code: 0, stderr: '' })));
+    const seqs = store.readEvents(s.id).map((e) => e.seq);
+    expect(seqs).toEqual(Array.from({ length: servers * perServer }, (_, i) => i + 1));
+  }, 30_000);
+  it('an append lock left by a server that stopped mid-append does not block the session (R28-claude-X-02)', () => {
+    const s = store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+    const file = path.join(sessionsDir(root), s.id, 'events.ndjson');
+    const dead = spawnSync(process.execPath, ['-e', 'process.exit(0)']).pid!;
+    fs.writeFileSync(`${file}.lock`, `${dead} stopped`);
+    expect(store.appendEvent(s.id, { type: 'text.delta', text: 'a' })).toBe(1);
+    // A live pid that held the lock far longer than any append has stopped too (or the pid was reused).
+    fs.writeFileSync(`${file}.lock`, `${process.pid} hung`);
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(`${file}.lock`, old, old);
+    expect(store.appendEvent(s.id, { type: 'text.delta', text: 'b' })).toBe(2);
+    expect(fs.readdirSync(path.dirname(file)).sort()).toEqual(['events.ndjson', 'meta.json']);
   });
   it('appending a streamed event does not read the transcript back', () => {
     const s = store.create({ mode: 'devchat', policyClass: 'devchat', target: { type: 'none', value: null }, model: null });
