@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { CLAUDE_SHIM_PATH, confinedArgv } from '../../server/claude/claude-shim.mjs';
 import { buildReadDenyRules, claudeVersionGate } from '../../server/claude/confinement.mjs';
 import { neutralizeFileMentions } from '../../server/claude/invocation.js';
@@ -191,6 +191,39 @@ describe('claude shim: running the real binary', () => {
     const r = shim(['-p', 'x'], { CC_CLAUDE_BIN: via, CC_CLAUDE_EXPECT: gate.identity });
     expect(r.status, r.stderr).toBe(0);
     expect(real.calls()).toHaveLength(1);
+  });
+
+  it("a caller's timeout SIGTERM reaches the real claude too, so a timed-out rank call does not keep running orphaned (R27-claude-L1-02)", async () => {
+    const dir = tempDir('cc-shim-orphan-');
+    const bin = path.join(dir, 'claude-real');
+    const pidFile = path.join(dir, 'pid');
+    // Stands in for a slow ranking call: records its pid, then runs far past any caller timeout.
+    fs.writeFileSync(bin, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv[2] === '--version') { console.log(${JSON.stringify(`${APPROVED} (Claude Code)`)}); process.exit(0); }\nfs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => process.exit(0), 30_000);\n`, { mode: 0o755 });
+    const { CC_CLAUDE_BIN: _drop, CAREER_OPS_ROOT: _root, CAREER_OPS_DATA_DIR: _dataDir, ...base } = process.env;
+    const child = spawn(process.execPath, [CLAUDE_SHIM_PATH, '-p', 'rank these', '--effort', 'medium'], { env: { ...base, CAREER_OPS_ROOT: DATA_ROOT, CC_CLAUDE_BIN: bin }, stdio: 'ignore' });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let realPid = 0;
+    try {
+      for (let i = 0; i < 200 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 25));
+      realPid = Number(fs.readFileSync(pidFile, 'utf8'));
+      expect(alive(realPid)).toBe(true);
+      // What execFileSync's timeout does: SIGTERM to its direct child, the shim.
+      child.kill('SIGTERM');
+      expect(await exited).toEqual({ code: null, signal: 'SIGTERM' });
+      for (let i = 0; i < 80 && alive(realPid); i++) await new Promise((r) => setTimeout(r, 25));
+      expect(alive(realPid)).toBe(false);
+    } finally {
+      if (realPid && alive(realPid)) process.kill(realPid, 'SIGKILL');
+      child.kill('SIGKILL');
+    }
   });
 
   it('--version answers with the real version, autoupdater off', () => {
