@@ -31,7 +31,7 @@ function localPaths(dir) {
   const mode = exists(target) ? fs.statSync(target).mode & 0o7777 : null;
   writeAtomic(target, merged, (tmp) => {
     if (mode !== null) fs.chmodSync(tmp, mode);
-  });
+  }, fs.renameSync, mode ?? 0o666);
   out('added');
 }
 
@@ -225,11 +225,12 @@ function copyNew(tmp, file) {
 }
 
 // beforeRename runs once the new copy is fully written, so a failed write leaves nothing behind.
-function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync) {
+function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync, mode = 0o666) {
   // Random as well as per process: a temp file a crashed run left under a reused pid must not block this write.
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
   try {
-    fs.writeFileSync(tmp, text, { flag: 'wx' });
+    // Created with the target's mode, so a private file's contents are never readable by others under the temp name.
+    fs.writeFileSync(tmp, text, { flag: 'wx', mode });
     beforeRename(tmp);
     publish(tmp, file);
   } catch (err) {

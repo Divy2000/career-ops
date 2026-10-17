@@ -651,6 +651,27 @@ fs.writeFileSync(${JSON.stringify(data)} + '/.article-digest.md.tmp-' + process.
   assert.deepEqual(temps.map((n) => fs.readFileSync(path.join(data, n), 'utf8')), ['PARTIAL'], 'only the crashed run\'s temp file is left');
 });
 
+test('given a private config/local-paths.txt, when local-paths writes the merged text, then its temp file is never readable by others (R28-scripts-b-L1-01 review 2)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.chmodSync(f, 0o600);
+  const seen = path.join(d, 'temp-mode.txt');
+  const preload = put(path.join(d, 'temp-mode.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+fs.writeFileSync = (...args) => {
+  const r = realWrite(...args);
+  if (String(args[0]).includes('.tmp-')) realWrite(${JSON.stringify(seen)}, (fs.statSync(args[0]).mode & 0o777).toString(8));
+  return r;
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(fs.readFileSync(seen, 'utf8'), '600');
+  assert.equal(fs.statSync(f).mode & 0o777, 0o600);
+});
+
 test('given a private config/local-paths.txt, when local-paths adds custom/, then the file keeps its permissions (R28-scripts-b-L1-01 review)', () => {
   const d = tmp();
   const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
