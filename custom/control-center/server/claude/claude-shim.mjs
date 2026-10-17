@@ -71,6 +71,8 @@ function refuse(message, code = 1) {
 
 /** Signals a caller sends to stop the call; rank-pipeline.mjs's execFileSync timeout SIGTERMs only its direct child, this shim. */
 const FORWARDED = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
+/** How long a stopped claude gets to exit before the shim kills it, so a claude that ignores the stop still ends. */
+const STOP_GRACE_MS = 5000;
 /** Signals Node does not die of when raised on itself. */
 const NODE_SURVIVES = new Set(['SIGPIPE', 'SIGUSR1']);
 
@@ -80,13 +82,25 @@ const NODE_SURVIVES = new Set(['SIGPIPE', 'SIGUSR1']);
  */
 function runReal(real, args, env) {
   const child = spawn(real, args, { stdio: 'inherit', env });
-  const forward = (sig) => child.kill(sig);
+  let stoppedBy = null;
+  let escalated = false;
+  const forward = (sig) => {
+    child.kill(sig);
+    if (stoppedBy) return;
+    stoppedBy = sig;
+    setTimeout(() => {
+      // Dies below of the caller's own signal, not of this SIGKILL.
+      escalated = true;
+      child.kill('SIGKILL');
+    }, STOP_GRACE_MS).unref();
+  };
   for (const sig of FORWARDED) process.on(sig, forward);
   child.on('error', (err) => {
     process.stderr.write(`claude-shim: cannot run ${real} (${err.message})\n`);
     process.exit(1);
   });
-  child.on('exit', (code, signal) => {
+  child.on('exit', (code, exitSignal) => {
+    const signal = escalated ? stoppedBy : exitSignal;
     if (signal) {
       // Die of the same signal, so the caller sees what it would have without the shim.
       for (const sig of FORWARDED) process.off(sig, forward);

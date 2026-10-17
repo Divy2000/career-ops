@@ -242,6 +242,39 @@ describe('claude shim: running the real binary', () => {
     }
   });
 
+  it("a real claude that ignores the forwarded SIGTERM is killed after a grace period, so the caller's timeout still ends the call (R27-claude-L1-02 review)", async () => {
+    const dir = tempDir('cc-shim-stuck-');
+    const bin = path.join(dir, 'claude-real');
+    const pidFile = path.join(dir, 'pid');
+    // Ignores SIGTERM, then runs far past any caller timeout; the pid goes in by rename so a reader never sees it half-written.
+    fs.writeFileSync(bin, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv[2] === '--version') { console.log(${JSON.stringify(`${APPROVED} (Claude Code)`)}); process.exit(0); }\nprocess.on('SIGTERM', () => {});\nfs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));\nfs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});\nsetTimeout(() => process.exit(0), 60_000);\n`, { mode: 0o755 });
+    const { CC_CLAUDE_BIN: _drop, CAREER_OPS_ROOT: _root, CAREER_OPS_DATA_DIR: _dataDir, ...base } = process.env;
+    const child = spawn(process.execPath, [CLAUDE_SHIM_PATH, '-p', 'rank these'], { env: { ...base, CAREER_OPS_ROOT: DATA_ROOT, CC_CLAUDE_BIN: bin }, stdio: 'ignore' });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let realPid = 0;
+    try {
+      for (let i = 0; i < 800 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 25));
+      realPid = Number(fs.readFileSync(pidFile, 'utf8'));
+      expect(realPid).toBeGreaterThan(0);
+      child.kill('SIGTERM');
+      const outcome = await Promise.race([exited, new Promise<'hung'>((r) => setTimeout(() => r('hung'), 30_000))]);
+      expect(outcome).toEqual({ code: null, signal: 'SIGTERM' });
+      for (let i = 0; i < 400 && alive(realPid); i++) await new Promise((r) => setTimeout(r, 25));
+      expect(alive(realPid)).toBe(false);
+    } finally {
+      if (realPid && alive(realPid)) process.kill(realPid, 'SIGKILL');
+      child.kill('SIGKILL');
+    }
+  });
+
   it('--version answers with the real version, autoupdater off', () => {
     const r = shim(['--version'], { CC_CLAUDE_BIN: realClaude(APPROVED).bin });
     expect(r.status).toBe(0);
