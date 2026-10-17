@@ -62,6 +62,20 @@ describe('a turn read at a restart (R28-cl2-rev-01)', () => {
     }
   });
 
+  it('given a reservation no server handled yet whose sentinel is unchanged, when the turn is read at a restart, then its hold is recorded', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    const sentinel = path.join(app.cfg.dataRoot, 'reports', '061-RESERVED.md');
+    try {
+      // The run's own reservation, written before it printed 061.
+      otherHolds61(app, '2026-01-01T00:00:00.000Z');
+      const { held } = await turnOutsideTheServer(app, () => {});
+      const own = JSON.parse(fs.readFileSync(sentinel, 'utf8')) as { created_at: string; token: string };
+      expect(held).toContain(`+61=${Date.parse(own.created_at)}~${own.token};`);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('given a session whose reserved number\'s sentinel cannot be read, when its turn starts, then the turn still runs', async () => {
     const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
     const file = path.join(tempDir('cc-r28-start-'), 'scenario.json');
