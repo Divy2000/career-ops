@@ -655,7 +655,6 @@
       "module": "plugins/_engine.mjs",
       "names": [
         "discoverPlugins",
-        "pluginRoots",
         "resolveSuccessorIds"
       ]
     },
@@ -663,7 +662,6 @@
       "module": "path-resolver.mjs",
       "names": [
         "getCareerOpsRoot",
-        "resolveTrackerPath",
         "rawTrackerPath"
       ]
     },
@@ -673,7 +671,7 @@
         "resolveColumns",
         "parseTrackerRow",
         "normalizeTextKey",
-        "extractTrackerReportNumbers",
+        "extractTrackerReportLinks",
         "isSeparatorRow",
         "isHeaderRow"
       ]
@@ -691,14 +689,8 @@
         "parsePolicyChanges",
         "parseCompanyAlerts",
         "readCheckedAt",
-        "decideRefresh",
+        "newsSince",
         "companySlug"
-      ]
-    },
-    {
-      "module": "custom/pipeline/lib.mjs",
-      "names": [
-        "parseRow"
       ]
     },
     {
@@ -721,7 +713,10 @@
       "module": "tracker-utils.mjs",
       "names": [
         "loadCanonicalStates",
-        "resolveCanonicalState"
+        "resolveCanonicalState",
+        "resolveTrackerPath",
+        "acquireTrackerLock",
+        "trackerLockDirFor"
       ]
     },
     {
