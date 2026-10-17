@@ -2,6 +2,7 @@
 // through the runner (Claude slot cap applies), the Keychain token is read at
 // spawn and only ever lives in the child's env, stdout is normalized into
 // events.ndjson, and the honesty gate decides done / awaiting_user.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -119,9 +120,16 @@ function readProgress(file: string): TurnProgress | null {
   }
 }
 
-function writeProgress(file: string, p: TurnProgress): void {
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(p));
-  fs.renameSync(`${file}.tmp`, file);
+/** A temp name of its own, so a blue/green peer saving the same turn never writes into or renames away this one's. */
+export function writeProgress(file: string, p: TurnProgress): void {
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(p));
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 export interface ManagerDeps {
