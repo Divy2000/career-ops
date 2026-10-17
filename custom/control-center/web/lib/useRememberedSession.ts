@@ -60,9 +60,12 @@ export function useRememberedSession(key: string, { holdWhileAwaiting = false }:
       store.write(sid);
       store.setStarting(false);
       setStartingHere(false);
+      // A new session (a start or a fork) has not reported yet: the one held before it may have ended, which must not
+      // read as this one's end. A reply reports the same session, whose status the stream may already have shown.
+      if (sid !== id) setStatus(null);
       setId(sid);
     },
-    [store],
+    [store, id],
   );
   // The panel shows why the start failed; the button comes back for another try.
   const onStartFailed = useCallback(() => {
