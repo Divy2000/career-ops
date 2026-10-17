@@ -650,3 +650,12 @@ fs.writeFileSync(${JSON.stringify(data)} + '/.article-digest.md.tmp-' + process.
   const temps = fs.readdirSync(data).filter((n) => n.includes('.tmp-'));
   assert.deepEqual(temps.map((n) => fs.readFileSync(path.join(data, n), 'utf8')), ['PARTIAL'], 'only the crashed run\'s temp file is left');
 });
+
+test('given a private config/local-paths.txt, when local-paths adds custom/, then the file keeps its permissions (R28-scripts-b-L1-01 review)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.chmodSync(f, 0o600);
+  assert.equal(seed(['local-paths', '--dir', d]).stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.statSync(f).mode & 0o777, 0o600);
+});

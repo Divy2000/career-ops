@@ -26,7 +26,12 @@ function localPaths(dir) {
   const merged = mergeLocalPaths(exists(file) ? fs.readFileSync(file, 'utf8') : '');
   if (merged === null) return out('present');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeAtomic(linkTarget(file), merged);
+  const target = linkTarget(file);
+  // The rename replaces the file, so the replacement takes the user's permissions on it.
+  const mode = exists(target) ? fs.statSync(target).mode & 0o7777 : null;
+  writeAtomic(target, merged, (tmp) => {
+    if (mode !== null) fs.chmodSync(tmp, mode);
+  });
   out('added');
 }
 
@@ -225,7 +230,7 @@ function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSyn
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
   try {
     fs.writeFileSync(tmp, text, { flag: 'wx' });
-    beforeRename();
+    beforeRename(tmp);
     publish(tmp, file);
   } catch (err) {
     // The original failure is the one to report; a temp file that cannot be removed must not replace it.
