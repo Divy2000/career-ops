@@ -144,4 +144,19 @@ describe('Pipeline > Batch left while a fan-out runs (R27-feat-b-L1-02)', () => 
     expect(textarea().value).toBe('https://jobs.example.com/1\nhttps://jobs.example.com/2');
     expect(release).toBeNull();
   });
+
+  it('left before a stopped start: the box comes back as typed, second spellings of one posting included', async () => {
+    await render(true);
+    const typed = 'https://jobs.example.com/2\nhttps://jobs.example.com/1\nhttps://jobs.example.com/1/';
+    await type(textarea(), typed);
+    await click(button('Batch evaluate')!);
+    holdSessions = true;
+    await click(button('Start them')!);
+    await until(() => answerSessions, 'the sessions read');
+    await render(false);
+    await act(async () => answerSessions!(json(500, { error: 'boom' })));
+    await render(true);
+    await until(() => host.querySelector('[role="alert"]'), 'the error');
+    expect(textarea().value).toBe(typed);
+  });
 });

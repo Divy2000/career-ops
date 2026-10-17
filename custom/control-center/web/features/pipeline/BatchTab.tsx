@@ -129,9 +129,9 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       setBusy(false);
     }
   };
-  /** Shows the outcome, with `keep` (null: the box as it is) left in the box; a tab left meanwhile hands it over. */
+  /** Shows the outcome, with `keep` (null: the box as it was typed) left in the box; a tab left meanwhile hands it over. */
   const finish = (keep: string[] | null, message: BatchResult['message']) => {
-    if (!mounted.current) return handOver({ urls: keep ?? list, message });
+    if (!mounted.current) return handOver({ urls: keep ?? urls.split(/\s+/).filter(Boolean), message });
     if (keep !== null) setUrls(keep.join('\n'));
     setMessage(message);
   };
