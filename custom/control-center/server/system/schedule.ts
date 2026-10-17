@@ -160,6 +160,8 @@ interface PlistJson {
 
 // One save per plist at a time, across every ScheduleService in this process: two saves at once (a double click, Save
 // then Disable) would otherwise share the temp plist and interleave their launchctl steps.
+/** launchctl print's exit status for a service launchd does not have loaded ("Could not find service"). */
+const LAUNCHCTL_NO_SUCH_SERVICE = 113;
 const writeLocks = new Map<string, Promise<unknown>>();
 
 function withWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -256,7 +258,8 @@ export class ScheduleService {
     // What a failed save puts back: the installed plist, whether launchd had the job loaded, and whether it was disabled.
     const wasLoaded = print.code === 0;
     const disabledBefore = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
-    const wasDisabled = disabledBefore.code === 0 && parsePrintDisabled(disabledBefore.stdout, job.label);
+    const disabledKnown = disabledBefore.code === 0;
+    const wasDisabled = disabledKnown && parsePrintDisabled(disabledBefore.stdout, job.label);
     let previous: Buffer | null = null;
     try {
       previous = fs.readFileSync(plistPath);
@@ -280,7 +283,9 @@ export class ScheduleService {
     let enabledNow = false;
     let disabledNow = false;
     const failed = async (error: string, stderr: string): Promise<ScheduleWriteResult> => {
-      const restored = await this.restore({ plistPath, target, previous, wasLoaded, reDisable: enabledNow && wasDisabled, reEnable: disabledNow && !wasDisabled });
+      // A flag this save changed without knowing its prior value cannot be put back, so the restore does not claim it was.
+      const flagUnknown = (enabledNow || disabledNow) && !disabledKnown;
+      const restored = (await this.restore({ plistPath, target, previous, wasLoaded, reDisable: enabledNow && wasDisabled, reEnable: disabledNow && disabledKnown && !wasDisabled })) && !flagUnknown;
       return { ok: false, status: 502, error: `${error}; ${restored ? 'the previous schedule was restored' : 'restoring the previous schedule also failed'}`, stderr };
     };
     if (input.enabled) {
@@ -292,11 +297,12 @@ export class ScheduleService {
       if (disable.code !== 0) return failed(`launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, disable.stderr.trim());
       disabledNow = true;
     }
-    // bootout fails when the job is not loaded; that is the expected state before the first install. A loaded job still
-    // loaded after a failed bootout would keep firing on its old schedule, so that is a failed save.
+    // bootout fails when the job is not loaded; that is the expected state before the first install. A loaded job is
+    // gone after a failed bootout only if print says so (113, no such service): one still loaded, or whose state print
+    // could not read, may keep firing on its old schedule, so that is a failed save.
     const bootout = await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
-    if (bootout.code !== 0 && wasLoaded && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code === 0) {
-      return failed(`launchctl bootout failed (exit ${bootout.code}) and the job is still loaded`, bootout.stderr.trim());
+    if (bootout.code !== 0 && wasLoaded && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code !== LAUNCHCTL_NO_SUCH_SERVICE) {
+      return failed(`launchctl bootout failed (exit ${bootout.code}) and the job may still be loaded`, bootout.stderr.trim());
     }
     if (input.enabled) {
       const boot = await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, plistPath], { timeoutMs: 20_000 });
