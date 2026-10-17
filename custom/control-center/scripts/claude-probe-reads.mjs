@@ -220,7 +220,12 @@ function runClaude(name, opts) {
       if (child.pid !== undefined || settled) return;
       settled = true;
       clearTimeout(timer);
-      fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
+      try {
+        fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
+      } catch (writeErr) {
+        // Out of descriptors (EMFILE) this write fails too; the case must still settle so cleanup runs.
+        stderr += `\nstderr.txt not written: ${writeErr?.message ?? writeErr}`;
+      }
       resolve({ name, sessionId, status: null, stdout: '', stderr: redact(stderr).slice(-2000), events: [], hook: [], prep });
     });
     child.on('close', (status) => {

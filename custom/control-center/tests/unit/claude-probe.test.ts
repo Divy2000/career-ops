@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -95,5 +96,39 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
     fs.rmSync(String(kept), { recursive: true, force: true });
     expect(logs.length).toBeGreaterThan(0);
     for (const log of logs) expect(log).toMatch(/ENOENT/);
+  });
+
+  it('settles every case and removes the canaries when a spawn fails with EMFILE before its pipes exist and stderr.txt cannot be written', () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, '#!/bin/sh\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
+    // Out of descriptors: spawn reports EMFILE with no pipes and no 'close', and the error write fails the same way.
+    const preload = path.join(box.root, 'emfile.mjs');
+    fs.writeFileSync(
+      preload,
+      `import cp from 'node:child_process';
+import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { syncBuiltinESMExports } from 'node:module';
+cp.spawn = () => {
+  const child = Object.assign(new EventEmitter(), { pid: undefined, stdout: null, stderr: null, kill: () => false });
+  process.nextTick(() => child.emit('error', Object.assign(new Error('spawn claude EMFILE'), { code: 'EMFILE' })));
+  return child;
+};
+const realWrite = fs.writeFileSync;
+fs.writeFileSync = (file, ...rest) => {
+  if (String(file).endsWith('stderr.txt')) throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+  return realWrite(file, ...rest);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const r = runProbe('claude-probe-reads.mjs', box, claude, { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` });
+    expect(r.stderr).not.toMatch(/too many open files[\s\S]*\n\s+at /);
+    expect(r.status).toBe(1);
+    const summary = JSON.parse(r.stdout);
+    expect(Object.keys(summary.cases).length).toBeGreaterThan(1);
+    expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
   });
 });
