@@ -67,3 +67,31 @@ describe('Recompute that fails (SW4-web-b-02)', () => {
     expect(host.textContent).toContain('rows');
   });
 });
+
+describe('Recompute while the first read is still in flight (R27-feat-a-1-01)', () => {
+  it('keeps the recomputed result when the older first read lands after it', async () => {
+    const read = (rows: number, computedAt: string) => new Response(JSON.stringify({ script: 'analyzePatterns', label: 'Patterns', kind: 'ok', exit: 0, json: { rows }, text: '', computedAt, inputsKey: 'k', fromCache: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => (releaseFirst = resolve));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('recompute=1')) return read(9, '2026-10-05T13:00:00.000Z');
+        await firstHeld;
+        return read(1, '2026-10-05T12:00:00.000Z');
+      }),
+    );
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ScriptTab, { script: 'analyzePatterns', title: 'Patterns' }))));
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Recompute')!;
+    await act(async () => button.click());
+    await until(() => host.textContent?.includes('rows9'), 'the recomputed result');
+    await act(async () => releaseFirst());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(host.textContent).toContain('rows9');
+    expect(qc.getQueryData<{ json: unknown }>(['insights', 'script', 'analyzePatterns'])?.json).toEqual({ rows: 9 });
+  });
+});

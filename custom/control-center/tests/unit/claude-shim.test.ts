@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { CLAUDE_SHIM_PATH, confinedArgv } from '../../server/claude/claude-shim.mjs';
 import { buildReadDenyRules, claudeVersionGate } from '../../server/claude/confinement.mjs';
 import { neutralizeFileMentions } from '../../server/claude/invocation.js';
@@ -191,6 +191,91 @@ describe('claude shim: running the real binary', () => {
     const r = shim(['-p', 'x'], { CC_CLAUDE_BIN: via, CC_CLAUDE_EXPECT: gate.identity });
     expect(r.status, r.stderr).toBe(0);
     expect(real.calls()).toHaveLength(1);
+  });
+
+  it.each(['SIGTERM', 'SIGQUIT'] as const)("a caller's %s reaches the real claude too, so a stopped rank call does not keep running orphaned (R27-claude-L1-02)", async (stop) => {
+    const dir = tempDir('cc-shim-orphan-');
+    const bin = path.join(dir, 'claude-real');
+    const pidFile = path.join(dir, 'pid');
+    // Stands in for a slow ranking call: records its pid, then runs far past any caller timeout.
+    fs.writeFileSync(bin, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv[2] === '--version') { console.log(${JSON.stringify(`${APPROVED} (Claude Code)`)}); process.exit(0); }\nfs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => process.exit(0), 30_000);\n`, { mode: 0o755 });
+    const { CC_CLAUDE_BIN: _drop, CAREER_OPS_ROOT: _root, CAREER_OPS_DATA_DIR: _dataDir, ...base } = process.env;
+    const child = spawn(process.execPath, [CLAUDE_SHIM_PATH, '-p', 'rank these', '--effort', 'medium'], { env: { ...base, CAREER_OPS_ROOT: DATA_ROOT, CC_CLAUDE_BIN: bin }, stdio: 'ignore' });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let realPid = 0;
+    try {
+      // writeFileSync creates the file before it writes the pid, and a pid of 0 would probe the whole process group.
+      const readPid = () => (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0);
+      for (let i = 0; i < 800 && !(readPid() > 0); i++) await new Promise((r) => setTimeout(r, 25));
+      realPid = readPid();
+      expect(realPid).toBeGreaterThan(0);
+      expect(alive(realPid)).toBe(true);
+      // What execFileSync's timeout does (SIGTERM) or a caller's quit does: a signal to its direct child, the shim.
+      child.kill(stop);
+      expect(await exited).toEqual({ code: null, signal: stop });
+      for (let i = 0; i < 400 && alive(realPid); i++) await new Promise((r) => setTimeout(r, 25));
+      expect(alive(realPid)).toBe(false);
+    } finally {
+      if (realPid && alive(realPid)) process.kill(realPid, 'SIGKILL');
+      child.kill('SIGKILL');
+    }
+  });
+
+  it.each(['SIGPIPE', 'SIGUSR1'] as const)('a real claude killed by %s (which Node ignores or handles itself) still fails the call, never exit 0 (R27-claude-L1-02)', (sig) => {
+    const dir = tempDir('cc-shim-sig-');
+    const bin = path.join(dir, 'claude-real');
+    // A shell, not Node: Node ignores SIGPIPE and handles SIGUSR1, so only a plain process dies of them as claude would.
+    fs.writeFileSync(bin, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo ${JSON.stringify(`${APPROVED} (Claude Code)`)}; exit 0; fi\nkill -${sig.slice(3)} $$\nsleep 5\n`, { mode: 0o755 });
+    // Several runs: re-raised on the shim, SIGUSR1 opens a debugger port only when the inspector starts before the exit.
+    for (let run = 0; run < 5; run++) {
+      const r = shim(['-p', 'rank these'], { CC_CLAUDE_BIN: bin });
+      expect({ status: r.status, signal: r.signal }).not.toEqual({ status: 0, signal: null });
+      expect(r.stderr).not.toMatch(/Debugger listening/);
+    }
+  });
+
+  it.each([
+    ['ignores the forwarded SIGTERM', 'is killed after a grace period', "process.on('SIGTERM', () => {});"],
+    ['exits 0 on the forwarded SIGTERM', 'still fails the call', "process.on('SIGTERM', () => process.exit(0));"],
+  ])("a real claude that %s %s: the caller's stop ends the call as stopped (R27-claude-L1-02 review)", async (_what, _outcome, onTerm) => {
+    const dir = tempDir('cc-shim-stuck-');
+    const bin = path.join(dir, 'claude-real');
+    const pidFile = path.join(dir, 'pid');
+    // Handles SIGTERM its own way, then runs far past any caller timeout; the pid goes in by rename so a reader never sees it half-written.
+    fs.writeFileSync(bin, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv[2] === '--version') { console.log(${JSON.stringify(`${APPROVED} (Claude Code)`)}); process.exit(0); }\n${onTerm}\nfs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));\nfs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});\nsetTimeout(() => process.exit(0), 60_000);\n`, { mode: 0o755 });
+    const { CC_CLAUDE_BIN: _drop, CAREER_OPS_ROOT: _root, CAREER_OPS_DATA_DIR: _dataDir, ...base } = process.env;
+    const child = spawn(process.execPath, [CLAUDE_SHIM_PATH, '-p', 'rank these'], { env: { ...base, CAREER_OPS_ROOT: DATA_ROOT, CC_CLAUDE_BIN: bin }, stdio: 'ignore' });
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let realPid = 0;
+    try {
+      for (let i = 0; i < 800 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 25));
+      realPid = Number(fs.readFileSync(pidFile, 'utf8'));
+      expect(realPid).toBeGreaterThan(0);
+      child.kill('SIGTERM');
+      const outcome = await Promise.race([exited, new Promise<'hung'>((r) => setTimeout(() => r('hung'), 30_000))]);
+      expect(outcome).toEqual({ code: null, signal: 'SIGTERM' });
+      for (let i = 0; i < 400 && alive(realPid); i++) await new Promise((r) => setTimeout(r, 25));
+      expect(alive(realPid)).toBe(false);
+    } finally {
+      if (realPid && alive(realPid)) process.kill(realPid, 'SIGKILL');
+      child.kill('SIGKILL');
+    }
   });
 
   it('--version answers with the real version, autoupdater off', () => {

@@ -9,8 +9,9 @@
 // and still exits 0, so the job reads the file to fail the step.
 // Dev Chat cannot edit it (server/claude/** is protected).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { buildReadDenyRules, claudeVersionGate } from './confinement.mjs';
 import { isMainModule } from '../../../../lib/is-main-module.mjs';
@@ -68,6 +69,47 @@ function refuse(message, code = 1) {
   process.exit(code);
 }
 
+/** Signals a caller sends to stop the call; rank-pipeline.mjs's execFileSync timeout SIGTERMs only its direct child, this shim. */
+const FORWARDED = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
+/** How long a stopped claude gets to exit before the shim kills it, so a claude that ignores the stop still ends. */
+const STOP_GRACE_MS = 5000;
+/** Signals Node does not die of when raised on itself. */
+const NODE_SURVIVES = new Set(['SIGPIPE', 'SIGUSR1']);
+
+/**
+ * Runs the real binary and ends with its exit code or signal. A stop signal sent to the shim is passed on, so a caller
+ * that kills the shim never leaves a paid claude run going on with no one to read it.
+ */
+function runReal(real, args, env) {
+  const child = spawn(real, args, { stdio: 'inherit', env });
+  let stoppedBy = null;
+  const forward = (sig) => {
+    child.kill(sig);
+    if (stoppedBy) return;
+    stoppedBy = sig;
+    // Dies below of the caller's own signal, not of this SIGKILL.
+    setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS).unref();
+  };
+  for (const sig of FORWARDED) process.on(sig, forward);
+  child.on('error', (err) => {
+    process.stderr.write(`claude-shim: cannot run ${real} (${err.message})\n`);
+    process.exit(1);
+  });
+  child.on('exit', (code, exitSignal) => {
+    // A stopped call ends as stopped, even when claude handled the signal and exited cleanly.
+    const signal = stoppedBy ?? exitSignal;
+    if (signal) {
+      // Die of the same signal, so the caller sees what it would have without the shim.
+      for (const sig of FORWARDED) process.off(sig, forward);
+      // Node ignores SIGPIPE and turns SIGUSR1 into the inspector, so those (or any kill the shim survives) exit 128+n.
+      if (!NODE_SURVIVES.has(signal)) process.kill(process.pid, signal);
+      setImmediate(() => process.exit(128 + (os.constants.signals[signal] ?? 0)));
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+}
+
 function main(argv) {
   const real = process.env.CC_CLAUDE_BIN;
   if (!real || !path.isAbsolute(real)) refuse('claude-shim: CC_CLAUDE_BIN must name the real claude by absolute path');
@@ -81,8 +123,8 @@ function main(argv) {
   if (realPath === fs.realpathSync.native(CLAUDE_SHIM_PATH)) refuse('claude-shim: CC_CLAUDE_BIN points at the shim itself');
   const env = { ...process.env, DISABLE_AUTOUPDATER: '1' };
   if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-v')) {
-    const r = spawnSync(real, argv, { stdio: 'inherit', env });
-    process.exit(r.status ?? 1);
+    runReal(real, argv, env);
+    return;
   }
   const confined = confinedArgv(argv);
   if (confined.reason) refuse(confined.reason, 2);
@@ -95,8 +137,7 @@ function main(argv) {
   if (gate.problem) refuse(`claude-shim: ${gate.problem}`, 3);
   const expected = process.env.CC_CLAUDE_EXPECT;
   if (expected && gate.identity !== expected) refuse(`claude-shim: Claude Code changed since the job checked it (${expected}, now ${gate.identity}); the call is not run`, 4);
-  const r = spawnSync(real, confined.argv, { stdio: 'inherit', env });
-  process.exit(r.status ?? 1);
+  runReal(real, confined.argv, env);
 }
 
 if (isMainModule(import.meta.url)) main(process.argv.slice(2));

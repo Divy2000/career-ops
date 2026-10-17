@@ -85,6 +85,8 @@ export function ScriptTab({ script, title, children }: { script: string; title: 
     setFailure(null);
     try {
       const fresh = await apiGet<InsightRead>(`/api/insights/${script}?recompute=1`);
+      // A read still in flight (the first load, a refocus refetch) holds an older result; landing after this one, it would replace it.
+      await qc.cancelQueries({ queryKey: ['insights', 'script', script] });
       qc.setQueryData(['insights', 'script', script], fresh);
     } catch (err) {
       setFailure(`Could not recompute: ${describeError(err)}`);
