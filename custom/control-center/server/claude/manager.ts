@@ -759,10 +759,13 @@ export class SessionManager {
   private async failBeforeSpawn(meta: SessionMeta, message: string): Promise<SessionMeta> {
     this.store.setStatus(meta.id, 'error', message);
     this.emit(meta.id, { type: 'error', message });
-    const num = this.store.read(meta.id)?.reportNum ?? null;
+    const current = this.store.read(meta.id);
+    const num = current?.reportNum ?? null;
     if (num !== null && meta.turns.length === 0) {
+      // Only while still the session's: the stale GC may have collected it and another reservation claimed it since.
+      const since = this.ownedSince(current!, num);
       this.store.setReportNum(meta.id, null);
-      await this.releaseReportNum(num, false);
+      await this.releaseReportNum(num, false, since);
     }
     // Last, so a stream consumer that reloads the session on a terminal status sees the reservation released.
     this.emit(meta.id, { type: 'status', status: 'error', reason: message });
@@ -1085,10 +1088,12 @@ export class SessionManager {
       }
       try {
         this.store.setStatus(meta.id, 'error', message);
-        const num = this.store.read(meta.id)?.reportNum ?? null;
+        const current = this.store.read(meta.id);
+        const num = current?.reportNum ?? null;
         if (stopped && num !== null && meta.turns.length === 0) {
+          const since = this.ownedSince(current!, num);
           this.store.setReportNum(meta.id, null);
-          await this.releaseReportNum(num, false);
+          await this.releaseReportNum(num, false, since);
         }
       } catch {
         /* the session record cannot be written either: the next reconcile settles it */

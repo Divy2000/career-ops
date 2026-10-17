@@ -303,6 +303,29 @@ describe('a release that removed the sentinel but exited in error (R27-mgr-rev-0
     }
   }, 40_000);
 });
+describe('a first turn that fails before its spawn (R27-mgr-rev-03 review follow-up)', () => {
+  it('given a fan-out session whose number was collected and claimed again while it prepared, when its turn cannot start, then the other reservation keeps its sentinel', async () => {
+    let app: App | null = null;
+    const app2 = await makeTestApp({}, {
+      readToken: async () => {
+        reclaim(app!, 8, Date.now() + 1000);
+        throw new Error('no token');
+      },
+    });
+    app = app2;
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const fan = await withScenario(NO_REPORT, async () => (await call(app2, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r28-prespawn-reclaimed'] })).json());
+      expect(fan.reserved).toEqual([8]);
+      expect(fan.sessions[0]).toMatchObject({ status: 'error', reportNum: null });
+      expect(fs.existsSync(sentinelPath(app2, 8))).toBe(true);
+      expect(JSON.parse(fs.readFileSync(sentinelPath(app2, 8), 'utf8')).token).toBe('someone-else');
+    } finally {
+      warn.mockRestore();
+      await app2.close();
+    }
+  });
+});
 describe('a running turn refreshing its sentinel (R27-mgr-rev-04)', () => {
   it('given a running Batch evaluate turn whose sentinel has aged past the refresh age, when another process holds the tracker lock, then the refresh waits for the lock before it touches the sentinel', async () => {
     const app = await makeTestApp();
