@@ -246,6 +246,32 @@ describe('a number a turn kept while its stopped run could still write (R27-mgr-
       await app.close();
     }
   }, 40_000);
+  it('given a kept number whose run record cannot be read once the runner stops following it, when its process stops, then the number stays reserved until an exit can be read', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, runId, go } = await keptAfterError(app, 'https://jobs.example.com/synthetic/r28-kept-unreadable');
+      const ending = app.runner.ending.bind(app.runner);
+      const spy = vi.spyOn(app.runner, 'ending').mockImplementation((rid: string) => {
+        if (rid === runId) throw new Error('EIO: i/o error, read');
+        return ending(rid);
+      });
+      go();
+
+      await until(() => app.runner.store.read(runId)?.endedAt != null, 20_000);
+      await wait(1000);
+      expect(app.sessions.read(id)!.reportNum).toBe(n);
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+
+      spy.mockRestore();
+      await until(() => app.sessions.read(id)!.reportNum === null && !fs.existsSync(sentinelPath(app, n)));
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+    }
+  }, 40_000);
+
   it('given a kept number that a bare-date digest shares, when the process stops after the digest is written, then the digest is not credited', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});

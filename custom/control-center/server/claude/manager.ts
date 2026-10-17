@@ -1240,8 +1240,9 @@ export class SessionManager {
       try {
         return this.runner.ending(runId);
       } catch {
-        // Its record is unreadable and the runner does not follow it: nothing here can tell it is still alive.
-        return false;
+        // Its record is unreadable and the runner does not follow it: nothing here can tell it stopped, so the number is
+        // kept (and refreshed) until an exit can be read.
+        return true;
       }
     };
     const settle = () => void this.settleKeptReservation(id, beforeReports).finally(() => this.active.delete(id));
