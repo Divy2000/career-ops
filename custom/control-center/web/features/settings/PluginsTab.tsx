@@ -57,7 +57,7 @@ export function PluginsTab() {
       <div className="card">
         <div className="row gap" style={{ justifyContent: 'space-between' }}>
           <h2 style={{ margin: 0 }}>Plugins</h2>
-          <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.audit')} onRun={() => void run('plugins.audit', {})} />
+          <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.audit')} onRun={() => run('plugins.audit', {})} />
         </div>
         <p className="muted small">
           Plugins are off by default. Enabling one writes <span className="mono">config/plugins.yml</span> (comments kept); secrets stay in <span className="mono">.env</span>. Hooks run through <span className="mono">plugins.mjs run</span> as a tracked run.
@@ -106,7 +106,7 @@ export function PluginsTab() {
                         <td>
                           <div className="row gap">
                             {hook ? (
-                              <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook }} disabled={!p.enabled || busy !== null || hookLive} onRun={(params) => void run('plugins.run', params)}>
+                              <ActionButton meta={actions.data?.find((a) => a.id === 'plugins.run')} params={{ id: p.id, hook }} disabled={!p.enabled || busy !== null || hookLive} onRun={(params) => run('plugins.run', params)}>
                                 Run {hook}
                               </ActionButton>
                             ) : (
