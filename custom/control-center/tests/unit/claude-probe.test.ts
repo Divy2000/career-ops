@@ -51,6 +51,18 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
     }
     for (const lines of calls.filter((l) => l[0] === 'ARG1=-p')) expect(lines).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${FAKE_TOKEN}`);
   });
+
+  it('prints the summary with the spawn error instead of crashing when the CLI cannot be spawned', () => {
+    const box = sandbox();
+    const r = runProbe('claude-probe.mjs', box, path.join(box.bin, 'no-such-claude'));
+    expect(r.stderr).not.toMatch(/TypeError/);
+    expect(r.status, r.stderr).toBe(0);
+    const summary = JSON.parse(r.stdout);
+    expect(summary.claudeVersion).toMatch(/ENOENT/);
+    expect(summary.probeA).toMatchObject({ exitStatus: null, eventTypes: [] });
+    expect(summary.probeA.stderrTail).toMatch(/ENOENT/);
+    expect(summary.probeB.stderrTail).toMatch(/ENOENT/);
+  });
 });
 
 describe('claude-probe-reads.mjs (npm run probe:reads)', () => {

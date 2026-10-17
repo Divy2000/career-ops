@@ -57,10 +57,11 @@ const prompt = [
 
 function run(args) {
   const r = spawnSync(claudeBin, args, { cwd: dir, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 180_000 });
-  const lines = r.stdout.split('\n').filter(Boolean).map((l) => {
+  // A spawn failure (ENOENT) leaves no stdout or stderr, only r.error; a timeout keeps both and sets r.error too.
+  const lines = (r.stdout ?? '').split('\n').filter(Boolean).map((l) => {
     try { return JSON.parse(l); } catch { return { type: 'unparsed', line: l.slice(0, 200) }; }
   });
-  return { status: r.status, stderr: redact(r.stderr).slice(-1500), events: lines };
+  return { status: r.status, stderr: redact(`${r.stderr ?? ''}${r.error ? `\n${r.error.message}` : ''}`).slice(-1500), events: lines };
 }
 
 const a = run([
@@ -78,6 +79,7 @@ const a = run([
   '--effort', 'medium',
 ]);
 
+const versionOf = (r) => (r.error ? `unavailable: ${r.error.message}` : (r.stdout ?? '').trim());
 const types = (evs) => [...new Set(evs.map((e) => (e.type === 'stream_event' ? `stream_event:${e.event?.type}` : e.type)))];
 const init = a.events.find((e) => e.type === 'system' && e.subtype === 'init');
 const result = a.events.find((e) => e.type === 'result');
@@ -91,7 +93,7 @@ const bResult = b.events.find((e) => e.type === 'result');
 
 const summary = {
   probedAt: new Date().toISOString(),
-  claudeVersion: spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: BASE_ENV }).stdout.trim(),
+  claudeVersion: versionOf(spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: BASE_ENV })),
   probeA: {
     exitStatus: a.status,
     eventTypes: types(a.events),
