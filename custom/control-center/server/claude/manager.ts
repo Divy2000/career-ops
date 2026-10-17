@@ -630,6 +630,13 @@ export class SessionManager {
     throw new BusyError(`session ${id} is starting a turn in another server process`);
   }
 
+  /** Whether a live process (this one or a peer) holds the session's turn claim: it is preparing a turn there. */
+  private turnClaimHeld(id: string): boolean {
+    const file = path.join(this.store.guardDirOf(id), TURN_CLAIM_FILE);
+    const seen = readOrNull(file);
+    return seen !== null && !turnClaimGone(file, seen);
+  }
+
   /**
    * Refuses a session with a turn being prepared or running, and (unless `finishing` is false) one whose ended turn is
    * still finishing (its process may live until SIGKILL, and its finalize is still to run).
@@ -882,6 +889,8 @@ export class SessionManager {
     const turn = meta.turns.at(-1);
     if (!live && (!turn || turn.endedAt)) return;
     if (this.active.has(meta.id)) return;
+    // A turn this process is preparing is tracked once it spawns: settling it now would release the number it was given.
+    if (this.preparing.has(meta.id) || this.sending.has(meta.id)) return;
     let recorded: boolean;
     try {
       recorded = turn !== undefined && this.runner.store.read(turn.runId) !== null;
@@ -893,6 +902,8 @@ export class SessionManager {
     if (!turn || !recorded) {
       // Already settled (a status other than running or queued) with no run to follow: nothing more to record.
       if (!live) return;
+      // Another server process (blue/green) is preparing its turn under the claim: that process starts and follows it.
+      if (this.turnClaimHeld(meta.id)) return;
       const reason = 'run record missing after a restart';
       this.store.setStatus(meta.id, 'error', reason);
       // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
@@ -1362,6 +1373,14 @@ export class SessionManager {
     }
     // Checked after the last await: no cancel can land between here and the spawn.
     if (this.cancelledBeforeSpawn.has(meta.id)) return this.endCancelledBeforeSpawn(meta);
+    // A first turn settled by someone else while it prepared (its status changed, its number released) never spawns.
+    if (meta.turns.length === 0) {
+      const current = this.store.read(meta.id);
+      if (current === null || current.status !== meta.status || current.reportNum !== meta.reportNum) {
+        this.preparing.delete(meta.id);
+        return this.failBeforeSpawn(meta, 'the session was settled while its first turn was being prepared');
+      }
+    }
     // From here a cancel stops the run like any other.
     this.preparing.delete(meta.id);
     let run: RunMeta;
