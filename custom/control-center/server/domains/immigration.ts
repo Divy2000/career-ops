@@ -48,6 +48,8 @@ export interface ImmigrationOverview {
   policyChangesError: string | null;
   officialFeed: Record<string, string>[];
   companies: CompanyFile[];
+  /** The company files, or the companies folder, that could not be read (a folder named *.md, no permission); null when all were. */
+  companiesError: string | null;
   tiers: unknown;
   seen: unknown;
   /** Items the watcher queued for the AI pass (pending.json); null when absent or unreadable. */
@@ -258,14 +260,25 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
   const history: Record<string, unknown>[] = alertsRead.kind === 'ok' ? parseAlertHistory(alertsRead.text) : [];
   const companies: CompanyFile[] = [];
   const companiesDir = path.join(imm, 'companies');
+  let names: string[] = [];
+  // One bad entry costs only itself: a dangling symlink is no company file, and any other unreadable one is reported.
+  const unreadable: string[] = [];
   try {
-    for (const name of fs.readdirSync(companiesDir).sort()) {
-      if (!name.endsWith('.md')) continue;
-      const p = path.join(companiesDir, name);
-      companies.push(parseCompanyFile(fs.readFileSync(p, 'utf8'), name.replace(/\.md$/, ''), p, lib.readCheckedAt));
-    }
+    names = fs.readdirSync(companiesDir).sort();
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable.push(`companies/: ${(err as Error).message}`);
+  }
+  for (const name of names) {
+    if (!name.endsWith('.md')) continue;
+    const p = path.join(companiesDir, name);
+    let text: string;
+    try {
+      text = fs.readFileSync(p, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable.push(`${name}: ${(err as Error).message}`);
+      continue;
+    }
+    companies.push(parseCompanyFile(text, name.replace(/\.md$/, ''), p, lib.readCheckedAt));
   }
   const logDates = listLogDates(dataRoot);
   const pending = pendingOf(readJson(path.join(imm, 'pending.json')));
@@ -279,6 +292,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     // watch.mjs writes the header only when it creates the file and reads the feed by position, so a headerless feed is valid.
     officialFeed: feedRead.kind === 'ok' ? parsePositional(feedRead.text, FEED_COLUMNS) : [],
     companies,
+    companiesError: unreadable.length ? `could not read ${unreadable.join('; ')}` : null,
     tiers: readJson(path.join(imm, 'sponsor-tiers.json')),
     seen: readJson(path.join(imm, 'seen.json')),
     pendingCount: pending.count,

@@ -226,6 +226,29 @@ describe('immigration overview', () => {
     expect(await readImmigrationOverview(DEFAULT_CODE_ROOT, bad, '2026-10-04')).toMatchObject({ pendingCount: null, pendingError: 'pending.json is not a list of items' });
   });
 
+  it('skips a dangling or unreadable company file and keeps every other company (R28-srv-dom-a-L1-01)', async () => {
+    const odd = copyFixtureRoot();
+    const dir = path.join(odd, 'data/immigration/companies');
+    fs.symlinkSync(path.join(odd, 'nonexistent.md'), path.join(dir, 'aaa.md'));
+    fs.mkdirSync(path.join(dir, 'zzz.md'));
+    const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, odd, '2026-10-04');
+    expect(o.companies.map((c) => c.slug)).toEqual(['acme-robotics', 'globex-payments', 'initech-cloud']);
+    expect(o.companiesError).toMatch(/zzz\.md/);
+    expect(o.companiesError).not.toMatch(/aaa\.md/);
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).companiesError).toBeNull();
+  });
+
+  it('reports a companies folder that is not a readable folder, and still serves the rest of the overview (R28-srv-dom-a-L1-01 review)', async () => {
+    const odd = copyFixtureRoot();
+    const dir = path.join(odd, 'data/immigration/companies');
+    fs.rmSync(dir, { recursive: true });
+    fs.writeFileSync(dir, 'not a folder');
+    const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, odd, '2026-10-04');
+    expect(o.companies).toEqual([]);
+    expect(o.companiesError).toMatch(/ENOTDIR/);
+    expect(o.policyChanges).toHaveLength(2);
+  });
+
   it('reports a missing digest distinctly', async () => {
     const empty = copyFixtureRoot();
     fs.rmSync(path.join(empty, 'data/immigration'), { recursive: true });

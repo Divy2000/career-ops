@@ -66,6 +66,16 @@ describe('inbox skip port', () => {
     // Restoring a row that was never checked off changes nothing.
     expect(applyInboxSkip(text, 'https://private.example/job/1', false)).toMatchObject({ ok: true, matched: 1, changed: 0 });
   });
+  it('restores a struck-out expired row parsePipeline shows, keeping its strike (R28-srv-dom-a-L2-01)', () => {
+    const dash = String.fromCharCode(0x2014);
+    for (const row of ['~~https://boards.greenhouse.io/acme/jobs/1~~ ' + dash + ' oferta nieaktywna', '~~https://boards.greenhouse.io/acme/jobs/1 | Acme | Eng~~ ' + dash + ' posting expired']) {
+      const text = `## Pending\n- [x] ${row}\n`;
+      expect(parsePipeline(text)[0], row).toMatchObject({ url: 'https://boards.greenhouse.io/acme/jobs/1', section: 'pending', done: true });
+      const r = applyInboxSkip(text, 'https://boards.greenhouse.io/acme/jobs/1', false);
+      expect(r, row).toMatchObject({ ok: true, matched: 1, changed: 1 });
+      expect(r.ok && r.text, row).toBe(`## Pending\n- [ ] ${row}\n`);
+    }
+  });
   it('reports unmatched and invalid URLs', () => {
     expect(applyInboxSkip(PIPELINE, 'https://a.example/nope', true)).toEqual({ ok: false, error: 'unmatched' });
     expect(applyInboxSkip(PIPELINE, 'ftp://a.example/1', true)).toEqual({ ok: false, error: 'invalid-url' });
