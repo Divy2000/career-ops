@@ -37,20 +37,22 @@ export const blacklistRowSchema = z.object({
 });
 export type BlacklistRow = z.infer<typeof blacklistRowSchema>;
 
-const CAPS = { company: 200, since: 500, reason: 500, extra: 500 } as const;
+// `since` has no cap of its own: the route takes only a YYYY-MM-DD date or a value already in that column of the file.
+const CAPS = { company: 200, reason: 500, extra: 500 } as const;
 
 /**
- * The first cell of `rows` longer than its cap, unless that value is already in the same column of the file (a legacy
- * Reason read into Since, a long note): a row the file holds would otherwise make every later save fail. Null when none.
+ * The first cell of `rows` longer than its cap, unless that value is already in the same column of the file (a long
+ * legacy note): a row the file holds would otherwise make every later save fail. Null when none.
  */
 export function blacklistOverCap(rows: BlacklistRow[], existing: BlacklistRow[]): string | null {
-  const known = (field: keyof typeof CAPS) => new Set(existing.flatMap((r) => (field === 'extra' ? (r.extra ?? []) : [r[field]])));
-  const inFile = { company: known('company'), since: known('since'), reason: known('reason'), extra: known('extra') };
+  const company = new Set(existing.map((r) => r.company));
+  const reason = new Set(existing.map((r) => r.reason));
+  const extra = (i: number) => new Set(existing.map((r) => r.extra?.[i]));
   for (const r of rows) {
-    for (const field of ['company', 'since', 'reason'] as const) {
-      if (r[field].length > CAPS[field] && !inFile[field].has(r[field])) return `${field} of ${r.company.slice(0, 80)} is over ${CAPS[field]} characters`;
-    }
-    if (r.extra?.some((c) => c.length > CAPS.extra && !inFile.extra.has(c))) return `a cell of ${r.company.slice(0, 80)} is over ${CAPS.extra} characters`;
+    if (r.company.length > CAPS.company && !company.has(r.company)) return `company ${r.company.slice(0, 80)}... is over ${CAPS.company} characters`;
+    if (r.reason.length > CAPS.reason && !reason.has(r.reason)) return `reason of ${r.company.slice(0, 80)} is over ${CAPS.reason} characters`;
+    const long = (r.extra ?? []).findIndex((c, i) => c.length > CAPS.extra && !extra(i).has(c));
+    if (long !== -1) return `cell ${long + 1} after Reason of ${r.company.slice(0, 80)} is over ${CAPS.extra} characters`;
   }
   return null;
 }

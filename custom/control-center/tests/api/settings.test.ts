@@ -318,17 +318,23 @@ describe('a save is not blocked by rows already in data/blacklist.md (R27-srv-do
   });
 
   it('given a file with long cells, when a new value over its cap is saved, then the save is refused', async () => {
-    const { app, file, req } = await open(`# Blacklist\n\n| Company | Since | Scope | Reason |\n|---|---|---|---|\n| Initech | ${'s'.repeat(600)} | company | ok |\n`);
+    const reason = 'r'.repeat(600);
+    const note = 'n'.repeat(600);
+    const { app, file, req } = await open(`# Blacklist\n\n| Company | Since | Scope | Reason | Added | Contact |\n|---|---|---|---|---|---|\n| Initech | 2025-01-02 | company | ${reason} | ${note} |  |\n`);
     try {
       const before = fs.readFileSync(file, 'utf8');
       const current = (await req('GET')).json();
+      expect(current.rows[0]).toMatchObject({ reason, extra: [note, ''] });
       for (const row of [
-        { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'x'.repeat(501) },
-        { company: 'G'.repeat(201), since: '2026-10-03', scope: 'company', reason: '' },
-        { ...current.rows[0], since: `${current.rows[0].since}!` },
+        { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'x'.repeat(501), extra: ['', ''] },
+        { company: 'G'.repeat(201), since: '2026-10-03', scope: 'company', reason: '', extra: ['', ''] },
+        { ...current.rows[0], reason: `${reason}!` },
+        // A long cell is exempt only in its own column.
+        { ...current.rows[0], extra: ['', note] },
       ]) {
         const res = await req('PUT', { confirm: true, rows: [...current.rows, row] }, { 'if-match': current.etag, ...EXPLICIT });
         expect(res.statusCode, res.body).toBe(400);
+        expect(res.json().error).toMatch(/over \d+ characters/);
       }
       expect(fs.readFileSync(file, 'utf8')).toBe(before);
     } finally {
