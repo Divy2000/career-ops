@@ -17,6 +17,14 @@ const write = (dir, name, data) => {
   return f;
 };
 
+test('versionAtLeast orders a pre-release by its x.y.z, just below its own release (R30-scripts-b-X-01)', () => {
+  assert.equal(versionAtLeast('2.1.296-beta.1', '2.1.289'), true);
+  assert.equal(versionAtLeast('2.1.289-beta.1', '2.1.289'), false);
+  assert.equal(versionAtLeast('2.1.288-rc.2', '2.1.289'), false);
+  assert.equal(versionAtLeast('2.1.289', '2.1.289-beta.1'), true);
+  assert.equal(versionAtLeast('2.1.289-beta.1', '2.1.289-beta.1'), true);
+});
+
 test('versionAtLeast compares numerically, not lexically', () => {
   assert.equal(versionAtLeast('v22.6.0', '22.6.0'), true);
   assert.equal(versionAtLeast('26.4.0', '22.6.0'), true);

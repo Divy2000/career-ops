@@ -1369,6 +1369,16 @@ test('--onboard headless names the newest approved version that meets the headle
   }
 });
 
+test('--onboard headless runs an approved pre-release Claude Code above the floor (R30-scripts-b-X-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  approveClaude(w, ['2.1.296-beta.1']);
+  const data = path.join(w.T, 'mydata');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_VERSION: '2.1.296-beta.1', FAKE_CLAUDE_DRAFTS: '1' } });
+  assert.doesNotMatch(r.out, /Headless onboarding needs Claude Code/, r.out);
+  assert.equal(w.claudeArgv()?.[0], '-p', r.out);
+});
+
 test('--onboard headless with a too-old Claude Code the contract lists still names an approved version new enough (R20 FU-scripts-02 review)', () => {
   const { w, D } = fresh({ keychain: true });
   approveClaude(w, ['2.1.287', '2.1.289']);

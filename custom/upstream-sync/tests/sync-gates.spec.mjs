@@ -233,6 +233,15 @@ test('given claude on PATH is a symlink, when the sync picks its claude, then it
   assert.equal(res.stdout, fs.realpathSync.native(path.join(r.dirs[0], 'claude')));
 });
 
+test('given an approved pre-release claude, when the sync picks its claude, then it reads its version and hands it the token (R30-scripts-b-X-01)', () => {
+  const r = claudeBin({ onPath: ['2.1.296-beta.1'], approved: ['2.1.296-beta.1'] });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.stdout, real(path.join(r.dirs[0], 'claude')));
+  const below = claudeBin({ onPath: ['2.1.288-beta.1'], approved: ['2.1.288-beta.1'] });
+  assert.equal(below.status, 1, 'a pre-release of the minimum comes before it');
+  assert.match(below.stdout, /^Claude Code 2\.1\.288-beta\.1 at .* is older than 2\.1\.288/);
+});
+
 test('sync_claude_bin refuses when no claude is found or its version cannot be read', () => {
   const none = claudeBin();
   const found = spawnSync('bash', ['-c', 'command -v claude'], { env: none.env, encoding: 'utf8' });

@@ -61,8 +61,9 @@ sync_claude_bin() {
   if [ ! -f "$bin" ] || [ ! -x "$bin" ]; then echo "claude $bin is not an executable"; return 1; fi
   out="$(DISABLE_AUTOUPDATER=1 "$bin" --version 2>/dev/null)"
   version="${out%% *}"
-  if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then echo "cannot read the Claude Code version of $bin"; return 1; fi
-  if ! version_ge "$version" "$min"; then
+  # x.y.z with an optional -tag, as parseClaudeVersion (confinement.mjs) reads it; a pre-release comes before its release.
+  if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$ ]]; then echo "cannot read the Claude Code version of $bin"; return 1; fi
+  if ! version_ge "${version%%-*}" "$min" || { [ "$version" != "${version%%-*}" ] && version_ge "$min" "${version%%-*}"; }; then
     echo "Claude Code $version at $bin is older than $min, which keeps the token out of hooks and tools; update it or pin a newer one with CC_CLAUDE_BIN"
     return 1
   fi

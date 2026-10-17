@@ -329,10 +329,7 @@ try {
   const { claudeVersionGate, contractApprovedVersions } = await import(process.env.CONFINEMENT);
   approved = contractApprovedVersions();
   // Semver order on x.y.z, then a release above its own pre-releases (2.1.296-beta.1 < 2.1.296).
-  const core = (v) => String(v).split("-")[0];
-  const tagged = (v) => String(v).includes("-");
-  const atLeast = (a, b) => (core(a) === core(b) ? !tagged(a) || tagged(b) : versionAtLeast(core(a), core(b)));
-  newest = approved.filter((v) => atLeast(v, process.env.HEADLESS_MIN)).reduce((best, v) => (best && atLeast(best, v) ? best : v), "");
+  newest = approved.filter((v) => versionAtLeast(v, process.env.HEADLESS_MIN)).reduce((best, v) => (best && versionAtLeast(best, v) ? best : v), "");
   try {
     gate = claudeVersionGate(process.env.CLAUDE_BIN, approved);
   } catch (err) {
