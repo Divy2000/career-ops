@@ -458,6 +458,27 @@ describe('guard hook', () => {
     expect(writesFor(['devchat'], ['reports/042-acme.md'])).toEqual({ 'devchat reports/042-acme.md': 0 });
   });
 
+  it('given a session whose scope grants data/** or custom/**, when it writes a protected secret file, then it is refused as the read is (R28-claude-X-03)', () => {
+    const rels = ['data/.env', 'data/x.key', 'data/sub/.env.local', 'output/api.token'];
+    expect(writesFor(['devchat'], rels)).toEqual(Object.fromEntries(rels.map((rel) => [`devchat ${rel}`, 2])));
+    expect(writesFor(['devchat'], ['data/notes.md'])).toEqual({ 'devchat data/notes.md': 0 });
+    // custom/** lives in the code checkout: one root, so the code-root grant applies.
+    const root = fs.realpathSync(tempDir('cc-secret-root-'));
+    const dir = fs.realpathSync(tempDir('cc-secret-guard-'));
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
+    for (const rel of ['custom/service-account.json', 'custom/x/credentials.json', 'custom/x/.env']) expect(write(rel), rel).toBe(2);
+    expect(write('custom/x/config.json')).toBe(0);
+  });
+
+  it('given a writer script, when its output path is a protected secret file inside the write scope, then the command is refused (R28-claude-X-03)', () => {
+    const code = fs.realpathSync(tempDir('cc-secret-out-'));
+    const dir = fs.realpathSync(tempDir('cc-secret-out-guard-'));
+    const policy = JSON.parse(fs.readFileSync(writePolicyFile(dir, { codeRoot: code, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] }).file, 'utf8')) as Parameters<typeof checkBash>[1];
+    expect(checkBash('node generate-pdf.mjs output/x.html output/x.pdf', policy, code)).toBeNull();
+    for (const out of ['output/x.key', 'output/.env', 'output/client_secret.json']) expect(checkBash(`node generate-pdf.mjs output/x.html ${out}`, policy, code), out).toMatch(/protected/);
+  });
+
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
     const code = fs.realpathSync(tempDir('cc-int-code-'));
     const data = fs.realpathSync(tempDir('cc-int-data-'));

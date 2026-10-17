@@ -3,7 +3,7 @@
 // frozen; tests/unit/modes.test.ts fails when the modes/ tree drifts from it.
 import generated from './modes.generated.json' with { type: 'json' };
 import { AGENT_SPAWNING_SCRIPTS } from './guard-policy.mjs';
-import { ALWAYS_DENIED_WRITES, CODE_ROOT_WRITE_GLOBS } from './confinement.mjs';
+import { ALWAYS_DENIED_WRITES, CODE_ROOT_WRITE_GLOBS, READ_DENY } from './confinement.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -269,8 +269,12 @@ const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   tracker: ['data/salary-observations.tsv', 'reports/*.md'],
 };
 
-/** What no session writes, whatever its scope grants: the allocator's reservation sentinels (reserve-report-num.mjs writes them itself, outside the hook). */
-const SESSION_DENIED_WRITES: readonly string[] = ['reports/*-RESERVED.md'];
+/**
+ * What no session writes, whatever its scope grants: the allocator's reservation sentinels (reserve-report-num.mjs
+ * writes them itself, outside the hook) and the secret files no session may read either (a data/** or custom/**
+ * grant would otherwise let it overwrite a .env or a key).
+ */
+const SESSION_DENIED_WRITES: readonly string[] = ['reports/*-RESERVED.md', ...READ_DENY];
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {
