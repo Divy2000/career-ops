@@ -57,8 +57,12 @@ export function lastSession(key: string): LastSession {
     try {
       const raw = sessionStorage.getItem(startKey);
       if (raw === null) return false;
-      const at = Number(raw);
-      return Number.isFinite(at) && Date.now() - at <= START_REPORT_WINDOW_MS;
+      // A clock stepped back by less than the window (an NTP correction mid-start) keeps the mark: the start may still
+      // be in flight. A mark further ahead, or a malformed one, would hold the form off until the clock caught up.
+      const age = Date.now() - Number(raw);
+      if (Math.abs(age) <= START_REPORT_WINDOW_MS) return true;
+      sessionStorage.removeItem(startKey);
+      return false;
     } catch {
       return false;
     }
