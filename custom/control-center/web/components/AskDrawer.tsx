@@ -241,6 +241,15 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
     }
+    // Counted like a Batch fan-out from before the recheck on, so a Process inbox cannot start between the recheck and
+    // the fan-out and evaluate these rows too.
+    let holding = p.action === 'evaluateCompany';
+    if (holding) markBatchStarting(true);
+    const letGo = async () => {
+      if (!holding) return;
+      holding = false;
+      await endBatchStarting(qc);
+    };
     try {
       if (await processInboxOwns(p)) {
         update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
@@ -279,13 +288,11 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'evaluateCompany': {
-          // Counted like a Batch fan-out, so Process inbox waits for these sessions instead of evaluating the rows again.
-          markBatchStarting(true);
           let outcome: ReturnType<typeof fanoutOutcome>;
           try {
             outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
           } finally {
-            await endBatchStarting(qc);
+            await letGo();
           }
           // A posting that did not start stays pending in the Inbox; the note names it, and the page stays to say why.
           if (outcome.failedUrls.length > 0) {
@@ -369,6 +376,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       update(p.id, { state: 'done', note: null });
     } catch (err) {
       update(p.id, { state: 'failed', note: describeError(err) });
+    } finally {
+      await letGo();
     }
   };
 

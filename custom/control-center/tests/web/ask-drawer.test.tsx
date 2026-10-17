@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -800,6 +801,44 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(item.dataset.proposalState).toBe('done');
   });
 
+  it('holds Process inbox back from the confirm on, so one started during the recheck cannot join this fan-out (R27-shared-comp-X-01 review)', async () => {
+    const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    let confirmed = false;
+    let answerRecheck: (() => void) | undefined;
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (confirmed && !answerRecheck && String(url) === '/api/sessions' && !init?.method) await new Promise<void>((r) => (answerRecheck = r));
+      return answer(url as string, init);
+    });
+    try {
+      await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+      const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+      await act(async () => bodyButton('Review and run')!.click());
+      const doIt = await until(() => bodyButton('Do it'), 'the confirm');
+      confirmed = true;
+      await act(async () => doIt.click());
+      await until(() => answerRecheck, 'the recheck of live Process inbox runs');
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => answerRecheck!());
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(item.dataset.proposalState).toBe('done');
+      expect(seen.at(-1)).toBe(false);
+    } finally {
+      if (seen.at(-1)) markBatchStarting(false);
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
+
   it('holds Process inbox back while the fan-out starts, and refreshes the sessions list before letting go (R27-shared-comp-L1-01)', async () => {
     const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
     const seen: boolean[] = [];
@@ -814,8 +853,11 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     const calls: string[] = [];
     let answerFanout!: () => void;
     const answer = vi.mocked(fetch).getMockImplementation()!;
+    // Whether Process inbox was still held back when each sessions read after the fan-out POST was sent.
+    const heldAtRefresh: boolean[] = [];
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
       calls.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      if (String(url) === '/api/sessions' && calls.includes('POST /api/sessions/fanout')) heldAtRefresh.push(seen.at(-1)!);
       if (String(url) === '/api/sessions/fanout') await new Promise<void>((r) => (answerFanout = r));
       return answer(url as string, init);
     });
@@ -828,6 +870,7 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
       expect(seen.at(-1)).toBe(false);
       expect(calls).toContain('POST /api/sessions/fanout');
       expect(calls.slice(calls.indexOf('POST /api/sessions/fanout'))).toContain('GET /api/sessions');
+      expect(heldAtRefresh).toContain(true);
     } finally {
       // A failed run must not leave the shared mark set for the next test.
       if (seen.at(-1)) markBatchStarting(false);
