@@ -161,6 +161,17 @@ describe('immigration overview', () => {
     const cf = parseCompanyFile('# Acme sponsorship check\nchecked_at: 2026-09-28\npolicy_changes_seen: 2\nverdict: sponsoring\ndol_tier: strong (120 LCAs FY2025)\npolicy_context: 2026-10-01 Fee rule\n', 'acme', '/x', (md) => md.match(/checked_at:\s*(\S+)/)?.[1] ?? null);
     expect(cf).toMatchObject({ name: 'Acme', checkedAt: '2026-09-28', verdict: 'sponsoring', dolTier: 'strong (120 LCAs FY2025)', policyChangesSeen: 2 });
     expect(parseCompanyFile('# Acme\nverdict: unclear\n', 'acme', '/x', () => null).name).toBe('Acme');
+  });
+
+  it('reads a blank field as unknown instead of taking the next line as its value', () => {
+    const cf = parseCompanyFile('# Acme sponsorship check\nchecked_at: 2026-10-01\nverdict:\ndol_tier: none (0 LCAs FY2025)\n', 'acme', '/x', () => null);
+    expect(cf).toMatchObject({ verdict: null, dolTier: 'none (0 LCAs FY2025)' });
+    expect(parseCompanyFile('# Acme\ndol_tier:   \npolicy_context: 2026-10-01 Fee rule\n', 'acme', '/x', () => null).dolTier).toBeNull();
+    expect(parseCompanyFile('# Acme\nverdict:\r\ndecision: sponsoring\r\n', 'acme', '/x', () => null).verdict).toBe('sponsoring');
+    expect(parseCompanyFile('#\nchecked_at: 2026-10-01\n', 'acme', '/x', () => null).name).toBe('acme');
+  });
+
+  it('reads the overview through the core lib', async () => {
     const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04');
     expect(o.digest).toMatchObject({ kind: 'ok', latestDate: '2026-10-02', staleDays: 2 });
     expect(o.policyChanges).toHaveLength(2);
