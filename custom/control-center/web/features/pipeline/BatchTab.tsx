@@ -21,6 +21,17 @@ async function startedSince(urls: string[], before: Set<string>): Promise<Set<st
   return new Set(sessions.filter((s) => s.mode === 'oferta' && !before.has(s.id) && s.target.value && wanted.has(s.target.value)).map((s) => s.target.value!));
 }
 
+type BatchResult = { urls: string[]; message: { tone: 'ok' | 'danger'; text: string } };
+// A fan-out answers after the tab that started it was left: its outcome (the URLs to retry, and why) goes to the Batch
+// tab shown now, or is kept for the next one shown, so the URLs that never started are not lost.
+let keptResult: BatchResult | null = null;
+const resultListeners = new Set<(r: BatchResult) => void>();
+function handOver(r: BatchResult): void {
+  const shown = [...resultListeners][0];
+  if (shown) shown(r);
+  else keptResult = r;
+}
+
 /**
  * Pipeline > Batch: each URL becomes one oferta evaluation in its own confined session (the fan-out reserves the
  * report numbers first). batch/batch-runner.sh is never used: its workers run outside any session guard.
@@ -62,8 +73,22 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
+    // URLs typed into this box meanwhile stay, ahead of the ones handed over.
+    const take = (r: BatchResult) => {
+      setUrls((cur) => {
+        const typed = cur.split(/\s+/).filter(Boolean);
+        return [...typed, ...r.urls.filter((u) => !typed.includes(u))].join('\n');
+      });
+      setMessage(r.message);
+    };
+    if (keptResult) {
+      take(keptResult);
+      keptResult = null;
+    }
+    resultListeners.add(take);
     return () => {
       mounted.current = false;
+      resultListeners.delete(take);
     };
   }, []);
   const start = async (...args: Parameters<typeof startAsked>) => {
@@ -92,19 +117,25 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       setBusy(false);
     }
   };
+  /** Shows the outcome, with `keep` (null: the box as it is) left in the box; a tab left meanwhile hands it over. */
+  const finish = (keep: string[] | null, message: BatchResult['message']) => {
+    if (!mounted.current) return handOver({ urls: keep ?? list, message });
+    if (keep !== null) setUrls(keep.join('\n'));
+    setMessage(message);
+  };
   const launch = async (knownProcess: string | null) => {
     // A Process inbox can start while the confirm is open: the sessions list is read again before anything starts. It is
     // also the list from before the start, so a failure part way can tell which sessions it started.
     const read = await withinSessionsReadLimit(sessions.refetch());
     if (!read.done) {
-      setMessage({ tone: 'danger', text: 'Could not check for a running Process inbox, so no evaluation was started. Try again.' });
+      finish(null, { tone: 'danger', text: 'Could not check for a running Process inbox, so no evaluation was started. Try again.' });
       return;
     }
     const now = read.value;
     if (now.isError || !now.data || livePipelineId(now.data) !== null) return;
     const remembered = processStore.read();
     if (processStore.starting() || (remembered !== null && remembered !== knownProcess && !now.data.some((x) => x.id === remembered))) {
-      setMessage({ tone: 'danger', text: 'A Process inbox run started meanwhile, so no evaluation was started.' });
+      finish(null, { tone: 'danger', text: 'A Process inbox run started meanwhile, so no evaluation was started.' });
       return;
     }
     const before = new Set(now.data.map((x) => x.id));
@@ -112,22 +143,22 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       const r = await fanOut('oferta', list);
       const outcome = fanoutOutcome(r);
       // Only the URLs that did not start stay in the box, so a retry does not evaluate a started one twice.
-      setUrls(outcome.failedUrls.join('\n'));
-      setMessage({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
+      finish(outcome.failedUrls, { tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
       // The page moves to Sessions on onStarted, which would hide a failure and the URLs kept for the retry.
       if (outcome.failedUrls.length === 0 && mounted.current) onStarted?.();
     } catch (err) {
       // The fan-out starts its sessions one by one and answers an error without the ones it already started: those are
       // taken out of the box, so a retry does not evaluate them twice.
       let note: string;
+      let keep: string[] | null = null;
       try {
         const started = await startedSince(list, before);
-        if (started.size > 0) setUrls(list.filter((u) => !started.has(u)).join('\n'));
+        if (started.size > 0) keep = list.filter((u) => !started.has(u));
         note = started.size > 0 ? ` ${started.size} started before the failure and ${started.size === 1 ? 'was' : 'were'} taken out of the box; see Sessions.` : '';
       } catch {
         note = ' Check Sessions for any that started before retrying.';
       }
-      setMessage({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}${note ? `.${note}` : ''}` });
+      finish(keep, { tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}${note ? `.${note}` : ''}` });
     }
   };
   return (
