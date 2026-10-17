@@ -140,7 +140,10 @@ try {
         fs.writeFileSync(tmp, r.text);
         fs.renameSync(tmp, req.target);
       } catch (e) {
-        fs.rmSync(tmp, { force: true });
+        // A failed cleanup must not hide why the write failed.
+        try {
+          fs.rmSync(tmp, { force: true });
+        } catch {}
         throw e;
       }
     }

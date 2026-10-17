@@ -292,6 +292,30 @@ describe('a follow-up edit whose rename fails (R27-srv-dom-a-L1-02)', () => {
   }, 30_000);
 });
 
+describe('a follow-up edit whose rename and temp-file cleanup both fail', () => {
+  it('given the rename onto follow-ups.md and the removal of its temp file fail, when an override is saved, then the 500 names the rename error', async () => {
+    const dataRoot = path.join(tempDir('cc-fu-rm-'), 'root');
+    fs.cpSync(path.join(t.cfg.dataRoot), dataRoot, { recursive: true });
+    // The edit runs in a child: a preload makes its rename onto follow-ups.md fail, and removing the temp file fail too.
+    const preload = path.join(tempDir('cc-fu-rm-preload-'), 'fail-rename.mjs');
+    fs.writeFileSync(preload, `import fs from 'node:fs';\nconst real = fs.renameSync;\nfs.renameSync = (from, to) => { if (String(to).endsWith('follow-ups.md')) throw Object.assign(new Error('EIO: injected rename failure'), { code: 'EIO' }); return real(from, to); };\nconst realRm = fs.rmSync;\nfs.rmSync = (p, o) => { if (String(p).includes('follow-ups.md.tmp')) throw Object.assign(new Error('EACCES: injected cleanup failure'), { code: 'EACCES' }); return realRm(p, o); };\n`);
+    const own = await makeTestApp({ dataRoot });
+    const saved = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = `${saved ?? ''} --import ${pathToFileURL(preload).href}`.trim();
+    try {
+      const before = fs.readFileSync(path.join(dataRoot, 'data', 'follow-ups.md'), 'utf8');
+      const res = await own.app.inject({ method: 'POST', url: '/api/followups/override', headers: own.authedWrite, payload: { appNum: 1, date: '2026-10-20' } });
+      expect(res.statusCode, res.body).toBe(500);
+      expect(res.body).toMatch(/injected rename failure/);
+      expect(fs.readFileSync(path.join(dataRoot, 'data', 'follow-ups.md'), 'utf8')).toBe(before);
+    } finally {
+      if (saved === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = saved;
+      await own.close();
+    }
+  }, 30_000);
+});
+
 describe('follow-up writes', () => {
   it('logs a follow-up, shows it on the application timeline and deletes it again', async () => {
     const r = await post('/api/followups/log', { appNum: 6, date: '2026-10-03', channel: 'Email', contact: 'HM', notes: 'sent deck' });
