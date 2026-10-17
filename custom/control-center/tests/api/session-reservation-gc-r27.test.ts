@@ -1,0 +1,84 @@
+import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { makeTestApp } from '../helpers/app.js';
+import { tempDir } from '../helpers/tmp.js';
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const TERMINAL = ['done', 'awaiting_user', 'error', 'cancelled'];
+type App = Awaited<ReturnType<typeof makeTestApp>>;
+const call = (app: App, method: 'GET' | 'POST', url: string, payload?: Record<string, unknown>) =>
+  app.app.inject({ method, url, headers: method === 'GET' ? app.authed : app.authedWrite, payload: method === 'GET' ? undefined : (payload ?? {}) });
+async function settleOn(app: App, id: string, timeoutMs = 30_000): Promise<{ meta: { status: string; reportNum: number | null; lastReason?: string } }> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const body = (await call(app, 'GET', `/api/sessions/${id}`)).json();
+    if (TERMINAL.includes(body.meta.status)) return body;
+    if (Date.now() > deadline) throw new Error(`session ${id} still ${body.meta.status}`);
+    await wait(100);
+  }
+}
+async function until(cond: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time');
+    await wait(25);
+  }
+}
+const INIT = { type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] };
+/** A turn held until `go` exists in `dir`, which then exits 1 with no report: it ends in error, so finalize releases its number. */
+const heldUntilGo = (dir: string) => ({
+  events: [INIT, { __waitFor: { dir, pattern: '^go$', timeoutMs: 20_000 } }, { type: 'result', subtype: 'success', result: 'Gave up.', total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false }],
+  exitCode: 1,
+});
+async function startHeld(app: App, url: string): Promise<{ id: string; n: number; go: () => void }> {
+  const gate = tempDir('cc-r27-gate-');
+  const file = path.join(tempDir('cc-r27-scenario-'), 'scenario.json');
+  fs.writeFileSync(file, JSON.stringify(heldUntilGo(gate)));
+  process.env.FAKE_CLAUDE_SCENARIO = file;
+  try {
+    const fan = (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: [url] })).json();
+    const id = fan.sessions[0].id as string;
+    const runId = fan.sessions[0].turns[0].runId as string;
+    await until(() => app.runner.store.read(runId)?.childPid != null);
+    return { id, n: fan.reserved[0] as number, go: () => fs.writeFileSync(path.join(gate, 'go'), '') };
+  } finally {
+    delete process.env.FAKE_CLAUDE_SCENARIO;
+  }
+}
+const sentinelPath = (app: App, n: number) => path.join(app.cfg.dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`);
+
+describe('a reserved report number held by a long-running turn (R27-claude-X-01)', () => {
+  it('given a running Batch evaluate turn whose number the stale GC collected and another reservation claimed, when the turn ends, then the other reservation is left alone', async () => {
+    const app = await makeTestApp();
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-lost');
+      fs.writeFileSync(sentinelPath(app, n), JSON.stringify({ pid: process.pid, token: 'someone-else', created_at: new Date(Date.now() + 1000).toISOString() }));
+      go();
+
+      const { meta } = await settleOn(app, id);
+      expect(meta).toMatchObject({ status: 'error', reportNum: null });
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+      expect(meta.lastReason).toMatch(new RegExp(`report number ${n} was already lost`));
+    } finally {
+      await app.close();
+    }
+  }, 30_000);
+
+  it('given a running Batch evaluate turn whose sentinel has aged past the stale GC threshold, when the turn is still running, then its sentinel is refreshed so the GC keeps it', async () => {
+    const app = await makeTestApp();
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-fresh');
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
+      fs.utimesSync(sentinelPath(app, n), fiveHoursAgo, fiveHoursAgo);
+
+      await until(() => Date.now() - fs.statSync(sentinelPath(app, n)).mtimeMs < 60_000);
+      go();
+      const { meta } = await settleOn(app, id);
+      expect(meta.lastReason).toMatch(new RegExp(`report number ${n} returned to the pool`));
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  }, 30_000);
+});

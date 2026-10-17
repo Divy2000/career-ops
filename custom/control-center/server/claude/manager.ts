@@ -33,6 +33,8 @@ const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_MS = 250;
 /** How long a turn that failed after its run started waits for that stopped run to end before giving its number back. */
 const RUN_END_WAIT_MS = 10_000;
+/** A running turn's reservation sentinel older than this is refreshed: well inside the stale GC's four hours. */
+const RESERVATION_REFRESH_AGE_MS = 60 * 60_000;
 /** A done pass whose ack failed is acknowledged again after this delay, doubling up to the cap while it keeps failing. */
 const POLICY_ACK_RETRY_MS = 60_000;
 const POLICY_ACK_RETRY_CAP_MS = 30 * 60_000;
@@ -694,19 +696,7 @@ export class SessionManager {
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
     if (num === null || meta.creditedReport?.num === num) return meta;
-    const sentinel = this.sentinelPath(num);
-    const createdAt = readSentinelCreatedAt(sentinel);
-    if (createdAt !== null && createdAt <= this.reservedAt(meta, num)) {
-      const now = new Date();
-      try {
-        fs.utimesSync(sentinel, now, now);
-        // Collected and claimed again between the read and the refresh: the refreshed sentinel is someone else's.
-        if (readSentinelCreatedAt(sentinel) === createdAt) return meta;
-      } catch (err) {
-        // Collected between the read and the refresh: the number is lost like any other.
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      }
-    }
+    if (this.refreshReservation(meta, num)) return meta;
     // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
     this.store.setReportNum(meta.id, null);
     const { r, nums: fresh } = await this.takeReportNums(1);
@@ -730,6 +720,41 @@ export class SessionManager {
       console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
     }
     return this.store.read(meta.id)!;
+  }
+
+  /** Refreshes `num`'s sentinel when it is still the session's (written no later than the session got the number); false when it is not. */
+  private refreshReservation(meta: SessionMeta, num: number): boolean {
+    const sentinel = this.sentinelPath(num);
+    const createdAt = readSentinelCreatedAt(sentinel);
+    if (createdAt === null || createdAt > this.reservedAt(meta, num)) return false;
+    const now = new Date();
+    try {
+      fs.utimesSync(sentinel, now, now);
+      // Collected and claimed again between the read and the refresh: the refreshed sentinel is someone else's.
+      return readSentinelCreatedAt(sentinel) === createdAt;
+    } catch (err) {
+      // Collected between the read and the refresh: the number is lost like any other.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      return false;
+    }
+  }
+
+  /**
+   * A running turn keeps its reserved number's sentinel younger than the stale-sentinel GC's age threshold: the
+   * allocator process that wrote it has exited, so age alone would let a GC free the number while the turn may still
+   * write its report under it.
+   */
+  private keepReservationFresh(id: string): void {
+    const meta = this.store.read(id);
+    const num = meta?.reportNum ?? null;
+    if (!meta || num === null || meta.creditedReport?.num === num) return;
+    const sentinel = this.sentinelPath(num);
+    try {
+      if (Date.now() - fs.statSync(sentinel).mtimeMs < RESERVATION_REFRESH_AGE_MS) return;
+      this.refreshReservation(meta, num);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[sessions] session ${id}: could not refresh the reservation for report number ${num}: ${(err as Error).message}`);
+    }
   }
 
   private sentinelPath(num: number): string {
@@ -999,6 +1024,7 @@ export class SessionManager {
     };
     const timer = setInterval(() => {
       safePull();
+      this.keepReservationFresh(id);
       let run: RunMeta | null;
       try {
         run = this.runner.store.read(runId);
@@ -1121,9 +1147,14 @@ export class SessionManager {
     let reason = outcome.reason;
     const num = meta.reportNum;
     if (num !== null && outcome.status !== 'awaiting_user') {
+      const used = newReports.some((x) => x.num === num);
+      // A report holding the number means no other reservation can have claimed it; otherwise the stale GC may have, and
+      // the sentinel now there is someone else's. One already gone has nothing to protect: its release is a no-op.
+      const own = used ? null : this.reservationOwnership(meta, num);
+      const owns = own ? () => !fs.existsSync(this.sentinelPath(num)) || own() : undefined;
       // Claimed before the await, so no other finalize of this turn can release the number again.
       this.store.setReportNum(id, null);
-      reason += `; ${await this.releaseReportNum(num, newReports.some((x) => x.num === num))}`;
+      reason += `; ${await this.releaseReportNum(num, used, owns)}`;
     }
     // Only a pass that ends done acknowledges the items it was given; any other outcome leaves them queued for the next run.
     const batch = meta.policyBatch ?? null;
