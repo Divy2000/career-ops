@@ -408,7 +408,7 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
     expect(bodyButton('Review and run')).toBeUndefined();
   });
 
-  it('given a start that never answers, holds Process inbox back no longer than the sessions read limit (R27-shared-comp-X-01 review)', async () => {
+  it('given a start slower than the sessions read limit, holds Process inbox back until the start answers (R27-comp-askdrawer-01)', async () => {
     const { useBatchStarting } = await import('@web/features/pipeline/InboxAi');
     const seen: boolean[] = [];
     const Probe = () => {
@@ -433,7 +433,11 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
       await act(async () => bodyButton('Do it')!.click());
       expect(starts).toBe(1);
       expect(seen.at(-1)).toBe(true);
+      // Past the 10 s sessions read limit the POST is still out: the session may yet start, so the hold stays.
       await act(async () => vi.advanceTimersByTime(30_000));
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => refuseStarts.forEach((r) => r()));
       await act(async () => new Promise((r) => setTimeout(r, 20)));
       expect(seen.at(-1)).toBe(false);
     } finally {

@@ -18,7 +18,7 @@ import { plainPostingUrl, postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
-import { endBatchStarting, markBatchStarting, withinSessionsReadLimit } from '../features/pipeline/InboxAi';
+import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
 import { useTracker } from '../lib/queries';
 import { STATES } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
@@ -293,8 +293,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
             break;
           }
           const start = startEvaluation(url);
-          // A start that never answers (a restarting server) gives up the hold rather than keep Process inbox off for good.
-          await withinSessionsReadLimit(start.catch(() => undefined));
+          // Held until the start answers, however long: a slow start can still create the session, and Process inbox
+          // started meanwhile would evaluate the row too. A Batch fan-out holds the same way.
+          await start.catch(() => undefined);
           await letGo();
           const m = await start;
           if (m.status === 'error') {
