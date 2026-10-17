@@ -903,9 +903,11 @@ export class SessionManager {
     try {
       files = snapshotReports(this.cfg.dataRoot);
     } catch (err) {
-      console.warn(`[sessions] session ${meta.id}: could not read the reports folder to check report number ${num}: ${(err as Error).message}`);
+      // Said once: the tracker asks every tick.
+      this.warnOnce(`${meta.id}\0reports`, `[sessions] session ${meta.id}: could not read the reports folder to check report number ${num}: ${(err as Error).message}`);
       return false;
     }
+    this.reservationWarned.delete(`${meta.id}\0reports`);
     for (const file of files) if (!isBareDateFile(file) && reportNumberOf(file) === num) return true;
     return false;
   }

@@ -115,6 +115,26 @@ describe('a credited report that holds its number (R27-mgr-rev-01)', () => {
     }
   });
 
+  it.skipIf(process.getuid?.() === 0)('given a running turn credited a report under its number, when the reports folder cannot be read for several ticks, then that is said once', async () => {
+    const app = await makeTestApp();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reports = path.join(app.cfg.dataRoot, 'reports');
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r28-credited-unreadable-ticks');
+      app.sessions.store.setCreditedReport(id, { num: n, file: `${String(n).padStart(3, '0')}-acme-2026-10-11.md` });
+      fs.chmodSync(reports, 0o000);
+      await wait(1000);
+      fs.chmodSync(reports, 0o755);
+      expect(warn.mock.calls.flat().filter((m) => String(m).includes('could not read the reports folder')).length).toBe(1);
+      go();
+      await settleOn(app, id);
+    } finally {
+      fs.chmodSync(reports, 0o755);
+      warn.mockRestore();
+      await app.close();
+    }
+  }, 40_000);
+
   it('given a waiting session whose credited report was deleted and whose sentinel is gone, when the user deletes it, then the number reads as lost', async () => {
     const app = await makeTestApp();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
