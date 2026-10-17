@@ -55,9 +55,12 @@ test('a report left by an earlier run the same day never reaches this run\'s PR 
   const bodyTo = lines.findIndex((l, i) => i > bodyFrom && l.startsWith('} > "$BODY"'));
   assert.ok(from > -1 && to > from && bodyFrom > to && bodyTo > bodyFrom, 'no Claude or PR body block in sync.sh');
   const vars = `LIVE="${path.resolve(HERE, '../../..')}" STATE_DIR="${dir}" TODAY=${today} BEHIND=2 CONFLICTS= BASELINE_FAILURES= TOKEN=t MODEL=m CLAUDE_BIN=claude LOG="${dir}/log" CUSTOM_OK=1 CC_OK=1 KEPT_README=0`;
-  const script = `${vars}\n${lines.slice(from, to + 1).join('\n')}\n${lines.slice(bodyFrom, bodyTo + 1).join('\n')}`;
+  // The handoff re-gate approves the stub here and stops the run loudly if it ever refuses it.
+  const gate = 'sync_claude_bin() { printf \'%s\' "$CC_CLAUDE_BIN"; }\nfail() { echo "!!! $1"; exit 1; }';
+  const script = `${gate}\n${vars}\n${lines.slice(from, to + 1).join('\n')}\n${lines.slice(bodyFrom, bodyTo + 1).join('\n')}`;
   const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, '', 'every command in the block exists');
   const body = readFileSync(path.join(dir, `${today}.pr-body.md`), 'utf8');
   assert.match(body, /## Claude report\n\(no report written\)\n$/, body);
   assert.doesNotMatch(body, /an earlier run/);
