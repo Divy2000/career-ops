@@ -21,16 +21,41 @@ export const BLACKLIST_REL = 'data/blacklist.md';
 
 export const BLACKLIST_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** `since` is checked by the route: YYYY-MM-DD for new rows, while a legacy cell already in the file passes through as is. */
+const CELL = /^[^|\r\n]*$/;
+
+/**
+ * Lengths are capped by blacklistOverCap, not here: a cell already in the file passes through as is, whatever its
+ * length, and `since` is checked by the route (YYYY-MM-DD for new rows, a legacy cell kept as it is).
+ */
 export const blacklistRowSchema = z.object({
-  company: z.string().min(1).max(200).regex(/^[^|\r\n]+$/, 'no pipes or line breaks'),
-  since: z.string().max(40).regex(/^[^|\r\n]*$/, 'no pipes or line breaks'),
+  company: z.string().min(1).regex(/^[^|\r\n]+$/, 'no pipes or line breaks'),
+  since: z.string().regex(CELL, 'no pipes or line breaks'),
   scope: z.enum(['company', 'domain']),
-  reason: z.string().max(500).regex(/^[^|\r\n]*$/, 'no pipes or line breaks'),
+  reason: z.string().regex(CELL, 'no pipes or line breaks'),
   /** Cells of the file's other columns (BlacklistParsed.extraColumns), in order; only present when the file has some. */
-  extra: z.array(z.string().max(500).regex(/^[^|\r\n]*$/, 'no pipes or line breaks')).max(50).optional(),
+  extra: z.array(z.string().regex(CELL, 'no pipes or line breaks')).max(50).optional(),
 });
 export type BlacklistRow = z.infer<typeof blacklistRowSchema>;
+
+// `since` has no cap of its own: the route takes only a YYYY-MM-DD date or a value already in that column of the file.
+const CAPS = { company: 200, reason: 500, extra: 500 } as const;
+
+/**
+ * The first cell of `rows` longer than its cap, unless that value is already in the same column of the file (a long
+ * legacy note): a row the file holds would otherwise make every later save fail. Null when none.
+ */
+export function blacklistOverCap(rows: BlacklistRow[], existing: BlacklistRow[]): string | null {
+  const company = new Set(existing.map((r) => r.company));
+  const reason = new Set(existing.map((r) => r.reason));
+  const extra = (i: number) => new Set(existing.map((r) => r.extra?.[i]));
+  for (const r of rows) {
+    if (r.company.length > CAPS.company && !company.has(r.company)) return `company ${r.company.slice(0, 80)}... is over ${CAPS.company} characters`;
+    if (r.reason.length > CAPS.reason && !reason.has(r.reason)) return `reason of ${r.company.slice(0, 80)} is over ${CAPS.reason} characters`;
+    const long = (r.extra ?? []).findIndex((c, i) => c.length > CAPS.extra && !extra(i).has(c));
+    if (long !== -1) return `cell ${long + 1} after Reason of ${r.company.slice(0, 80)} is over ${CAPS.extra} characters`;
+  }
+  return null;
+}
 
 export interface BlacklistParsed {
   rows: BlacklistRow[];

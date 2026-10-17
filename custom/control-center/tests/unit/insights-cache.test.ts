@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { inputsKey, readInsight } from '../../server/domains/insightsCache.js';
@@ -95,6 +95,48 @@ describe('the insights cache with CAREER_OPS_TRACKER outside the data root (R7-1
       if (before === undefined) delete process.env.CAREER_OPS_TRACKER;
       else process.env.CAREER_OPS_TRACKER = before;
     }
+  });
+});
+
+describe('the insights cache is best-effort (R27-srv-dom-a-L1-01)', () => {
+  it('given a cache file that cannot be written, when a script runs cleanly, then its result is still returned and no temp file is left', async () => {
+    const exec: Exec = async () => ({ code: 0, stdout: '{"ok":true}', stderr: '' });
+    const cfg = testConfig();
+    const dir = path.join(cfg.dataRoot, 'data', 'control-center', 'insights');
+    // A directory where the cache file goes: every write of it fails.
+    fs.mkdirSync(path.join(dir, 'funnelVelocity.json'), { recursive: true });
+    const read = await readInsight(cfg, exec, 'funnelVelocity', { recompute: true });
+    expect(read).toMatchObject({ kind: 'ok', json: { ok: true }, fromCache: false });
+    expect(fs.readdirSync(dir)).toEqual(['funnelVelocity.json']);
+  });
+
+  it('given a cache write that fails partway (a full disk), when a script runs cleanly, then its result is still returned and no partial file is left', async () => {
+    const exec: Exec = async () => ({ code: 0, stdout: '{"ok":true}', stderr: '' });
+    const cfg = testConfig();
+    const dir = path.join(cfg.dataRoot, 'data', 'control-center', 'insights');
+    const real = fs.writeFileSync;
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, ...rest) => {
+      if (!String(file).startsWith(dir)) return real(file, data, ...rest);
+      real(file, String(data).slice(0, 5));
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+    });
+    try {
+      const read = await readInsight(cfg, exec, 'funnelVelocity', { recompute: true });
+      expect(read).toMatchObject({ kind: 'ok', json: { ok: true }, fromCache: false });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([]);
+  });
+
+  it('given a file where the cache folder goes, when a script runs cleanly, then its result is still returned', async () => {
+    const exec: Exec = async () => ({ code: 0, stdout: '{"ok":true}', stderr: '' });
+    const cfg = testConfig();
+    // mkdir fails with ENOTDIR, and so does removing the temp file under it.
+    fs.mkdirSync(path.join(cfg.dataRoot, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(cfg.dataRoot, 'data', 'control-center'), 'not a folder\n');
+    const read = await readInsight(cfg, exec, 'funnelVelocity', { recompute: true });
+    expect(read).toMatchObject({ kind: 'ok', json: { ok: true }, fromCache: false });
   });
 });
 

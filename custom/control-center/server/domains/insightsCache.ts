@@ -154,9 +154,21 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
   };
   // A failure (a timeout or a killed child included) is often transient: caching it would serve it until the inputs or
   // the day change, so only a clean run is kept.
+  // The cache only saves a rerun: a write that fails (a full disk, an unwritable directory) still returns the result.
   if (read.kind === 'ok') {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(read));
+    const tmp = `${file}.tmp-${process.pid}`;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify(read));
+      fs.renameSync(tmp, file);
+    } catch {
+      // Not cached; the next load reruns the script. Removing the temp file fails too when a folder above it is a file.
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        /* nothing was written */
+      }
+    }
   }
   return read;
 }

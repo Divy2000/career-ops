@@ -6,7 +6,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { computeDashboard, loadFunnelStages, type FunnelStages, type StatusLogRow } from '../../server/domains/insights.js';
+import { computeDashboard, loadFunnelStages, parseStatusLog, statusLabeler, type FunnelStages, type StatusLogRow } from '../../server/domains/insights.js';
 import type { TrackerRow } from '../../server/domains/tracker.js';
 import { DEFAULT_CODE_ROOT } from '../../server/config.js';
 
@@ -57,6 +57,17 @@ describe('the Insights funnel', () => {
 
   it('given a ledger line for a row no longer in the tracker, then it counts nowhere', () => {
     const d = expectParity([row(1, 'Applied')], [step(9, 'Applied', 'Interview')]);
+    expect(count(d, 'Interview')).toBe(0);
+  });
+
+  it('given a status-log file with lines funnel-stages.mjs skips, then the funnel read from it equals stats.mjs (R27-srv-dom-a-X-01)', async () => {
+    const { parseStatusLogStages } = (await import(pathToFileURL(path.join(DEFAULT_CODE_ROOT, 'funnel-stages.mjs')).href)) as { parseStatusLogStages: (text: string) => Array<{ num: number; from: string; to: string }> };
+    const text = ['1junk\t2026-09-20\tApplied\tInterview\tweb\t', '1\t2026-09-20\t\tOffer\tweb\t', '1\tinvalid\tEvaluated\tApplied\tmanual', '1\t2026-09-21\tApplied\tBogus\tweb\t'].join('\n');
+    const rows = [row(1, 'Evaluated')];
+    const d = computeDashboard(rows, parseStatusLog(text), stages, await statusLabeler(DEFAULT_CODE_ROOT));
+    const u = upstream(new Map(rows.map((r) => [r.num, r.status])), parseStatusLogStages(text));
+    expect({ applied: count(d, 'Applied'), interview: count(d, 'Interview'), offer: count(d, 'Offer') }).toEqual({ applied: u.everApplied, interview: u.everInterview, offer: u.everOffer });
+    expect(count(d, 'Applied')).toBe(1);
     expect(count(d, 'Interview')).toBe(0);
   });
 

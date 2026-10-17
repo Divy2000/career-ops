@@ -117,6 +117,23 @@ describe('blacklist (explicit confirm gate)', () => {
 
 describe('blacklist saves keep what the editor does not manage', () => {
   const EXPLICIT = { 'x-cc-explicit': 'blacklist' };
+  it('given a legacy table whose Reason text is longer than 40 characters, when a row is added and saved, then the save succeeds (R27-srv-dom-a-L2-01)', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      const longReason = 'Ghosted me after three rounds of interviews and a take-home';
+      fs.writeFileSync(file, `# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Initech | ${longReason} | 2025-03-02 |\n`);
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const current = (await req('GET')).json();
+      expect(current.rows[0].since).toBe(longReason);
+      const rows = [...current.rows, { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'spam' }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toContain(`| Initech | ${longReason} | company |  | 2025-03-02 |`);
+    } finally {
+      await app.close();
+    }
+  });
   it('a save keeps the notes after the table verbatim and tolerates legacy date cells, but new rows still need YYYY-MM-DD', async () => {
     const app = await makeTestApp();
     try {
@@ -267,6 +284,77 @@ describe('the blacklist editor reads the table by position, as the scanner does 
       const current = (await app.app.inject({ method: 'GET', url: '/api/blacklist', headers: app.authed })).json();
       expect(current.columnWarning).toBeNull();
       expect(current.rows).toEqual([{ company: 'Acme', since: '2026-01-15', scope: 'company', reason: 'x', extra: ['a@b.example'] }]);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('a save is not blocked by rows already in data/blacklist.md (R27-srv-dom-a-L2-01)', () => {
+  const EXPLICIT = { 'x-cc-explicit': 'blacklist' };
+  const open = async (md: string) => {
+    const app = await makeTestApp();
+    const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+    fs.writeFileSync(file, md);
+    const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+    return { app, file, req };
+  };
+
+  it('given cells longer than the editor allows in every column of an existing row, when a row is added and saved, then the save succeeds and keeps them', async () => {
+    const company = `Initech ${'i'.repeat(250)}`;
+    const since = `Ghosted ${'s'.repeat(600)}`;
+    const reason = `Reposts ${'r'.repeat(600)}`;
+    const added = `Added ${'a'.repeat(600)}`;
+    const { app, file, req } = await open(`# Blacklist\n\n| Company | Since | Scope | Reason | Added |\n|---|---|---|---|---|\n| ${company} | ${since} | company | ${reason} | ${added} |\n`);
+    try {
+      const current = (await req('GET')).json();
+      const rows = [...current.rows, { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'spam', extra: [''] }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toContain(`| ${company} | ${since} | company | ${reason} | ${added} |`);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a file with long cells, when a new value over its cap is saved, then the save is refused', async () => {
+    const reason = 'r'.repeat(600);
+    const note = 'n'.repeat(600);
+    const { app, file, req } = await open(`# Blacklist\n\n| Company | Since | Scope | Reason | Added | Contact |\n|---|---|---|---|---|---|\n| Initech | 2025-01-02 | company | ${reason} | ${note} |  |\n`);
+    try {
+      const before = fs.readFileSync(file, 'utf8');
+      const current = (await req('GET')).json();
+      expect(current.rows[0]).toMatchObject({ reason, extra: [note, ''] });
+      for (const row of [
+        { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'x'.repeat(501), extra: ['', ''] },
+        { company: 'G'.repeat(201), since: '2026-10-03', scope: 'company', reason: '', extra: ['', ''] },
+        { ...current.rows[0], reason: `${reason}!` },
+        // A long cell is exempt only in its own column.
+        { ...current.rows[0], extra: ['', note] },
+      ]) {
+        const res = await req('PUT', { confirm: true, rows: [...current.rows, row] }, { 'if-match': current.etag, ...EXPLICIT });
+        expect(res.statusCode, res.body).toBe(400);
+        expect(res.json().error).toMatch(/over \d+ characters/);
+      }
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given an existing domain row that is not a bare hostname (IBM.com.), when a row is added and saved, then the save succeeds, while a new such row is refused', async () => {
+    const { app, file, req } = await open('# Blacklist\n\n| Company | Since | Scope | Reason |\n|---|---|---|---|\n| IBM.com. | 2025-01-02 | domain | ATS hosts |\n');
+    try {
+      const current = (await req('GET')).json();
+      expect(current.rows[0]).toMatchObject({ company: 'IBM.com.', scope: 'domain' });
+      const rows = [...current.rows, { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'spam' }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(saved.statusCode, saved.body).toBe(200);
+      const raw = fs.readFileSync(file, 'utf8');
+      expect(raw).toContain('| IBM.com. | 2025-01-02 | domain | ATS hosts |');
+      const bad = await req('PUT', { confirm: true, rows: [...rows, { company: 'oracle.com.', since: '2026-10-03', scope: 'domain', reason: '' }] }, { 'if-match': saved.json().etag, ...EXPLICIT });
+      expect(bad.statusCode).toBe(400);
+      expect(fs.readFileSync(file, 'utf8')).toBe(raw);
     } finally {
       await app.close();
     }

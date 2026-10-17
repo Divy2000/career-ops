@@ -84,7 +84,17 @@ export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): Ap
   const abs = path.join(dataRoot, SETTINGS_REL);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = `${abs}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
-  fs.renameSync(tmp, abs);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+    fs.renameSync(tmp, abs);
+  } catch (err) {
+    // A failed cleanup must not hide why the write failed.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* the write error below is the one to report */
+    }
+    throw err;
+  }
   return next;
 }

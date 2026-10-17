@@ -12,14 +12,17 @@ export interface StatusLogRow {
   note: string;
 }
 
+/**
+ * The ledger lines funnel-stages.mjs parseStatusLogStages reads, the parser stats.mjs folds its funnel with: a tracker
+ * number of digits only, and a date, a from and a to state that are not empty.
+ */
 export function parseStatusLog(text: string): StatusLogRow[] {
   const rows: StatusLogRow[] = [];
-  for (const line of text.split('\n')) {
+  for (const line of text.replace(/\r/g, '').split('\n')) {
     if (!line.trim() || line.startsWith('#')) continue;
-    const [num, date, from, to, source, ...note] = line.split('\t');
-    const n = parseInt(num ?? '', 10);
-    if (Number.isNaN(n) || !date) continue;
-    rows.push({ num: n, date, from: from ?? '-', to: to ?? '-', source: source ?? '', note: note.join('\t').trim() });
+    const [num = '', date = '', from = '', to = '', source = '', ...note] = line.split('\t').map((c) => c.trim());
+    if (!/^\d+$/.test(num) || !date || !from || !to) continue;
+    rows.push({ num: Number(num), date, from, to, source, note: note.join('\t').trim() });
   }
   return rows;
 }
