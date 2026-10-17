@@ -75,5 +75,7 @@ export function startWatcher(dataRoot: string, bus: EventBus, debounceMs = 300, 
     pending.set(domain, { paths, timer });
   };
   watcher.on('add', onChange).on('change', onChange).on('unlink', onChange);
+  // Without a listener an EventEmitter throws 'error' (EMFILE past the fd limit, say) and the server dies; watching degrades instead.
+  watcher.on('error', (err) => console.error('[watch] data-root watcher error', err));
   return watcher;
 }
