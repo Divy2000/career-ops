@@ -475,6 +475,11 @@ const racing = (real) => (...args) => {
 };
 fs.renameSync = racing(realRename);
 fs.copyFileSync = racing(realCopy);
+const realOpen = fs.openSync;
+fs.openSync = (...args) => {
+  if (String(args[0]).endsWith('cv.md') && args[1] === 'wx') fs.writeFileSync(args[0], 'THEIRS\\n');
+  return realOpen(...args);
+};
 syncBuiltinESMExports();
 `);
   const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r]);
@@ -507,4 +512,30 @@ syncBuiltinESMExports();
   assert.match(res.stderr, /no space left/);
   assert.doesNotMatch(res.stderr, /EBUSY/);
   assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'OLD\n');
+});
+
+test('given the volume refuses hard links and creating cv.md fails while another writer creates it, when cv-write seeds it, then the other writer\'s cv.md is kept (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const preload = put(path.join(d, 'open-race.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realLink = fs.linkSync, realCopy = fs.copyFileSync, realOpen = fs.openSync;
+fs.linkSync = (...args) => {
+  if (!String(args[0]).includes('.tmp-')) return realLink(...args);
+  const err = new Error('EPERM: operation not permitted, link'); err.code = 'EPERM'; throw err;
+};
+// Creating cv.md fails before it is created (EACCES at open), and another writer creates it right then.
+const denied = (target) => {
+  fs.writeFileSync(target, 'THEIRS\\n');
+  const err = new Error('EACCES: permission denied, open'); err.code = 'EACCES'; throw err;
+};
+fs.copyFileSync = (...args) => (String(args[1]).endsWith('cv.md') ? denied(args[1]) : realCopy(...args));
+fs.openSync = (...args) => (String(args[0]).endsWith('cv.md') && args[1] === 'wx' ? denied(args[0]) : realOpen(...args));
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /permission denied/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
 });

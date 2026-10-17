@@ -146,8 +146,8 @@ function cvWrite(data, resume, replace) {
 }
 
 // Moves a fully written temp file to a name that must not exist yet: a hard link fails with EEXIST rather than
-// replace a file created meanwhile. A volume without hard links gets an exclusive copy instead, which fails the same
-// way, and so does a dangling symlink in the name's place.
+// replace a file created meanwhile. A volume without hard links gets an exclusive create instead, which fails the
+// same way, and so does a dangling symlink in the name's place.
 function linkNew(tmp, file) {
   try {
     fs.linkSync(tmp, file);
@@ -164,15 +164,28 @@ function linkNew(tmp, file) {
 }
 
 function copyNew(tmp, file) {
+  const data = fs.readFileSync(tmp);
+  let fd;
   try {
-    fs.copyFileSync(tmp, file, fs.constants.COPYFILE_EXCL);
+    fd = fs.openSync(file, 'wx');
   } catch (err) {
     if (err.code === 'EEXIST') throw Object.assign(new Error(`${file} appeared while it was being written`), { code: 'EEXIST' });
-    // The exclusive create made it ours, so a copy that failed part way leaves no partial file behind.
+    throw err;
+  }
+  // From here the file is the one this call created, so a write that fails part way removes it.
+  try {
+    fs.writeFileSync(fd, data);
+    fs.closeSync(fd);
+  } catch (err) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
     try {
       fs.rmSync(file, { force: true });
     } catch {
-      /* the copy error is the one to report */
+      /* the write error is the one to report */
     }
     throw err;
   }
