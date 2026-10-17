@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { claimFile, readClaim, releaseClaim, retagClaim, tryClaim } from '../policy-claim.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
@@ -231,10 +231,21 @@ test('a start taken in one time zone holds against a claimant in another (R28-te
   }
 });
 
-test('a start claim in the earlier format (pidStart as ps text) is judged by its pid alone (R28-tests-custom-L1-01)', () => {
+test('a start claim in the earlier format (pidStart as ps text) holds on its live pid while recent, whatever zone wrote it (R28-tests-custom-L1-01)', () => {
   const r = root();
-  // ps text in the writer's TZ cannot be compared with another zone's, so a live pid holds.
+  // ps text in the writer's TZ cannot be compared with another zone's, so a mismatch proves nothing yet.
   plant(r, { owner: 'starting:legacy', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
+});
+
+test('a start claim in the earlier format on a reused pid is taken over once it is no longer recent (R28-tests-custom-L1-01 review)', () => {
+  const r = root();
+  const old = new Date(Date.now() - 60 * 60_000).toISOString();
+  plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
+  // The same format naming this process's start as ps prints it here still holds, however long it waits.
+  const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim();
+  plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: lstart });
   assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
 });
 
