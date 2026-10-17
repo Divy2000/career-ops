@@ -366,6 +366,22 @@ describe('action registry', () => {
     }
   });
 
+  it('Check official feeds with a since date while a default feed check is live is refused with a 409 that says a since run waits for the pending check (R27-comp-registry-01)', async () => {
+    const app = await makeTestApp();
+    const live = app.runner.start({ actionId: 'immigration.watch', label: 'Check official feeds', cost: 'network', resources: ['immigration:policy'], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    try {
+      const res = await app.app.inject({ method: 'POST', url: '/api/actions/immigration.watch', headers: app.authedWrite, payload: { params: { since: '2026-01-01' } } });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toContain(live.id);
+      expect(res.json().error).toMatch(/check with a since date.*waits?.*until.*ends/i);
+      expect(app.runner.pending('immigration.watch').map((m) => m.id)).toEqual([live.id]);
+    } finally {
+      app.runner.cancel(live.id);
+      for (let i = 0; i < 200 && !app.runner.store.readExit(live.id); i++) await new Promise((r) => setTimeout(r, 50));
+      await app.close();
+    }
+  });
+
   it('Run the daily job now while this app\'s own daily run is still queued is refused, and only one daily run is queued (SW6-server-03)', async () => {
     const app = await makeTestApp();
     // A scan holds the pipeline resource, so the first daily run waits behind it, with no pidfile yet.

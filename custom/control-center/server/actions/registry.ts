@@ -461,8 +461,9 @@ export const ACTIONS: ActionDef[] = [
     resources: ['immigration:policy'],
     claude: false,
     sync: false,
-    // A second check would only queue behind the first on immigration:policy and fetch the same feeds again.
-    single: (mine) => `Skipped: a feed check is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). Watch it on Runs & Schedule.`,
+    // A second check would only queue behind the first on immigration:policy and fetch the same feeds again. single
+    // sees only the pending run, not this request's since, so a backfill is refused too and the message says so.
+    single: (mine) => `Skipped: a feed check is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). A check with a since date waits until that one ends too. Watch it on Runs & Schedule and run again once it ends.`,
     params: z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
     build: (p, ctx) => node(ctx, 'immigrationWatch', opt(p.since, '--since')),
   }),
