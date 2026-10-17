@@ -282,11 +282,12 @@ export class ScheduleService {
     fs.renameSync(tmp, plistPath);
     let enabledNow = false;
     let disabledNow = false;
+    let bootstrapped = false;
     const failed = async (error: string, stderr: string): Promise<ScheduleWriteResult> => {
       // A flag this save changed without knowing its prior value cannot be put back, so the restore does not claim it was.
       const flagUnknown = (enabledNow || disabledNow) && !disabledKnown;
       const disabledAfterSave = disabledNow || (!enabledNow && wasDisabled);
-      const restored = (await this.restore({ plistPath, target, previous, wasLoaded, disabledAfterSave, disabledBefore: disabledKnown ? wasDisabled : disabledAfterSave })) && !flagUnknown;
+      const restored = (await this.restore({ plistPath, target, previous, wasLoaded, bootstrapped, disabledAfterSave, disabledBefore: disabledKnown ? wasDisabled : disabledAfterSave })) && !flagUnknown;
       return { ok: false, status: 502, error: `${error}; ${restored ? 'the previous schedule was restored' : 'restoring the previous schedule also failed'}`, stderr };
     };
     if (input.enabled) {
@@ -306,6 +307,7 @@ export class ScheduleService {
       return failed(`launchctl bootout failed (exit ${bootout.code}) and the job may still be loaded`, bootout.stderr.trim());
     }
     if (input.enabled) {
+      bootstrapped = true;
       const boot = await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, plistPath], { timeoutMs: 20_000 });
       if (boot.code !== 0) return failed(`launchctl bootstrap failed (exit ${boot.code})`, boot.stderr.trim());
     }
@@ -314,9 +316,9 @@ export class ScheduleService {
 
   /**
    * Puts back what a save changed before a launchctl step failed: the previous plist (or none), the loaded job the save
-   * booted out, and the disabled flag the save cleared or set. Answers whether every step worked.
+   * booted out or the job it loaded, and the disabled flag the save cleared or set. Answers whether every step worked.
    */
-  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; disabledAfterSave: boolean; disabledBefore: boolean }): Promise<boolean> {
+  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; bootstrapped: boolean; disabledAfterSave: boolean; disabledBefore: boolean }): Promise<boolean> {
     if (s.previous === null) fs.rmSync(s.plistPath, { force: true });
     else {
       const tmp = `${s.plistPath}.restore-${process.pid}`;
@@ -336,7 +338,8 @@ export class ScheduleService {
       // gets its flag back below.
       await setDisabled(false);
       ok = (await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, s.plistPath], { timeoutMs: 20_000 })).code === 0 && ok;
-    } else if (!s.wasLoaded && loaded) {
+    } else if (!s.wasLoaded && loaded && s.bootstrapped) {
+      // Only a job this save loaded is booted out; one another client loaded meanwhile is not this save's to undo.
       ok = (await this.deps.exec('launchctl', ['bootout', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     }
     await setDisabled(s.disabledBefore);

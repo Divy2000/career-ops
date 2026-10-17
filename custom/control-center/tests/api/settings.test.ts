@@ -654,6 +654,29 @@ describe('launchd schedule through the injectable executor (never the real launc
       await app.close();
     }
   });
+  it('a rollback leaves loaded a job this save never loaded, such as one another client loaded mid-save (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    const label = 'com.career-ops.upstream-sync';
+    let failBootouts = 0;
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'disable') base.loaded.add(label);
+      if (cmd === 'launchctl' && args[0] === 'bootout' && failBootouts > 0) {
+        failBootouts--;
+        return { code: 5, stdout: '', stderr: 'fake launchctl: bootout failed' };
+      }
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      failBootouts = 1;
+      const res = await app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload: { hour: 9, minute: 0, weekday: 0, enabled: false } });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/launchctl bootout failed/);
+      expect(base.loaded.has(label)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
   it('a disable rollback clears the disabled flag before it loads the job again, since launchd refuses to load a disabled job (R28-srv-core-X-01)', async () => {
     const base = fakeLaunchdExec();
     let phase: 'setup' | 'bootout' | 'after' = 'setup';
