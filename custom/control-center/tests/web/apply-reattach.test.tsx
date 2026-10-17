@@ -337,6 +337,18 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('');
   });
 
+  it('Given a re-attached draft started from a typed apply link, When a reply forks it, Then the fork keeps that link and prefill uses it (R30-feat-a-X-01)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.typedUrl.s-apply-12', 'https://boards.greenhouse.io/acme/jobs/123');
+    await openApply();
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!.value).toBe('https://boards.greenhouse.io/acme/jobs/123');
+    await act(async () => applyPanel()!.onSessionId!('s-apply-fork'));
+
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-fork' });
+    expect(sessionStorage.getItem('cc.apply.typedUrl.s-apply-fork')).toBe('https://boards.greenhouse.io/acme/jobs/123');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!.value).toBe('https://boards.greenhouse.io/acme/jobs/123');
+  });
+
   it('Given a CV PDF picked while the draft is still starting, When the page comes back, Then that pick is kept (R29-feat-a-L1-02)', async () => {
     docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-short.pdf'], covers: [], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: null };
     await openApply();

@@ -211,14 +211,16 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const rememberSessionId = remembered.panel.onSessionId;
   const onSessionId = useCallback(
     (sid: string) => {
-      if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
+      // A fork of a re-attached draft carries the draft's link on, as it does its documents.
+      const link = typedUrl ?? (sid !== sessionId ? storedUrl : null);
+      if (link !== null) writeTypedUrl(sid, link.trim());
       // Only the user's picks are kept: a preselected suggestion is no choice, so a newer tailored file is preselected
       // when the page comes back. A reply reports the draft it runs in: its prompt named no documents, so the draft's
       // own are left as they are. A fork of a re-attached draft carries the draft's choices on.
       if (sid !== sessionId) writeDraftDocs(sid, { pdf: latestPicks.current.pdf ?? storedPdf, cover: latestPicks.current.cover ?? storedCover });
       rememberSessionId(sid);
     },
-    [typedUrl, sessionId, storedPdf, storedCover, rememberSessionId],
+    [typedUrl, storedUrl, sessionId, storedPdf, storedCover, rememberSessionId],
   );
   // A pick made after the draft started is the one Fill attaches, so it is kept for the re-attached draft as well.
   const pickDoc = (kind: keyof DraftDocs, value: string) => {
