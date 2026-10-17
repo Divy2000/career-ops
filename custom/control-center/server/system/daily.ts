@@ -55,6 +55,8 @@ export function dailyPidfileProbe(dataRoot: string, exec: Exec): DailyProbe {
 export class DailyJobWatch {
   private timer: NodeJS.Timeout | null = null;
   private state: DailyStatus = { running: false, checkedAt: null };
+  private started = 0;
+  private applied = 0;
 
   constructor(
     private probe: DailyProbe,
@@ -86,7 +88,12 @@ export class DailyJobWatch {
   }
 
   async poll(): Promise<void> {
+    // Polls overlap (the timer's and runningNow's): a result is dropped once a poll started after it has set the
+    // state, so an older probe that answers last cannot bring back a running job that has since stopped.
+    const generation = ++this.started;
     const running = await this.probe();
+    if (generation < this.applied) return;
+    this.applied = generation;
     const changed = running !== this.state.running;
     this.state = { running, checkedAt: new Date().toISOString() };
     if (changed) this.bus.publish('daily.status', { running });
