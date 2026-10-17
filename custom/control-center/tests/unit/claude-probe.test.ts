@@ -53,6 +53,16 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
     for (const lines of calls.filter((l) => l[0] === 'ARG1=-p')) expect(lines).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${FAKE_TOKEN}`);
   });
 
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and runs the claude on PATH (R27-sup1-rev-01)', () => {
+    for (const value of ['', '  ']) {
+      const box = sandbox();
+      fs.writeFileSync(path.join(box.bin, 'claude'), '#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+      const r = runProbe('claude-probe.mjs', box, value);
+      expect(r.status, r.stderr).toBe(0);
+      expect(JSON.parse(r.stdout).claudeVersion, JSON.stringify(value)).toMatch(/9\.9\.9/);
+    }
+  });
+
   it('prints the summary with the spawn error instead of crashing when the CLI cannot be spawned', () => {
     const box = sandbox();
     const r = runProbe('claude-probe.mjs', box, path.join(box.bin, 'no-such-claude'));
@@ -67,6 +77,16 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
 });
 
 describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and runs the claude on PATH (R27-sup1-rev-01)', () => {
+    for (const value of ['', '  ']) {
+      const box = sandbox();
+      // Answers --version, then disappears, as below: only the version read matters here.
+      fs.writeFileSync(path.join(box.bin, 'claude'), '#!/bin/sh\nrm -f "$0"\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
+      const r = runProbe('claude-probe-reads.mjs', box, value);
+      expect(JSON.parse(r.stdout).version, JSON.stringify(value) + r.stderr).toBe('9.9.9');
+    }
+  });
+
   it('still removes the home and ~/.claude canaries and prints the summary when the CLI cannot be spawned', () => {
     const box = sandbox();
     const claude = path.join(box.bin, 'claude');

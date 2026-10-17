@@ -9,7 +9,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
-const claudeBin = process.env.CC_CLAUDE_BIN ?? 'claude';
+const claudeBin = process.env.CC_CLAUDE_BIN?.trim() || 'claude';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-probe-'));
 const token = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8' });
 if (token.status !== 0) {

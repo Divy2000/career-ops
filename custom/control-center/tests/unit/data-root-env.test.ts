@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { dataRootFromEnv } from '../../supervisor/data-root.js';
 import { configFromEnv } from '../../server/config.js';
 
@@ -42,6 +45,17 @@ describe('configFromEnv claudeBin', () => {
   it('resolves a relative CC_CLAUDE_BIN to an absolute path once, so sessions, the plist and Run the daily job now share it', () => {
     expect(configFromEnv({ ...base, CC_CLAUDE_BIN: './bin/claude', INIT_CWD: '/work/here' }).claudeBin).toBe('/work/here/bin/claude');
     expect(configFromEnv({ ...base, CC_CLAUDE_BIN: '/opt/custom/claude' }).claudeBin).toBe('/opt/custom/claude');
+  });
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and finds claude on PATH (R27-sup1-rev-01)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-config-claude-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+      for (const value of ['', '   ', '\t\n']) {
+        expect(configFromEnv({ ...base, PATH: dir, CC_CLAUDE_BIN: value }).claudeBin, JSON.stringify(value)).toBe(path.join(dir, 'claude'));
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

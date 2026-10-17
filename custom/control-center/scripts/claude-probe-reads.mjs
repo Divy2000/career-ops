@@ -27,7 +27,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..');
 const GUARD_HOOK = path.join(PACKAGE_ROOT, 'server', 'claude', 'guard-hook.mjs');
 const CONTRACT_FILE = path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json');
-const claudeBin = process.env.CC_CLAUDE_BIN ?? 'claude';
+const claudeBin = process.env.CC_CLAUDE_BIN?.trim() || 'claude';
 const args = process.argv.slice(2);
 const only = (() => {
   const i = args.indexOf('--only');

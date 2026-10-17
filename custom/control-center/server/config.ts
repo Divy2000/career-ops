@@ -69,7 +69,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     sessionSecret: requireEnv('CC_SESSION_SECRET'),
     client,
     // Absolute once, here: sessions, the daily plist and Run the daily job now all run this path.
-    claudeBin: resolveClaudeBin(env.CC_CLAUDE_BIN ?? 'claude', { env }),
+    claudeBin: resolveClaudeBin(env.CC_CLAUDE_BIN?.trim() || 'claude', { env }),
     nodeEnv: env.NODE_ENV ?? 'development',
     watch: env.CC_WATCH !== '0',
     launchAgentsDir: env.CC_LAUNCH_AGENTS_DIR ?? path.join(os.homedir(), 'Library', 'LaunchAgents'),
