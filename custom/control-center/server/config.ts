@@ -73,7 +73,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     nodeEnv: env.NODE_ENV ?? 'development',
     watch: env.CC_WATCH !== '0',
     launchAgentsDir: env.CC_LAUNCH_AGENTS_DIR ?? path.join(os.homedir(), 'Library', 'LaunchAgents'),
-    claudeProjectsDir: env.CC_CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), '.claude', 'projects'),
+    // Where the claude child keeps transcripts and tool-results: it inherits CLAUDE_CONFIG_DIR (childEnv keeps it).
+    claudeProjectsDir: env.CC_CLAUDE_PROJECTS_DIR ?? path.join(env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude'), 'projects'),
     ...(env.NODE_ENV === 'test' && env.CC_H1B_CHECK_SCRIPT ? { h1bCheckScript: env.CC_H1B_CHECK_SCRIPT } : {}),
     ...(env.NODE_ENV === 'test' && env.CC_PLUGINS_LOCAL_DIR ? { pluginsLocalDir: env.CC_PLUGINS_LOCAL_DIR } : {}),
     ...fakeDailyFromEnv(env),
