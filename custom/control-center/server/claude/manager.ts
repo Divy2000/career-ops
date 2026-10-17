@@ -737,7 +737,13 @@ export class SessionManager {
           } else if (recorded) {
             // The session holds the number now and releases it as a first turn that cannot start does.
             handed.add(num);
-            sessions.push(await this.failBeforeSpawn(recorded, message));
+            try {
+              sessions.push(await this.failBeforeSpawn(recorded, message));
+            } catch (failErr) {
+              // Its record could not be settled either: the others still start, and deleting this one settles it.
+              console.warn(`[sessions] session ${recorded.id}: could not record why its first turn did not start: ${(failErr as Error).message}`);
+              sessions.push(this.read(recorded.id) ?? { ...recorded, status: 'error', error: message, lastReason: message });
+            }
           } else {
             sessions.push(unstartedMeta(input.mode, target, input.model ?? null, message));
           }
@@ -1031,6 +1037,15 @@ export class SessionManager {
     return stored;
   }
 
+  /** An event the session record already says: one that cannot be appended is warned of, not thrown. */
+  private emitBestEffort(sessionId: string, event: SessionEvent): void {
+    try {
+      this.emit(sessionId, event);
+    } catch (err) {
+      console.warn(`[sessions] session ${sessionId}: could not record its ${event.type} event: ${(err as Error).message}`);
+    }
+  }
+
   private turnStatePath(id: string, n: number): string {
     return path.join(this.store.guardDirOf(id), 'turns', String(n), 'turn.json');
   }
@@ -1057,17 +1072,18 @@ export class SessionManager {
    */
   private async failBeforeSpawn(meta: SessionMeta, message: string): Promise<SessionMeta> {
     this.store.setStatus(meta.id, 'error', message);
-    this.emit(meta.id, { type: 'error', message });
     const current = this.store.read(meta.id);
     const num = current?.reportNum ?? null;
+    // Before any event: an event log that cannot be appended to must not keep the number reserved.
     if (num !== null && meta.turns.length === 0) {
       // Only while still the session's: the stale GC may have collected it and another reservation claimed it since.
       const since = this.ownedSince(current!, num);
       this.store.setReportNum(meta.id, null);
       await this.releaseReportNum(num, false, since);
     }
+    this.emitBestEffort(meta.id, { type: 'error', message });
     // Last, so a stream consumer that reloads the session on a terminal status sees the reservation released.
-    this.emit(meta.id, { type: 'status', status: 'error', reason: message });
+    this.emitBestEffort(meta.id, { type: 'status', status: 'error', reason: message });
     this.bus.publish('session.status', { sessionId: meta.id, status: 'error', mode: meta.mode });
     return this.store.read(meta.id)!;
   }
@@ -1296,10 +1312,13 @@ export class SessionManager {
    * stays with the session, as for one that cannot start.
    */
   private async endCancelledBeforeSpawn(meta: SessionMeta): Promise<SessionMeta> {
-    const num = this.store.read(meta.id)?.reportNum ?? null;
+    const current = this.store.read(meta.id);
+    const num = current?.reportNum ?? null;
     if (num !== null && meta.turns.length === 0) {
+      // Only while still the session's: the stale GC may have collected it and another reservation claimed it since.
+      const since = this.ownedSince(current!, num);
       this.store.setReportNum(meta.id, null);
-      const reason = `cancelled by the user before the turn started; ${await this.releaseReportNum(num, false)}`;
+      const reason = `cancelled by the user before the turn started; ${await this.releaseReportNum(num, false, since)}`;
       // Last, so a stream consumer that reloads the session on a terminal status sees the reservation released.
       this.emit(meta.id, { type: 'status', status: 'cancelled', reason });
       this.bus.publish('session.status', { sessionId: meta.id, status: 'cancelled', mode: meta.mode });
@@ -1326,7 +1345,9 @@ export class SessionManager {
       assertRootsConfinable(this.cfg.codeRoot, this.cfg.dataRoot, this.deps.home ?? os.homedir());
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
-      if (n > 1) meta = await this.reassertReservation(meta);
+      // A later turn, or a reply to a session whose first turn never ran: either may have held its number past the stale
+      // GC. Only a new session's own first turn got it a moment ago.
+      if (n > 1 || opts.original !== true) meta = await this.reassertReservation(meta);
       // Only a sentinel written no later than the session got the number is its reservation: a first turn that waited past
       // the GC may find another evaluation's sentinel under it.
       // A hold that cannot be recorded only means the hook refuses that release: the turn goes on.
