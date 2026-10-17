@@ -148,7 +148,7 @@ describe('moving an evaluated posting to Processed', () => {
   });
 
   it('leaves the file alone when the URL is not pending: skipped, flagged, another URL, or no Pending section', () => {
-    for (const md of [`## Pending\n- [x] ${URL} | Acme | Eng\n`, `## Pending\n- [ ] ${URL}?gh_src=x | Acme | Eng\n`, `## Pending\n- [!] ${URL}?gh_src=x \u2014 Error: login required\n`, `- [ ] ${URL}\n`]) {
+    for (const md of [`## Pending\n- [x] ${URL} | Acme | Eng\n`, `## Pending\n- [ ] https://boards.greenhouse.io/acme/jobs/2 | Acme | Eng\n`, `## Pending\n- [!] https://boards.greenhouse.io/acme/jobs/2 \u2014 Error: login required\n`, `- [ ] ${URL}\n`]) {
       expect(moveToProcessed(md, URL, POSTING)).toEqual({ text: md, moved: false });
     }
   });
@@ -258,5 +258,43 @@ describe('a PDF header path that cannot be resolved', () => {
     fs.writeFileSync(path.join(root, 'reports', '2026-10-17.md'), '# Digest\n');
     await expect(markPipelineEvaluated(DEFAULT_CODE_ROOT, root, URL, '2026-10-17.md')).rejects.toThrow('not a numbered report file: 2026-10-17.md');
     expect(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8')).toBe(pipeline);
+  });
+});
+
+// Sessions and POST /api/pipeline/add treat two spellings of one posting as one (shared/dedup-url.ts), so an evaluation
+// started from a twin of the Pending row's URL must still move that row (R29-feat-b-L1-01b).
+describe('a Pending row whose URL is a dedup twin of the evaluated one', () => {
+  const ROW = 'https://Boards.Greenhouse.io/acme/jobs/1/?utm_source=linkedin';
+
+  it('moves to Processed under its own spelling, for tracking params, a trailing slash and host case', () => {
+    const md = `## Pending\n\n- [ ] ${ROW} | Acme | Eng\n\n## Processed\n`;
+    const r = moveToProcessed(md, URL, POSTING);
+    expect(r.moved).toBe(true);
+    expect(r.text).toBe(`## Pending\n\n\n## Processed\n\n- [x] #042 | ${ROW} | Acme | Eng | 4.2/5 | PDF ❌\n`);
+  });
+
+  it('is dropped without a second Processed line when a twin is already listed there', () => {
+    const md = `## Pending\n\n- [ ] ${ROW} | Acme | Eng\n\n## Processed\n\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ❌\n`;
+    const r = moveToProcessed(md, URL, POSTING);
+    expect(r.moved).toBe(true);
+    expect(r.text).toBe(`## Pending\n\n\n## Processed\n\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ❌\n`);
+  });
+
+  it('a local JD path still matches only as written: another case names another file', () => {
+    const md = '## Pending\n\n- [ ] local:jds/Acme-Eng.md | Acme | Eng\n\n## Processed\n';
+    expect(moveToProcessed(md, 'local:jds/acme-eng.md', POSTING).moved).toBe(false);
+    expect(moveToProcessed(md, 'local:jds/Acme-Eng.md', POSTING).moved).toBe(true);
+  });
+
+  it('moves through markPipelineEvaluated, the call a finished session makes', async () => {
+    const root = tempDir('cc-pp-twin-');
+    fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `## Pending\n\n- [ ] ${ROW} | Acme | Eng\n`);
+    fs.writeFileSync(path.join(root, 'reports', '042-acme.md'), '# Evaluation: Acme - Eng\n\n**Score:** 4.2/5\n**PDF:** pending\n');
+    expect(await markPipelineEvaluated(DEFAULT_CODE_ROOT, root, URL, '042-acme.md')).toBe(true);
+    const after = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8');
+    expect(after).not.toContain('- [ ] ');
+    expect(after).toContain(`- [x] #042 | ${ROW} | Acme | Eng | 4.2/5 | PDF ❌`);
   });
 });

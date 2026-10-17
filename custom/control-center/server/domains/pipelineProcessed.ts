@@ -11,6 +11,7 @@ import { readReport, reportNumberOf } from './reports.js';
 import { inside } from '../lib/paths.js';
 import { isProcessedHeading, pipelineSection, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
 import { WRITTEN_SEGMENT } from './pipeline.js';
+import { dedupUrlKey } from '../../shared/dedup-url.js';
 
 const HEADING_RE = /^##\s+(.+?)\s*$/;
 const headingTitle = (line: string): string | null => line.match(HEADING_RE)?.[1] ?? null;
@@ -52,6 +53,13 @@ export function pdfGenerated(header: string | null, dataRoot: string): boolean {
   }
   return false;
 }
+
+/**
+ * The key a row's URL matches the evaluated posting by: dedupUrlKey for a web URL, the one sessions and
+ * POST /api/pipeline/add dedup postings by, so a twin (tracking params, a trailing slash, host case) is the same row. A
+ * local:jds/ path is a file name, matched as written.
+ */
+const postingKey = (url: string): string => (/^https?:\/\//i.test(url) ? dedupUrlKey(url) : url);
 
 /** "{url} | company | role" to "{url}". A `[!]` row notes its error after the URL, so only its first word is the URL. */
 function lineUrl(body: string, flagged: boolean): string {
@@ -96,11 +104,11 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     for (let i = procStart + 1; i < sectionEnd(procStart); i++) {
       const m = lines[i]!.match(/^- \[x\]\s+(.+)$/i);
       const cell = m?.[1]!.split('|').map((s) => s.trim())[1];
-      if (cell) listed.add(unescapeMarkdownUrl(cell));
+      if (cell) listed.add(postingKey(unescapeMarkdownUrl(cell)));
     }
   }
   // Rows hold the URL as scan.mjs escaped it ([, ] and \ backslashed); callers pass the posting URL.
-  const target = unescapeMarkdownUrl(url);
+  const target = postingKey(unescapeMarkdownUrl(url));
   const remove = new Set<number>();
   let processedLine: string | null = null;
   // scan.mjs appends a row under its own `## Pending` heading when the file's Pending heading is not English or
@@ -120,7 +128,7 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     const rest = lines[i]!.replace(OPEN_ITEM_RE, '');
     const body = rest.match(STRUCK)?.[1] ?? rest;
     const cell = lineUrl(body, open[1] === '!');
-    if (unescapeMarkdownUrl(cell) !== target) continue;
+    if (postingKey(unescapeMarkdownUrl(cell)) !== target) continue;
     remove.add(i);
     if (listed.has(target) || processedLine !== null) continue;
     // Company and role are the positional cells after the URL: a rank, posted, trust or note segment a writer appended

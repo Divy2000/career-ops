@@ -170,3 +170,128 @@ describe('read-confinement probe release gate', () => {
   });
 });
 
+
+/**
+ * The exports list is the set of core names the server relies on, so a rename upstream fails the export check above.
+ * That only works while the list matches what the server calls: a name the server calls but the contract misses is
+ * never checked (R29-w6a-contract). The called names are read from the server source: the type argument of every
+ * importCore call, the static imports of a contracted module, a contracted module a worker thread loads by path, and
+ * an exported error class the server recognizes by its name (`err.name === 'LockTimeoutError'`).
+ */
+describe('core contract export list', () => {
+  const ccRoot = path.join(DEFAULT_CODE_ROOT, 'custom', 'control-center');
+  const contracted = new Set(CONTRACT.exports.map((e) => e.module));
+
+  const sourceFiles = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return sourceFiles(p);
+      return /\.(ts|mjs)$/.test(e.name) ? [p] : [];
+    });
+  const stripComments = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/[^\n]*/g, '$1');
+
+  /** The text of the balanced `{...}` starting at `open`, braces excluded. */
+  function braceBody(s: string, open: number): string {
+    let depth = 0;
+    for (let i = open; i < s.length; i++) {
+      if (s[i] === '{') depth++;
+      else if (s[i] === '}' && --depth === 0) return s.slice(open + 1, i);
+    }
+    throw new Error(`unbalanced braces at ${open}`);
+  }
+
+  /** The top-level member names of a type literal or interface body. */
+  function memberNames(body: string): string[] {
+    const names: string[] = [];
+    let depth = 0;
+    let start = 0;
+    const take = (end: number) => {
+      const m = /^\s*(?:readonly\s+)?(\w+)\??\s*[:(<]/.exec(body.slice(start, end));
+      if (m) names.push(m[1]!);
+      start = end + 1;
+    };
+    for (let i = 0; i < body.length; i++) {
+      const c = body[i]!;
+      if ('({[<'.includes(c)) depth++;
+      else if (')}]'.includes(c) || (c === '>' && body[i - 1] !== '=')) depth--;
+      else if (depth === 0 && ';,\n'.includes(c)) take(i);
+    }
+    take(body.length);
+    return names;
+  }
+
+  function resolveType(file: string, src: string, name: string): string[] {
+    const decl = new RegExp(`(?:interface\\s+${name}\\b[^{]*|type\\s+${name}\\s*=\\s*)\\{`).exec(src);
+    if (!decl) throw new Error(`${path.relative(ccRoot, file)}: importCore<${name}> needs ${name} declared in the same file so the contract test can read its members`);
+    return memberNames(braceBody(src, decl.index + decl[0].length - 1));
+  }
+
+  async function calledExports(): Promise<Map<string, Set<string>>> {
+    const called = new Map<string, Set<string>>();
+    const add = (module: string, names: string[]) => {
+      const set = called.get(module) ?? new Set<string>();
+      for (const n of names) set.add(n);
+      called.set(module, set);
+    };
+    const files = sourceFiles(path.join(ccRoot, 'server')).map((f) => ({ f, src: stripComments(fs.readFileSync(f, 'utf8')) }));
+    const workerModules = new Map<string, string>();
+    for (const { f, src } of files) {
+      if (f.endsWith(path.join('server', 'core', 'adapter.ts'))) continue;
+      for (const m of src.matchAll(/importCore<\s*/g)) {
+        const at = m.index + m[0].length;
+        let names: string[];
+        let rest: string;
+        if (src[at] === '{') {
+          const body = braceBody(src, at);
+          names = memberNames(body);
+          rest = src.slice(at + body.length + 2);
+        } else {
+          const id = /^(\w+)/.exec(src.slice(at))![1]!;
+          names = resolveType(f, src, id);
+          rest = src.slice(at + id.length);
+        }
+        const mod = /^\s*>\s*\([^,]+,\s*'([^']+)'\s*\)/.exec(rest);
+        if (!mod) throw new Error(`${path.relative(ccRoot, f)}: importCore call without a literal module`);
+        add(mod[1]!, names);
+      }
+      for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'(\.\.?\/[^']+)'/g)) {
+        const mod = path.relative(DEFAULT_CODE_ROOT, path.resolve(path.dirname(f), m[2]!)).split(path.sep).join('/');
+        if (!contracted.has(mod)) continue;
+        add(mod, m[1]!.split(',').map((s) => s.trim().split(/\s+as\s+/)[0]!.replace(/^type\s+/, '')).filter(Boolean));
+      }
+      for (const m of src.matchAll(/(\w+):\s*coreModulePath\([^,]+,\s*'([^']+)'\)/g)) workerModules.set(m[1]!, m[2]!);
+    }
+    const errorNames = new Set(files.flatMap(({ src }) => [...src.matchAll(/\.name\s*===\s*'(\w+)'/g)].map((x) => x[1]!)));
+    for (const module of contracted) {
+      const mod = await importCore<Record<string, unknown>>(DEFAULT_CODE_ROOT, module as never);
+      add(module, [...errorNames].filter((n) => typeof mod[n] === 'function'));
+      if (called.get(module)?.size === 0) called.delete(module);
+    }
+    for (const [key, mod] of workerModules) {
+      const loaders = files.filter(({ src }) => new RegExp(`\\{[^}]*\\b${key}\\b[^}]*\\}\\s*=\\s*workerData`).test(src));
+      expect(loaders.length, `a worker reads ${key} from workerData`).toBeGreaterThan(0);
+      for (const { src } of loaders) {
+        const bound = new RegExp(`(\\w+)\\s*=\\s*await\\s+import\\(\\s*pathToFileURL\\(\\s*${key}\\s*\\)`).exec(src);
+        expect(bound, `the worker imports ${key}`).not.toBeNull();
+        add(mod, [...src.matchAll(new RegExp(`\\b${bound![1]}\\.(\\w+)`, 'g'))].map((x) => x[1]!));
+      }
+    }
+    return called;
+  }
+
+  it('lists exactly the core exports the server calls', async () => {
+    const called = await calledExports();
+    const asObject = (entries: Array<[string, Iterable<string>]>) => Object.fromEntries(entries.map(([m, n]) => [m, [...n].sort()]).sort(([a], [b]) => String(a).localeCompare(String(b))));
+    expect(asObject(CONTRACT.exports.map((e) => [e.module, e.names]))).toEqual(asObject([...called]));
+  });
+
+  it('reads the names off every kind of call site', async () => {
+    // A reader that finds nothing makes the comparison above vacuous for that kind of call.
+    const called = await calledExports();
+    expect(called.get('tracker-parse.mjs')).toContain('extractTrackerReportLinks');
+    expect(called.get('contacts.mjs')).toContain('buildVcf');
+    expect(called.get('intake.mjs')).toContain('detectPdfExtractor');
+    expect(called.get('path-resolver.mjs')).toContain('rawTrackerPath');
+    expect(called.get('pipeline-lock.mjs')).toContain('LockTimeoutError');
+  });
+});
