@@ -11,16 +11,25 @@ import path from 'node:path';
 import { companySlug, parsePolicyChanges, readCheckedAt, readSeenChangeCount, decideRefresh } from './lib.mjs';
 import { getCareerOpsRoot } from '../../path-resolver.mjs';
 import { localToday } from '../../lib/local-today.mjs';
+import { validateFlags, flagValue, hasFlag } from '../../lib/cli-flags.mjs';
 
 const ROOT = getCareerOpsRoot();
 const CHANGES = path.join(ROOT, 'data/immigration/policy-changes.tsv');
 
+const USAGE = `Usage: node custom/immigration/freshness.mjs "<Company name>" [--today YYYY-MM-DD]
+Prints whether the company's saved sponsorship check should be refetched today.
+  --today YYYY-MM-DD   the day that counts as today (default: the local date)
+`;
+
 async function main() {
   const args = process.argv.slice(2);
-  const ti = args.indexOf('--today');
-  const today = ti === -1 ? localToday() : args[ti + 1];
-  const company = args.find((_, i) => ti === -1 || (i !== ti && i !== ti + 1));
-  if (!company) throw new Error('usage: freshness.mjs "<Company name>" [--today YYYY-MM-DD]');
+  // An unknown flag (--json) is refused rather than checked as a company name.
+  validateFlags(args, ['--today', '--help', '-h'], USAGE, { valueFlags: ['--today'], requireOperand: true });
+  const operands = args.filter((a, i) => !a.startsWith('-') && args[i - 1] !== '--today');
+  if (operands.length !== 1) throw new Error(`expected exactly one company name, got ${operands.length}\n${USAGE}`);
+  const [company] = operands;
+  const today = hasFlag(args, '--today') ? flagValue(args, '--today') : localToday();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(today ?? '')) throw new Error('--today needs a YYYY-MM-DD date');
 
   const slug = companySlug(company);
   const rel = `data/immigration/companies/${slug}.md`;
