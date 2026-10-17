@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp } from '../helpers/app.js';
@@ -81,4 +81,22 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
       await app.close();
     }
   }, 30_000);
+
+  it('given a running Batch evaluate turn whose sentinel the stale GC collected, when the turn ends, then no release runs that could remove a reservation written in the meantime, and the loss is warned of', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-gone');
+      fs.rmSync(sentinelPath(app, n));
+      await until(() => warn.mock.calls.flat().join('\n').includes(`reservation of report number ${n} was collected`));
+      go();
+
+      const { meta } = await settleOn(app, id);
+      expect(meta.lastReason).toMatch(new RegExp(`report number ${n} was already lost`));
+    } finally {
+      await app.close();
+      warn.mockRestore();
+    }
+  }, 30_000);
 });
+

@@ -141,6 +141,7 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
+  private lostReservationsWarned = new Set<string>();
   /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
@@ -756,10 +757,19 @@ export class SessionManager {
     const sentinel = this.sentinelPath(num);
     try {
       if (Date.now() - fs.statSync(sentinel).mtimeMs < RESERVATION_REFRESH_AGE_MS) return;
-      this.refreshReservation(meta, num);
+      if (!this.refreshReservation(meta, num)) this.warnReservationLost(id, num);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[sessions] session ${id}: could not refresh the reservation for report number ${num}: ${(err as Error).message}`);
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') this.warnReservationLost(id, num);
+      else console.warn(`[sessions] session ${id}: could not refresh the reservation for report number ${num}: ${(err as Error).message}`);
     }
+  }
+
+  /** Said once per session and number: the tracker ticks again every poll. Finalize then leaves the number alone. */
+  private warnReservationLost(id: string, num: number): void {
+    const key = `${id}\0${num}`;
+    if (this.lostReservationsWarned.has(key)) return;
+    this.lostReservationsWarned.add(key);
+    console.warn(`[sessions] session ${id}: its reservation of report number ${num} was collected while its turn runs; the number may be handed out again`);
   }
 
   private sentinelPath(num: number): string {
@@ -1156,9 +1166,8 @@ export class SessionManager {
       const creditedHeld = meta.creditedReport?.num === num && fs.existsSync(path.join(this.cfg.dataRoot, 'reports', meta.creditedReport.file));
       const used = newReports.some((x) => x.num === num) || creditedHeld;
       // A report holding the number means no other reservation can have claimed it; otherwise the stale GC may have, and
-      // the sentinel now there is someone else's. One already gone has nothing to protect: its release is a no-op.
-      const own = used ? null : this.reservationOwnership(meta, num);
-      const owns = own ? () => !fs.existsSync(this.sentinelPath(num)) || own() : undefined;
+      // the sentinel now there (or the one a reservation writes before the release runs) is someone else's.
+      const owns = used ? undefined : this.reservationOwnership(meta, num);
       // Claimed before the await, so no other finalize of this turn can release the number again.
       this.store.setReportNum(id, null);
       reason += `; ${await this.releaseReportNum(num, used, owns)}`;
