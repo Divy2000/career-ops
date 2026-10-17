@@ -717,6 +717,18 @@ export class SessionManager {
    */
   async delete(id: string): Promise<boolean> {
     if (this.active.has(id) || this.sending.has(id)) throw new BusyError(`session ${id} is still running`);
+    if (this.store.read(id) === null) return this.store.delete(id);
+    // Another server process starting a turn on the session holds its claim: deleting it now leaves that turn starting
+    // on a session that no longer exists.
+    const unclaimTurn = this.claimTurn(id);
+    try {
+      return await this.deleteClaimed(id);
+    } finally {
+      unclaimTurn();
+    }
+  }
+
+  private async deleteClaimed(id: string): Promise<boolean> {
     const meta = this.store.read(id);
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
