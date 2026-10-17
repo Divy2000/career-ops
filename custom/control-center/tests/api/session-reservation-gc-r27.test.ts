@@ -221,4 +221,25 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
       warn.mockRestore();
     }
   }, 30_000);
+  it('given a running Batch evaluate turn whose number another reservation claimed, when its run record reads as gone and the turn ends in error, then the other reservation is left alone', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-run-gone');
+      const runId = app.sessions.read(id)!.turns[0]!.runId!;
+      fs.writeFileSync(sentinelPath(app, n), JSON.stringify({ pid: process.pid, token: 'someone-else', created_at: new Date(Date.now() + 1000).toISOString() }));
+      const read = app.runner.store.read.bind(app.runner.store);
+      vi.spyOn(app.runner.store, 'read').mockImplementation((other) => (other === runId ? null : read(other)));
+
+      const { meta } = await settleOn(app, id);
+      expect(meta).toMatchObject({ status: 'error', reportNum: null });
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+      expect(meta.lastReason).toMatch(new RegExp(`report number ${n} was already lost`));
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+      warn.mockRestore();
+    }
+  }, 30_000);
 });

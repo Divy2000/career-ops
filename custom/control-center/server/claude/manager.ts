@@ -1116,9 +1116,10 @@ export class SessionManager {
       let reason = cancelled ? `cancelled by the user; ${why}` : why;
       const num = meta.reportNum;
       if (num !== null && r.keepReservation !== true) {
-        // Claimed before the await, as finalize does, so the number is released once.
+        // Claimed before the await, as finalize does, so the number is released once, and only while it is still the session's.
+        const owns = this.creditedHolds(meta, num) ? undefined : this.reservationOwnership(meta, num);
         this.store.setReportNum(id, null);
-        reason += `; ${await this.releaseReportNum(num, null)}`;
+        reason += `; ${await this.releaseReportNum(num, null, owns)}`;
       }
       if (this.turnEnded(id, n)) return;
       const status = cancelled ? 'cancelled' : 'error';
