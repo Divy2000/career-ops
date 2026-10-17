@@ -288,18 +288,24 @@ function lockTurnClaimReplace(dir: string, text: string): (() => void) | null {
  * prepares (a slow token read), since a peer starting the turn beside it would run two turns. One whose start cannot be
  * compared counts as gone once the claim is stale, and a claim cut short once the unreadable grace has passed.
  */
-function turnClaimGone(file: string, text: string): boolean {
+export function turnClaimGone(file: string, text: string): boolean {
   let holder: { pid?: unknown; start?: unknown; at?: unknown };
   try {
     holder = JSON.parse(text) as typeof holder;
   } catch {
-    return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
+    return unreadableClaimGone(file);
   }
-  if (!Number.isInteger(holder.pid) || typeof holder.at !== 'number') return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
+  if (!Number.isInteger(holder.pid) || typeof holder.at !== 'number') return unreadableClaimGone(file);
   const start = processStartTime(holder.pid as number);
   if (start === null) return true;
   if (typeof start === 'number' && typeof holder.start === 'number') return start !== holder.start;
   return Date.now() - holder.at >= TURN_CLAIM_STALE_MS;
+}
+
+/** A claim with no readable holder is gone once the unreadable grace has passed, or once its holder removed it. */
+function unreadableClaimGone(file: string): boolean {
+  const st = fs.statSync(file, { throwIfNoEntry: false });
+  return st === undefined || Date.now() - st.mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
 }
 
 export interface ManagerDeps {
