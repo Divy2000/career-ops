@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { MEDIA_TYPES, listTutorials, parseManifest, parseRange, srtToVtt } from '../../server/domains/tutorials.js';
+import { MEDIA_TYPES, listTutorials, openMedia, parseManifest, parseRange, srtToVtt } from '../../server/domains/tutorials.js';
 import { guideFileNames, parseGuide } from '../../server/domains/tutorial-manifest.mjs';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -520,5 +520,35 @@ describe('listTutorials with parts', () => {
     const [tour] = listTutorials(root).tutorials;
     expect(tour!.parts).toEqual([{ id: 'main', title: 'Tour', short: 'Tour', description: null, duration: null, video: { file: 'a.mp4', url: url('a.mp4'), bytes: 1 }, videoLight: null, subtitles: null, poster: null, posterLight: null, chapters: [{ title: 'Intro', start: 0 }] }]);
     expect(tour!.chapters).toEqual([{ title: 'Intro', start: 0, part: 'main' }]);
+  });
+});
+
+describe('listTutorials when the tutorials folder itself cannot be read', () => {
+  let root: string;
+  const tutorials = () => path.join(root, 'data', 'control-center', 'tutorials');
+  beforeEach(() => {
+    root = tempDir('cc-tut-root-');
+    fs.mkdirSync(path.dirname(tutorials()), { recursive: true });
+  });
+  afterEach(() => {
+    if (fs.existsSync(tutorials()) && !fs.lstatSync(tutorials()).isSymbolicLink()) fs.chmodSync(tutorials(), 0o755);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('given a plain file where the tutorials folder should be, when listed, then it is an empty list with a root warning', () => {
+    fs.writeFileSync(tutorials(), 'stray');
+    expect(listTutorials(root)).toEqual({ directory: tutorials(), tutorials: [], warnings: [{ folder: '.', message: 'the tutorials folder cannot be read (ENOTDIR)' }] });
+  });
+
+  it('given a tutorials folder that is a symlink loop, when listed, then it is an empty list with a root warning and media is not found', () => {
+    fs.symlinkSync(tutorials(), tutorials());
+    expect(listTutorials(root)).toEqual({ directory: tutorials(), tutorials: [], warnings: [{ folder: '.', message: 'the tutorials folder cannot be read (ELOOP)' }] });
+    expect(openMedia(root, 'tour', 'a.mp4')).toEqual({ ok: false, status: 404, error: 'no such tutorial' });
+  });
+
+  it.skipIf(process.getuid?.() === 0)('given a tutorials folder with no permissions, when listed, then it is an empty list with a root warning', () => {
+    fs.mkdirSync(tutorials());
+    fs.chmodSync(tutorials(), 0o000);
+    expect(listTutorials(root).warnings).toEqual([{ folder: '.', message: 'the tutorials folder cannot be read (EACCES)' }]);
   });
 });

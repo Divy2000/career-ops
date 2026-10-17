@@ -215,10 +215,15 @@ export function tutorialsDir(dataRoot: string): string {
 }
 
 /** The tutorials folder as a realpath, or null when it is missing or resolves outside the (canonical) data root. */
-function realTutorialsRoot(dataRoot: string): string | null {
-  const base = realOrNull(dataRoot);
-  const root = realOrNull(tutorialsDir(dataRoot));
-  return base === null || root === null || !inside(base, root) ? null : root;
+/** The tutorials folder's realpath; null when it is absent or outside the data root, or the errno code when it cannot be resolved. */
+function realTutorialsRoot(dataRoot: string): string | null | { code: string } {
+  try {
+    const base = realOrNull(dataRoot);
+    const root = realOrNull(tutorialsDir(dataRoot));
+    return base === null || root === null || !inside(base, root) ? null : root;
+  } catch (err) {
+    return { code: fsErrorCode(err) };
+  }
 }
 
 const mediaUrl = (id: string, file: string) => `/api/tutorials/${id}/media/${encodeURIComponent(file)}`;
@@ -337,7 +342,15 @@ export function listTutorials(dataRoot: string): TutorialsRead {
   const root = realTutorialsRoot(dataRoot);
   if (root === null) return result;
   const skip = (folder: string, message: string) => result.warnings.push({ folder, message });
-  for (const folder of fs.readdirSync(root).filter((n) => !n.startsWith('.')).sort()) {
+  const unreadable = (code: string) => (skip('.', `the tutorials folder cannot be read (${code})`), result);
+  if (typeof root !== 'string') return unreadable(root.code);
+  let names: string[];
+  try {
+    names = fs.readdirSync(root);
+  } catch (err) {
+    return unreadable(fsErrorCode(err));
+  }
+  for (const folder of names.filter((n) => !n.startsWith('.')).sort()) {
     let dir: string | null;
     try {
       dir = realOrNull(path.join(root, folder));
@@ -413,7 +426,8 @@ export function openMedia(dataRoot: string, id: string, file: string): MediaOpen
   if (!file || file === '.' || file === '..' || /[/\\\0]/.test(file)) return { ok: false, status: 400, error: 'the file must be a plain file name' };
   const type = MEDIA_TYPES[extOf(file)];
   if (!type) return { ok: false, status: 415, error: 'unsupported file type' };
-  const root = realTutorialsRoot(dataRoot);
+  const resolved = realTutorialsRoot(dataRoot);
+  const root = typeof resolved === 'string' ? resolved : null;
   let folder: string | null;
   try {
     folder = root === null ? null : realOrNull(path.join(root, id));
