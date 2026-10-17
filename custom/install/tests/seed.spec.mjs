@@ -633,3 +633,20 @@ test('given config/local-paths.txt is a symlink to a shared file, when local-pat
   assert.equal(fs.readFileSync(shared, 'utf8'), 'notes/\ncustom/\n');
   assert.deepEqual(fs.readdirSync(path.dirname(link)), ['local-paths.txt']);
 });
+
+test('given a temp file a crashed earlier seed left under this process id, when projects-seed creates article-digest.md, then it is created rather than reported as existing (R28-scripts-b-L1-02 review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const text = '# My projects\n\n## Kite Tracker\n\n**Proof points:**\n- Tracked kites.\n';
+  const lib = put(path.join(d, 'src', 'lib.md'), text);
+  fs.mkdirSync(data, { recursive: true });
+  const stale = put(path.join(d, 'stale-tmp.mjs'), `import fs from 'node:fs';
+fs.writeFileSync(${JSON.stringify(data)} + '/.article-digest.md.tmp-' + process.pid, 'PARTIAL');
+`);
+  const res = seedWith(stale, ['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', lib]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim().split('\n').at(-1), 'created');
+  assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), text);
+  const temps = fs.readdirSync(data).filter((n) => n.includes('.tmp-'));
+  assert.deepEqual(temps.map((n) => fs.readFileSync(path.join(data, n), 'utf8')), ['PARTIAL'], 'only the crashed run\'s temp file is left');
+});

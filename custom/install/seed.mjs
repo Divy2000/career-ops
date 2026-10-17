@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { insertHouseRule, mergeLocalPaths, normalizeMarkdown, parseFlags, summarizeUnifiedDiff, uniqueDestName, validateProjectsInput } from './lib.mjs';
 
@@ -220,7 +221,8 @@ function copyNew(tmp, file) {
 
 // beforeRename runs once the new copy is fully written, so a failed write leaves nothing behind.
 function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync) {
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}`);
+  // Random as well as per process: a temp file a crashed run left under a reused pid must not block this write.
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
   try {
     fs.writeFileSync(tmp, text, { flag: 'wx' });
     beforeRename();
