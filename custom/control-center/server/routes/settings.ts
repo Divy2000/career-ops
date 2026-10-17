@@ -8,7 +8,7 @@ import type { EventBus } from '../watch/bus.js';
 import { cliScriptPath } from '../core/adapter.js';
 import { execNoShell, type Exec } from './system.js';
 import { etagMatches } from './config.js';
-import { BLACKLIST_DATE, blacklistRowSchema, readBlacklist, writeBlacklist } from '../domains/blacklist.js';
+import { BLACKLIST_DATE, blacklistOverCap, blacklistRowSchema, readBlacklist, writeBlacklist } from '../domains/blacklist.js';
 import { listPlugins } from '../domains/plugins.js';
 import { LOG_JOBS, type ScheduleJob, type ScheduleService } from '../system/schedule.js';
 import type { DailyJobWatch } from '../system/daily.js';
@@ -60,6 +60,8 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     const legacy = new Set(current.rows.map((r) => r.since));
     const badDate = body.data.rows.find((r) => !BLACKLIST_DATE.test(r.since) && !legacy.has(r.since));
     if (badDate) return reply.code(400).send({ error: `since must be YYYY-MM-DD for ${badDate.company} (got ${badDate.since || 'nothing'})` });
+    const overCap = blacklistOverCap(body.data.rows, current.rows);
+    if (overCap) return reply.code(400).send({ error: overCap });
     // Extra cells fill the file's own extra columns (names come from the file, never the request).
     const overfull = body.data.rows.find((r) => (r.extra?.length ?? 0) > current.extraColumns.length);
     if (overfull) return reply.code(400).send({ error: `${overfull.company} has more cells than data/blacklist.md has columns (${current.extraColumns.length} extra)` });

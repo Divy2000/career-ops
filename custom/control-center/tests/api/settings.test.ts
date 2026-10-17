@@ -290,6 +290,53 @@ describe('the blacklist editor reads the table by position, as the scanner does 
   });
 });
 
+describe('a save is not blocked by rows already in data/blacklist.md (R27-srv-dom-a-L2-01)', () => {
+  const EXPLICIT = { 'x-cc-explicit': 'blacklist' };
+  const open = async (md: string) => {
+    const app = await makeTestApp();
+    const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+    fs.writeFileSync(file, md);
+    const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+    return { app, file, req };
+  };
+
+  it('given cells longer than the editor allows in every column of an existing row, when a row is added and saved, then the save succeeds and keeps them', async () => {
+    const company = `Initech ${'i'.repeat(250)}`;
+    const since = `Ghosted ${'s'.repeat(600)}`;
+    const reason = `Reposts ${'r'.repeat(600)}`;
+    const added = `Added ${'a'.repeat(600)}`;
+    const { app, file, req } = await open(`# Blacklist\n\n| Company | Since | Scope | Reason | Added |\n|---|---|---|---|---|\n| ${company} | ${since} | company | ${reason} | ${added} |\n`);
+    try {
+      const current = (await req('GET')).json();
+      const rows = [...current.rows, { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'spam', extra: [''] }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toContain(`| ${company} | ${since} | company | ${reason} | ${added} |`);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a file with long cells, when a new value over its cap is saved, then the save is refused', async () => {
+    const { app, file, req } = await open(`# Blacklist\n\n| Company | Since | Scope | Reason |\n|---|---|---|---|\n| Initech | ${'s'.repeat(600)} | company | ok |\n`);
+    try {
+      const before = fs.readFileSync(file, 'utf8');
+      const current = (await req('GET')).json();
+      for (const row of [
+        { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'x'.repeat(501) },
+        { company: 'G'.repeat(201), since: '2026-10-03', scope: 'company', reason: '' },
+        { ...current.rows[0], since: `${current.rows[0].since}!` },
+      ]) {
+        const res = await req('PUT', { confirm: true, rows: [...current.rows, row] }, { 'if-match': current.etag, ...EXPLICIT });
+        expect(res.statusCode, res.body).toBe(400);
+      }
+      expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe('blacklist saves keep columns the editor does not show', () => {
   it('an extra column survives a save for every existing row, and a row cannot smuggle in more cells than the file has columns', async () => {
     const app = await makeTestApp();

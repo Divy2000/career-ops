@@ -21,16 +21,39 @@ export const BLACKLIST_REL = 'data/blacklist.md';
 
 export const BLACKLIST_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** `since` is checked by the route: YYYY-MM-DD for new rows, while a legacy cell already in the file passes through as is, so its cap is the reason cap: a legacy table puts its Reason text here. */
+const CELL = /^[^|\r\n]*$/;
+
+/**
+ * Lengths are capped by blacklistOverCap, not here: a cell already in the file passes through as is, whatever its
+ * length, and `since` is checked by the route (YYYY-MM-DD for new rows, a legacy cell kept as it is).
+ */
 export const blacklistRowSchema = z.object({
-  company: z.string().min(1).max(200).regex(/^[^|\r\n]+$/, 'no pipes or line breaks'),
-  since: z.string().max(500).regex(/^[^|\r\n]*$/, 'no pipes or line breaks'),
+  company: z.string().min(1).regex(/^[^|\r\n]+$/, 'no pipes or line breaks'),
+  since: z.string().regex(CELL, 'no pipes or line breaks'),
   scope: z.enum(['company', 'domain']),
-  reason: z.string().max(500).regex(/^[^|\r\n]*$/, 'no pipes or line breaks'),
+  reason: z.string().regex(CELL, 'no pipes or line breaks'),
   /** Cells of the file's other columns (BlacklistParsed.extraColumns), in order; only present when the file has some. */
-  extra: z.array(z.string().max(500).regex(/^[^|\r\n]*$/, 'no pipes or line breaks')).max(50).optional(),
+  extra: z.array(z.string().regex(CELL, 'no pipes or line breaks')).max(50).optional(),
 });
 export type BlacklistRow = z.infer<typeof blacklistRowSchema>;
+
+const CAPS = { company: 200, since: 500, reason: 500, extra: 500 } as const;
+
+/**
+ * The first cell of `rows` longer than its cap, unless that value is already in the same column of the file (a legacy
+ * Reason read into Since, a long note): a row the file holds would otherwise make every later save fail. Null when none.
+ */
+export function blacklistOverCap(rows: BlacklistRow[], existing: BlacklistRow[]): string | null {
+  const known = (field: keyof typeof CAPS) => new Set(existing.flatMap((r) => (field === 'extra' ? (r.extra ?? []) : [r[field]])));
+  const inFile = { company: known('company'), since: known('since'), reason: known('reason'), extra: known('extra') };
+  for (const r of rows) {
+    for (const field of ['company', 'since', 'reason'] as const) {
+      if (r[field].length > CAPS[field] && !inFile[field].has(r[field])) return `${field} of ${r.company.slice(0, 80)} is over ${CAPS[field]} characters`;
+    }
+    if (r.extra?.some((c) => c.length > CAPS.extra && !inFile.extra.has(c))) return `a cell of ${r.company.slice(0, 80)} is over ${CAPS.extra} characters`;
+  }
+  return null;
+}
 
 export interface BlacklistParsed {
   rows: BlacklistRow[];
