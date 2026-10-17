@@ -189,6 +189,7 @@ test('given an update moved claude to a version the contract has not approved, w
   assert.match(r.stdout, /^Claude Code 2\.1\.300 is not approved for the confined pass \(approved: 2\.1\.289\)/);
   const pinned = claudeBin({ onPath: ['2.1.289'], pinned: 'pin', pinnedVersion: '2.1.300', approved: ['2.1.289'] });
   assert.equal(pinned.status, 1, 'a pinned claude is held to the approved list too');
+  assert.match(pinned.stdout, /^Claude Code 2\.1\.300 is not approved for the confined pass/, 'refused by the approved list, not for another reason');
   assert.equal(claudeBin({ onPath: ['2.1.289'], approved: ['2.1.289'] }).status, 0);
 });
 
