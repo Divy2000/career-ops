@@ -529,14 +529,15 @@ describe('guard hook', () => {
     expect(Date.now() - at).toBeLessThan(5_000);
   }, 20_000);
 
-  it('given a hold lock a live hook holds, younger than a hook may live, when another release runs, then the lock is never taken from it (R28-cl2-rev-01)', () => {
+  it('given a hold lock a live hook holds, however old, when another release runs, then the lock is never taken from it (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-live-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
     reserveAs(73, '2026-10-17T10:01:13.000Z');
     recordHeldReportNums(dir, [73], realRoot);
     lockedBy(dir, psStart(process.pid));
-    // The CLI stops a hook after HOOK_TIMEOUT_S (30s): only a lock younger than that can still be a live hook's.
-    const old = new Date(Date.now() - 20_000);
+    // Past HOOK_TIMEOUT_S: a holder ps dates is still never replaced while it runs, so it can never remove a lock taken
+    // over meanwhile.
+    const old = new Date(Date.now() - 60_000);
     fs.utimesSync(path.join(dir, 'held-report-nums.lock'), old, old);
     expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 073' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'held-report-nums.lock'), 'utf8'))).toMatchObject({ nonce: 'other-hook' });

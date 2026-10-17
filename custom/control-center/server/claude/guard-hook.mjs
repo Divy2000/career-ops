@@ -64,7 +64,7 @@ const HELD_LOCK_UNREADABLE_MS = 2_000;
 // Waited out for the lock: past the age an unreadable lock is replaced at, and well inside the hook's own timeout.
 const HELD_LOCK_WAIT_MS = 7_000;
 const PS_PATH = '/bin/ps';
-// The CLI stops a hook after HOOK_TIMEOUT_S, so a lock older than that is a dead hook's whatever its pid names now.
+// The CLI stops a hook after HOOK_TIMEOUT_S: a lock older than that whose holder ps could not date is a dead hook's.
 const HELD_LOCK_MAX_MS = (HOOK_TIMEOUT_S + 5) * 1000;
 // Held while one waiter replaces a dead hook's lock, so two never replace it at once; replaced as a dead hook's lock is.
 const HELD_TAKEOVER_FILE = 'held-report-nums.lock.takeover';
@@ -157,8 +157,8 @@ function processStart(pid) {
 
 /**
  * Whether the hook a lock names is gone: its process dead, or its pid since reused by a process that started at another
- * time, or older than a hook may live. A live holder keeps the lock as long as it runs; a lock with no readable holder is
- * gone once it is old.
+ * time. A live holder keeps the lock as long as it runs; one that recorded no start is gone once older than a hook may
+ * live, and a lock with no readable holder once it is old.
  */
 function lockHolderGone(lock, text) {
   let holder = null;
@@ -169,10 +169,11 @@ function lockHolderGone(lock, text) {
   }
   const age = Date.now() - fs.statSync(lock).mtimeMs;
   if (!Number.isInteger(holder?.pid) || holder.pid <= 0) return age >= HELD_LOCK_UNREADABLE_MS;
-  if (age >= HELD_LOCK_MAX_MS) return true;
   const start = processStart(holder.pid);
   if (start === null) return true;
-  return start !== 'unknown' && typeof holder.start === 'string' && start !== holder.start;
+  // A holder ps dated is replaced only once it is gone: a live one replaced could remove the new lock as it finishes.
+  if (typeof holder.start === 'string') return start !== 'unknown' && start !== holder.start;
+  return age >= HELD_LOCK_MAX_MS;
 }
 
 /** A file's text, or null once it is gone. */
