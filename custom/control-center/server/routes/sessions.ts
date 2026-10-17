@@ -225,7 +225,9 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
-  app.get('/api/sessions', async () => manager.list());
+  // A cancelled session's process can outlive its status until the runner's SIGKILL, and the duplicate-evaluation guard
+  // still counts it then: `stopping` lets pages keep its posting out of a new start the server would refuse.
+  app.get('/api/sessions', async () => manager.list().map((m) => (!LIVE.has(m.status) && manager.isActive(m.id) ? { ...m, stopping: true as const } : m)));
 
   app.get('/api/sessions/engine', async () => ({ playwrightAvailable: manager.playwrightAvailable, modes: listLaunchableModeIds() }));
 
