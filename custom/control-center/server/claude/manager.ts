@@ -19,6 +19,7 @@ import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPrea
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
+import { reportNumberOf } from '../domains/reports.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { dedupUrlKey } from '../../shared/dedup-url.js';
@@ -838,9 +839,14 @@ export class SessionManager {
     console.warn(message);
   }
 
-  /** A report credited under `num` that is still there holds the number; one the user deleted holds nothing. */
+  /**
+   * A session credited a report under `num`, and a report numbered `num` is still there (the credited file, or the same
+   * report renamed): it holds the number. Once the user deleted it, nothing does.
+   */
   private creditedHolds(meta: SessionMeta, num: number): boolean {
-    return meta.creditedReport?.num === num && fs.existsSync(path.join(this.cfg.dataRoot, 'reports', meta.creditedReport.file));
+    if (meta.creditedReport?.num !== num) return false;
+    for (const file of snapshotReports(this.cfg.dataRoot)) if (reportNumberOf(file) === num) return true;
+    return false;
   }
 
   private sentinelPath(num: number): string {
