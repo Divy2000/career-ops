@@ -63,4 +63,10 @@ describe('targetFor (Sessions > New session, command palette)', () => {
     expect(targetFor(' projects/router.pdf ', 'projects-ingest')).toEqual({ type: 'text', value: 'projects/router.pdf' });
     expect(targetFor('', 'projects-ingest')).toEqual({ type: 'none', value: null });
   });
+
+  it('sends a saved-JD reference as the text target the Evaluate entry points use, not as a company (R28-feat-c-L2-01)', async () => {
+    const { targetFor } = await import('@web/features/sessions/SessionsPage');
+    expect(targetFor(' local:jds/acme-123.md ', 'oferta')).toEqual({ type: 'text', value: 'local:jds/acme-123.md' });
+    expect(targetFor('local:jds/acme-123.md')).toEqual({ type: 'text', value: 'local:jds/acme-123.md' });
+  });
 });
