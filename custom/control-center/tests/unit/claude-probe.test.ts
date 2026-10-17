@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -165,4 +165,39 @@ syncBuiltinESMExports();
     expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
     expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
   });
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    it(`on ${signal} mid-run stops the running CLI calls, removes every canary and the temp layout, and exits ${signal === 'SIGINT' ? 130 : 143} (R28-supervisor-L1-01)`, async () => {
+      const box = sandbox();
+      const claude = path.join(box.bin, 'claude');
+      // Answers --version; every case call records its pid and hangs, as a real call does for minutes.
+      fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\necho $$ > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+      const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
+        env: { ...process.env, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (d) => (stderr += d));
+      const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+      const deadline = Date.now() + 20_000;
+      while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      expect(fs.readdirSync(box.calls).length, stderr).toBeGreaterThan(0);
+      child.kill(signal);
+      const code = await exited;
+      const alive = fs.readdirSync(box.calls).filter((pid) => {
+        try {
+          process.kill(Number(pid), 0);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      for (const pid of alive) process.kill(Number(pid), 'SIGKILL');
+      expect(code, stderr).toBe(signal === 'SIGINT' ? 130 : 143);
+      expect(alive).toEqual([]);
+      expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
+      expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
+      expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+      expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+    }, 40_000);
+  }
 });

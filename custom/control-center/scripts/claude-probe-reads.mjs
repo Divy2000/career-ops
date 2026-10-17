@@ -178,6 +178,8 @@ function prepare(name, opts, sessionId) {
 }
 
 // Production starts the server from a plain shell: no nested-session or provider variables reach the CLI.
+// The CLI calls still running, which a SIGINT or SIGTERM stops before the cleanup.
+const running = new Set();
 const BASE_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
 
 function runClaude(name, opts) {
@@ -206,6 +208,8 @@ function runClaude(name, opts) {
   };
   return new Promise((resolve) => {
     const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    running.add(child);
+    child.on('close', () => running.delete(child));
     let stdout = '';
     let stderr = '';
     // On EMFILE/ENFILE Node reports the spawn failure before it creates the pipes, so they can be null.
@@ -538,6 +542,39 @@ groups.push({ ids: ['C20'], run: async () => {
 // ---- main ----
 const summary = { version: null, probedAt: new Date().toISOString(), model: MODEL, shape: SHAPE, cases: {}, details: {}, info: {}, runs: 0 };
 let exitCode;
+let cleaned = false;
+function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
+  fs.rmSync(HOME_DIR, { recursive: true, force: true });
+  fs.rmSync(OTHER_PROJECT, { recursive: true, force: true });
+  fs.rmSync(CONFIG_FILE, { force: true });
+  if (!KEEP) cleanTranscripts();
+  const out = redact(JSON.stringify(summary, null, 2));
+  fs.mkdirSync(T, { recursive: true });
+  fs.writeFileSync(path.join(T, 'probe-summary.json'), out);
+  console.log(out);
+  if (KEEP) console.error(`probe dir kept: ${T}`);
+  else {
+    const summaryCopy = path.join(os.tmpdir(), `cc-reads-probe-summary-${R}.json`);
+    fs.writeFileSync(summaryCopy, out);
+    fs.rmSync(T, { recursive: true, force: true });
+    console.error(`summary: ${summaryCopy}`);
+  }
+}
+// Node's default SIGINT/SIGTERM action exits without running the finally below, leaving the canaries behind.
+// The calls are killed outright so none writes a transcript after cleanTranscripts has run.
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+  process.on(signal, () => {
+    for (const child of running) child.kill('SIGKILL');
+    console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);
+    try {
+      cleanup();
+    } finally {
+      process.exit(code);
+    }
+  });
+}
 try {
   buildLayout();
   const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: { ...BASE_ENV, DISABLE_AUTOUPDATER: '1' } });
@@ -585,20 +622,6 @@ try {
   console.error(redact(err?.stack ?? err));
   exitCode = 1;
 } finally {
-  fs.rmSync(HOME_DIR, { recursive: true, force: true });
-  fs.rmSync(OTHER_PROJECT, { recursive: true, force: true });
-  fs.rmSync(CONFIG_FILE, { force: true });
-  if (!KEEP) cleanTranscripts();
-  const out = redact(JSON.stringify(summary, null, 2));
-  fs.mkdirSync(T, { recursive: true });
-  fs.writeFileSync(path.join(T, 'probe-summary.json'), out);
-  console.log(out);
-  if (KEEP) console.error(`probe dir kept: ${T}`);
-  else {
-    const summaryCopy = path.join(os.tmpdir(), `cc-reads-probe-summary-${R}.json`);
-    fs.writeFileSync(summaryCopy, out);
-    fs.rmSync(T, { recursive: true, force: true });
-    console.error(`summary: ${summaryCopy}`);
-  }
+  cleanup();
 }
 process.exit(exitCode);
