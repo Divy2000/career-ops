@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -42,5 +42,21 @@ describe("a turn's saved transcript progress", () => {
     expect(readProgress(file)).toEqual({ rawSeq: 2, rawOffset: 40 });
 
     expect(fs.readdirSync(dir).sort()).toEqual(['progress.json', `progress.json.tmp-${process.ppid}-cccccc`]);
+  });
+  it('given a left-behind temp name that cannot be removed, when progress is read, then the saved progress is still returned and the failure is only warned of', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const dir = tempDir('cc-progress-');
+      const file = path.join(dir, 'progress.json');
+      writeProgress(file, { rawSeq: 5, rawOffset: 90 });
+      const gone = spawnSync(process.execPath, ['-e', '']).pid!;
+      fs.mkdirSync(`${file}.tmp-${gone}-dddddd`);
+      fs.writeFileSync(path.join(`${file}.tmp-${gone}-dddddd`, 'x'), '');
+
+      expect(readProgress(file)).toEqual({ rawSeq: 5, rawOffset: 90 });
+      expect(warn.mock.calls.flat().join('\n')).toContain(`progress.json.tmp-${gone}-dddddd`);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

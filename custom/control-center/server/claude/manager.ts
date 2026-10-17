@@ -113,7 +113,10 @@ interface TurnProgress {
 /** How old a progress temp file of a live process may get before it counts as left behind (a save takes milliseconds). */
 const PROGRESS_TMP_STALE_MS = 10 * 60_000;
 
-/** A save that died between its write and its rename leaves its temp file; each has its own name, so none is ever reused. */
+/**
+ * A save that died between its write and its rename leaves its temp file; each has its own name, so none is ever reused.
+ * Housekeeping only: a sweep that fails is warned of and never fails the turn reading its progress.
+ */
 function sweepProgressTemps(file: string): void {
   const dir = path.dirname(file);
   const prefix = `${path.basename(file)}.tmp-`;
@@ -121,8 +124,8 @@ function sweepProgressTemps(file: string): void {
   try {
     names = fs.readdirSync(dir);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[sessions] could not list ${dir} to sweep left-behind progress files: ${(err as Error).message}`);
+    return;
   }
   for (const name of names) {
     const m = name.startsWith(prefix) ? /^(\d+)-[0-9a-f]+$/.exec(name.slice(prefix.length)) : null;
@@ -132,7 +135,7 @@ function sweepProgressTemps(file: string): void {
       if (pidAlive(Number(m[1])) && Date.now() - fs.statSync(tmp).mtimeMs < PROGRESS_TMP_STALE_MS) continue;
       fs.rmSync(tmp, { force: true });
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[sessions] could not remove the left-behind progress file ${tmp}: ${(err as Error).message}`);
     }
   }
 }
