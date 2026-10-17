@@ -764,7 +764,7 @@ export const ACTIONS: ActionDef[] = [
     // it skipped and exits 75, so this run ends failed with that line instead of done with an empty log.
     build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, env: { CC_RUN_DAILY_SKIP_EXIT: '75', ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { CC_CLAUDE_BIN: ctx.claudeBin } : {}), ...(ctx.nodeBin && path.isAbsolute(ctx.nodeBin) ? { CC_NODE_BIN: ctx.nodeBin } : {}) } }),
   }),
-  define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
+  define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, single: (mine) => `Skipped: an install is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). Watch it on Runs & Schedule.`, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
 ];
 
 export function findAction(id: string): ActionDef | undefined {
