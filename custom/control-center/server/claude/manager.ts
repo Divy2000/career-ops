@@ -864,7 +864,8 @@ export class SessionManager {
         const sentinel = this.sentinelPath(num);
         if (Date.now() - fs.statSync(sentinel).mtimeMs >= RESERVATION_REFRESH_AGE_MS) {
           if (await this.refreshReservation(meta, num)) this.forgetReservationLosses(id);
-          else this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
+          // A number the turn gave back while the refresh waited for the lock is no loss.
+          else if (this.store.read(id)?.reportNum === num) this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
         }
       }
       // A tick that got through: a later failure is a new one, said again.

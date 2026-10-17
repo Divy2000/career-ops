@@ -291,6 +291,40 @@ describe('a reply whose sentinel refresh cannot run (R28-claude-L1-01 review fol
     }
   });
 });
+describe('a refresh still waiting when its turn gives the number back (R27-mgr-rev-04 review follow-up)', () => {
+  it('given a running turn whose aged sentinel is being refreshed, when the number is released before the refresh runs, then no loss is reported', async () => {
+    let app: App | null = null;
+    let id = '';
+    let n = 0;
+    let raced = false;
+    const releasing: Exec = async (cmd, args, opts) => {
+      if (args.includes('--refresh') && !raced) {
+        raced = true;
+        // The turn ended and released its number while this refresh waited for the tracker lock.
+        app!.sessions.store.setReportNum(id, null);
+        fs.rmSync(sentinelPath(app!, n), { force: true });
+      }
+      return execNoShell(cmd, args, opts);
+    };
+    app = await makeTestApp({}, { exec: releasing });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const held = await startHeld(app, 'https://jobs.example.com/synthetic/r28-refresh-after-release');
+      id = held.id;
+      n = held.n;
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
+      fs.utimesSync(sentinelPath(app, n), fiveHoursAgo, fiveHoursAgo);
+      await until(() => raced);
+      await wait(500);
+      expect(warn.mock.calls.flat().join('\n')).not.toMatch(/was collected while its turn runs/);
+      held.go();
+      await settleOn(app, id);
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  }, 40_000);
+});
 describe('a number a turn kept while its stopped run could still write (R27-mgr-rev-02)', () => {
   it('given a Batch evaluate turn that ended in error keeping its number, when its process stops without a report, then the number is released', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
