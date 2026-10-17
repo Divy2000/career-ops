@@ -47,11 +47,6 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     }
     const body = z.object({ confirm: z.literal(true), rows: z.array(blacklistRowSchema).max(2000) }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid rows: company, since (YYYY-MM-DD), scope (company|domain) and reason without pipes', issues: body.error.issues });
-    for (const row of body.data.rows) {
-      if (row.scope === 'domain' && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(row.company)) {
-        return reply.code(400).send({ error: `domain scope needs a bare hostname suffix such as example.com (got ${row.company})` });
-      }
-    }
     const current = readBlacklist(cfg.dataRoot);
     if (!etagMatches(current.etag, req.headers['if-match'])) return reply.code(409).send({ error: 'data/blacklist.md changed since you loaded it', current });
     // Rewriting the file into one table would drop these cells: they are moved by hand first.
@@ -60,6 +55,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     const legacy = new Set(current.rows.map((r) => r.since));
     const badDate = body.data.rows.find((r) => !BLACKLIST_DATE.test(r.since) && !legacy.has(r.since));
     if (badDate) return reply.code(400).send({ error: `since must be YYYY-MM-DD for ${badDate.company} (got ${badDate.since || 'nothing'})` });
+    // A domain row already in the file (IBM.com.) is kept as it is: only new ones need a bare hostname.
+    const knownDomains = new Set(current.rows.filter((r) => r.scope === 'domain').map((r) => r.company));
+    const badHost = body.data.rows.find((r) => r.scope === 'domain' && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(r.company) && !knownDomains.has(r.company));
+    if (badHost) return reply.code(400).send({ error: `domain scope needs a bare hostname suffix such as example.com (got ${badHost.company})` });
     const overCap = blacklistOverCap(body.data.rows, current.rows);
     if (overCap) return reply.code(400).send({ error: overCap });
     // Extra cells fill the file's own extra columns (names come from the file, never the request).

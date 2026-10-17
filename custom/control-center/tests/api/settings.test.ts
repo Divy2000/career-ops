@@ -335,6 +335,24 @@ describe('a save is not blocked by rows already in data/blacklist.md (R27-srv-do
       await app.close();
     }
   });
+
+  it('given an existing domain row that is not a bare hostname (IBM.com.), when a row is added and saved, then the save succeeds, while a new such row is refused', async () => {
+    const { app, file, req } = await open('# Blacklist\n\n| Company | Since | Scope | Reason |\n|---|---|---|---|\n| IBM.com. | 2025-01-02 | domain | ATS hosts |\n');
+    try {
+      const current = (await req('GET')).json();
+      expect(current.rows[0]).toMatchObject({ company: 'IBM.com.', scope: 'domain' });
+      const rows = [...current.rows, { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'spam' }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(saved.statusCode, saved.body).toBe(200);
+      const raw = fs.readFileSync(file, 'utf8');
+      expect(raw).toContain('| IBM.com. | 2025-01-02 | domain | ATS hosts |');
+      const bad = await req('PUT', { confirm: true, rows: [...rows, { company: 'oracle.com.', since: '2026-10-03', scope: 'domain', reason: '' }] }, { 'if-match': saved.json().etag, ...EXPLICIT });
+      expect(bad.statusCode).toBe(400);
+      expect(fs.readFileSync(file, 'utf8')).toBe(raw);
+    } finally {
+      await app.close();
+    }
+  });
 });
 
 describe('blacklist saves keep columns the editor does not show', () => {
