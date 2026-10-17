@@ -36,7 +36,8 @@ export function PluginsTab() {
       if (err instanceof ApiError && err.status === 409) {
         // The If-Match was stale: without the new ETag every retry would get the same 409.
         await qc.invalidateQueries({ queryKey: ['config', 'plugins'] });
-        setError(`Could not update ${id}: config/plugins.yml changed on disk; the current settings were reloaded. Toggle it again to apply.`);
+        const reloaded = qc.getQueryState(['config', 'plugins'])?.status === 'success';
+        setError(`Could not update ${id}: config/plugins.yml changed on disk${reloaded ? '; the current settings were reloaded. Toggle it again to apply.' : ' and could not be reloaded.'}`);
       } else setError(`Could not update ${id}: ${describeError(err)}`);
     } finally {
       inFlight.current = false;

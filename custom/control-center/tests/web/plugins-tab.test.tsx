@@ -105,3 +105,33 @@ describe('Enable on the Plugins tab after config/plugins.yml changed on disk', (
     expect(puts).toEqual(['e1', 'e2']);
   });
 });
+
+describe('Enable on the Plugins tab when the reload after a 409 fails', () => {
+  it('given a toggle got a 409 and the config then cannot be read, then the page does not claim it was reloaded', async () => {
+    let down = false;
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === '/api/actions') return json([RUN_META]);
+        if (url === '/api/runs') return json([]);
+        if (init?.method === 'PUT') {
+          down = true;
+          return json({ error: 'If-Match does not match the current version' }, 409);
+        }
+        if (down) return json({ error: 'config/plugins.yml could not be read' }, 500);
+        return json({ plugins: [{ ...plugin('notion', ['export']), enabled: false }], config: { kind: 'ok', path: 'config/plugins.yml', raw: '', etag: 'e1' } });
+      }),
+    );
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(PluginsTab)))));
+    const box = await until(() => host.querySelector<HTMLInputElement>('input[aria-label="Enable notion"]'), 'the Enable notion checkbox');
+    await act(async () => box.click());
+    await until(() => host.textContent?.includes('Could not update notion') || undefined, 'the toggle error');
+    expect(host.textContent).not.toMatch(/were reloaded/);
+    expect(host.textContent).toMatch(/config\/plugins\.yml changed on disk and could not be reloaded/);
+  });
+});
