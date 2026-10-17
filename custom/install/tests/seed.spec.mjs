@@ -604,3 +604,20 @@ test('given an existing modes/_custom.md, when custom-template runs, then it rep
   assert.equal(fs.readFileSync(target, 'utf8'), 'MINE\n');
   assert.deepEqual(fs.readdirSync(path.dirname(target)), ['_custom.md']);
 });
+
+test('given a clock far from UTC, when cv-write --replace backs up cv.md, then the backup stamp is the local time, as the install log is dated (R28-scripts-b-L2-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New\n');
+  put(path.join(data, 'cv.md'), 'OLD\n');
+  // Etc/GMT-14 is UTC+14, so a UTC stamp is never inside the local window below.
+  const local = (ms) => new Date(ms + 14 * 3600_000).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '');
+  const before = local(Date.now() - 1000);
+  const res = spawnSync(process.execPath, [SEED, 'cv-write', '--data', data, '--resume', r, '--replace'], { encoding: 'utf8', timeout: 20000, env: { ...process.env, TZ: 'Etc/GMT-14' } });
+  const after = local(Date.now() + 1000);
+  const [kind, backup] = res.stdout.trim().split('\t');
+  assert.equal(kind, 'replaced', res.stderr);
+  const stamped = path.basename(backup).replace(/^cv\.md\.bak-/, '');
+  assert.match(stamped, /^\d{8}T\d{6}$/);
+  assert.ok(stamped >= before && stamped <= after, `backup stamp ${stamped} is not the local time (${before} to ${after})`);
+});

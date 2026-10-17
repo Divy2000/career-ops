@@ -114,8 +114,11 @@ function cvStatus(data, resume) {
   }
 }
 
+// Local time, the clock the install log and the draft move-aside are dated by.
 function stamp() {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '');
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
 function cvWrite(data, resume, replace) {
