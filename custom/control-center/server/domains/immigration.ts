@@ -48,7 +48,7 @@ export interface ImmigrationOverview {
   policyChangesError: string | null;
   officialFeed: Record<string, string>[];
   companies: CompanyFile[];
-  /** The company files that could not be read (a folder named *.md, no permission); null when every one was. */
+  /** The company files, or the companies folder, that could not be read (a folder named *.md, no permission); null when all were. */
   companiesError: string | null;
   tiers: unknown;
   seen: unknown;
@@ -261,13 +261,13 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
   const companies: CompanyFile[] = [];
   const companiesDir = path.join(imm, 'companies');
   let names: string[] = [];
+  // One bad entry costs only itself: a dangling symlink is no company file, and any other unreadable one is reported.
+  const unreadable: string[] = [];
   try {
     names = fs.readdirSync(companiesDir).sort();
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') unreadable.push(`companies/: ${(err as Error).message}`);
   }
-  // One bad entry costs only itself: a dangling symlink is no company file, and any other unreadable one is reported.
-  const unreadable: string[] = [];
   for (const name of names) {
     if (!name.endsWith('.md')) continue;
     const p = path.join(companiesDir, name);
