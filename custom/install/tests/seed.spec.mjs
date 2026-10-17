@@ -418,6 +418,9 @@ test('given the temp file cannot be removed once linked, when cv-write seeds an 
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stdout.trim(), 'created');
   assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), '# New resume\n');
+  const left = fs.readdirSync(data).filter((f) => f.includes('.tmp-'));
+  assert.equal(left.length, 1);
+  assert.match(res.stderr, new RegExp(`warning: could not remove ${path.join(data, left[0]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*delete it`), 'the leftover copy of cv.md is named, not left silently');
 });
 
 test('given the volume refuses hard links and cv.md is a dangling symlink, when cv-write seeds it, then it refuses as the link path does and keeps the symlink (R27 merge review)', () => {

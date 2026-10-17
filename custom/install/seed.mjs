@@ -158,8 +158,8 @@ function linkNew(tmp, file) {
   // The file is in place: a temp name that cannot be removed must not turn the write into a reported failure.
   try {
     fs.rmSync(tmp, { force: true });
-  } catch {
-    /* a leftover temp file, not a failed write */
+  } catch (err) {
+    process.stderr.write(`warning: could not remove ${tmp} (${err.message}), a copy of ${file}; delete it by hand\n`);
   }
 }
 
