@@ -279,6 +279,19 @@ describe('installTutorial with a quick guide', () => {
     expect(fs.readFileSync(path.join(dest('guided'), 'Poster.jpg'), 'utf8')).toBe('POSTER');
   });
 
+  it('refuses two spellings of a name on a disk that reports inode 0 for every file, where sameness is unknowable', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg' }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }) });
+    write('poster.jpg', 'POSTER');
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) fs.linkSync(path.join(src(), 'poster.jpg'), path.join(src(), 'Poster.jpg'));
+    const realStat = fs.statSync;
+    vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+      const st = realStat(p, o);
+      if (st) st.ino = typeof st.ino === 'bigint' ? 0n : 0;
+      return st;
+    }) as typeof fs.statSync);
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Poster\.jpg" is used by both the poster and the guide poster file/);
+  });
+
   it('refuses a guide whose name differs from tutorial.json only in case, which the manifest would overwrite', () => {
     // Valid as both a manifest and a guide, so only the name clash can refuse it.
     const both = JSON.stringify({ ...manifest, guide: 'Tutorial.json', sections: [GUIDE.sections[0]] });

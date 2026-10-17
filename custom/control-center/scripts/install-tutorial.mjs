@@ -308,7 +308,8 @@ const diskKey = (name) => name.normalize('NFC').toUpperCase().toLowerCase().norm
 function sameFile(a, b) {
   const x = fs.statSync(a, { bigint: true });
   const y = fs.statSync(b, { bigint: true });
-  return x.dev === y.dev && x.ino === y.ino;
+  // Some FUSE and network disks report inode 0 for every file, so a 0 proves nothing.
+  return x.ino !== 0n && x.dev === y.dev && x.ino === y.ino;
 }
 
 /** guide.json and the files it names, from `guideRoot`: validated like the server does, before anything is copied. */
