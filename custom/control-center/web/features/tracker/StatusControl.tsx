@@ -10,7 +10,15 @@ export const STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer'
 /** The TUI picker's codes (dashboard/internal/ui/screens/pipeline.go canonicalDiscardReasons), shown as words. */
 export const DISCARD_REASONS = ['salary_too_low', 'hybrid_required', 'tech_stack_mismatch', 'seniority_mismatch', 'geo_restriction', 'size_mismatch', 'company_culture'];
 
-/** Sets a tracker row's status through tracker.setStatus; the message says what happened, or why it did not. */
+/** What names a tracker row across a reindex: a delete renumbers the rows after it, so its number alone does not. */
+export type RowIdentity = Pick<TrackerRow, 'company' | 'role' | 'report'>;
+export const rowIdentity = (r: RowIdentity): RowIdentity => ({ company: r.company, role: r.role, report: r.report });
+export const sameRow = (a: RowIdentity, b: RowIdentity) => a.company === b.company && a.role === b.role && a.report === b.report;
+
+/**
+ * Sets a tracker row's status through tracker.setStatus, naming the row it was given so a different row now under that
+ * number is refused; the message says what happened, or why it did not.
+ */
 export function useSetStatus() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
@@ -19,7 +27,9 @@ export function useSetStatus() {
     setBusy(true);
     setMessage(null);
     try {
-      await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: row.num, state, ...(opts.note ? { note: opts.note } : {}) } });
+      await apiSend('POST', '/api/actions/tracker.setStatus', {
+        params: { row: row.num, state, ...(opts.note ? { note: opts.note } : {}), expectCompany: row.company, expectRole: row.role, expectReport: row.report },
+      });
       setMessage(opts.okText ?? `Status set to ${state}`);
       await qc.invalidateQueries({ queryKey: ['tracker'] });
       return true;

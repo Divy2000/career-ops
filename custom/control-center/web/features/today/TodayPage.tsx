@@ -9,7 +9,7 @@ import type { ShortlistRow, TrackerRow } from '@shared/api';
 import { postingHref, useActiveEvaluation, useStartEvaluation } from './evaluate';
 import { useSessions } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
-import { DiscardReasonPicker, StatusMessage, useSetStatus } from '../tracker/StatusControl';
+import { DiscardReasonPicker, rowIdentity, sameRow, StatusMessage, useSetStatus, type RowIdentity } from '../tracker/StatusControl';
 
 const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
 
@@ -110,7 +110,10 @@ function EvaluateButton({ row, onPage }: { row: ShortlistRow; onPage: RefObject<
 /** Evaluated offers waiting for a decision: Applied commits at once, Skip asks for a reason first (as on the Tracker). */
 function Decisions({ rows }: { rows: TrackerRow[] }) {
   const { setStatus, busy, message } = useSetStatus();
-  const [skipping, setSkipping] = useState<number | null>(null);
+  // The row whose reason picker is open, by identity: a delete elsewhere reindexes the tracker, and the picker must not
+  // move to the company that inherits the number.
+  const [skipping, setSkipping] = useState<RowIdentity | null>(null);
+  const isSkipping = (r: TrackerRow) => skipping !== null && sameRow(skipping, r);
   const decide = async (row: TrackerRow, state: 'Applied' | 'SKIP', note?: string) => {
     if (await setStatus(row, state, { note, okText: `${row.company}: status set to ${state}` })) setSkipping(null);
   };
@@ -130,10 +133,10 @@ function Decisions({ rows }: { rows: TrackerRow[] }) {
               <button type="button" disabled={busy} onClick={() => void decide(r, 'Applied')}>
                 Applied
               </button>
-              <button type="button" disabled={busy} aria-expanded={skipping === r.num} onClick={() => setSkipping(skipping === r.num ? null : r.num)}>
+              <button type="button" disabled={busy} aria-expanded={isSkipping(r)} onClick={() => setSkipping(isSkipping(r) ? null : rowIdentity(r))}>
                 Skip
               </button>
-              {skipping === r.num && (
+              {isSkipping(r) && (
                 <div style={{ flexBasis: '100%' }}>
                   <DiscardReasonPicker state="SKIP" row={r} busy={busy} onConfirm={(note) => void decide(r, 'SKIP', note)} onCancel={() => setSkipping(null)} />
                 </div>
