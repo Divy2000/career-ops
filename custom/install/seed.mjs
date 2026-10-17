@@ -24,26 +24,72 @@ const exists = (f) => fs.existsSync(f);
 function localPaths(dir) {
   const file = path.join(dir, 'config', 'local-paths.txt');
   const text = exists(file) ? fs.readFileSync(file, 'utf8') : null;
-  const merged = mergeLocalPaths(text ?? '');
-  if (merged === null) return out('present');
-  if (text !== null) {
-    // The merge only appends, so the user's file is extended where it is (through its links, keeping its inode, owner,
-    // mode, ACLs and hard links); a failed append is cut back to the user's own lines.
-    const fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_APPEND);
+  if (mergeLocalPaths(text ?? '') === null) return out('present');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const target = linkTarget(file);
+  out(withLock(`${target}.lock`, () => updateLocalPaths(target)));
+}
+
+// Runs under the lock, so two installers never both add custom/; a writer that skips the lock still never has its
+// file replaced.
+function updateLocalPaths(target) {
+  for (;;) {
+    let fd;
     try {
-      // Merged again from what the open file holds now, in case another installer changed it since the read above.
+      fd = fs.openSync(target, fs.constants.O_RDWR | fs.constants.O_APPEND);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      if (createNew(target, mergeLocalPaths(''))) return 'added';
+      continue;
+    }
+    try {
+      // The merge only appends, so the user's file is extended where it is (through its links, keeping its inode,
+      // owner, mode, ACLs and hard links); a failed append is cut back to the user's own lines.
       const current = fs.readFileSync(fd, 'utf8');
       const update = mergeLocalPaths(current);
-      if (update === null) return out('present');
+      if (update === null) return 'present';
       appendOrRestore(fd, update.slice(current.length));
+      return 'added';
     } finally {
       fs.closeSync(fd);
     }
-    return out('added');
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeAtomic(linkTarget(file), merged);
-  out('added');
+}
+
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 10_000;
+
+// Holds a mkdir lock while fn runs. A lock older than LOCK_STALE_MS was left by a killed run and is broken.
+function withLock(lock, fn) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.mkdirSync(lock);
+      break;
+    } catch (err) {
+      // A folder that takes no new entries cannot hold anyone's lock, and the file in it may still be writable.
+      if (['EACCES', 'EPERM', 'EROFS'].includes(err.code)) return fn();
+      if (err.code !== 'EEXIST') throw err;
+    }
+    let age;
+    try {
+      age = Date.now() - fs.statSync(lock).mtimeMs;
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    if (age > LOCK_STALE_MS) {
+      fs.rmSync(lock, { recursive: true, force: true });
+      continue;
+    }
+    if (Date.now() > deadline) throw new Error(`${lock} is held by another install; if none is running, remove it and re-run`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(lock, { recursive: true, force: true });
+  }
 }
 
 function appendOrRestore(fd, suffix) {

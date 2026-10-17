@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
@@ -641,6 +641,62 @@ syncBuiltinESMExports();
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stdout.trim(), 'present');
   assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+});
+
+const seedAsync = (args) => new Promise((resolve) => {
+  const child = spawn(process.execPath, [SEED, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (c) => { stdout += c; });
+  child.stderr.on('data', (c) => { stderr += c; });
+  child.on('close', (status) => resolve({ status, stdout, stderr }));
+});
+
+test('given another installer holding the local-paths.txt lock, when it adds custom/ and lets go, then local-paths waits and reports it present instead of adding it twice (R28-scr-rev-01 review 2)', async () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(`${f}.lock`);
+  const run = seedAsync(['local-paths', '--dir', d]);
+  await new Promise((r) => setTimeout(r, 500));
+  fs.appendFileSync(f, 'custom/\n');
+  fs.rmdirSync(`${f}.lock`);
+  const res = await run;
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'present');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given a local-paths.txt lock a crashed installer left long ago, when local-paths runs, then it breaks the lock and adds custom/ (R28-scr-rev-01 review 2)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(`${f}.lock`);
+  const old = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(`${f}.lock`, old, old);
+  const res = seed(['local-paths', '--dir', d]);
+  assert.equal(res.stdout.trim(), 'added', res.stderr);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given no local-paths.txt, when another writer creates it just before local-paths publishes its own, then theirs is kept and custom/ is appended to it (R28-scr-rev-01 review 2)', () => {
+  const d = tmp();
+  const f = path.join(d, 'config', 'local-paths.txt');
+  const preload = put(path.join(d, 'late-create.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const file = ${JSON.stringify(f)};
+const theirs = () => fs.writeFileSync(file, 'theirs/\\n', { flag: 'wx' });
+const realLink = fs.linkSync;
+fs.linkSync = (src, dest) => { if (dest === file) theirs(); return realLink(src, dest); };
+const realRename = fs.renameSync;
+fs.renameSync = (src, dest) => { if (dest === file) theirs(); return realRename(src, dest); };
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'theirs/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
 });
 
 test('given no article-digest.md, when the volume fills while projects-seed writes it, then no partial article-digest.md is left for a re-run to keep (R28-scripts-b-L1-02)', () => {
