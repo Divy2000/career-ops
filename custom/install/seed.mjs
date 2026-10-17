@@ -29,7 +29,16 @@ function localPaths(dir) {
   if (text !== null) {
     // The merge only appends, so the user's file is extended where it is (through its links, keeping its inode, owner,
     // mode, ACLs and hard links); a failed append is cut back to the user's own lines.
-    appendOrRestore(file, merged.slice(text.length));
+    const fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_APPEND);
+    try {
+      // Merged again from what the open file holds now, in case another installer changed it since the read above.
+      const current = fs.readFileSync(fd, 'utf8');
+      const update = mergeLocalPaths(current);
+      if (update === null) return out('present');
+      appendOrRestore(fd, update.slice(current.length));
+    } finally {
+      fs.closeSync(fd);
+    }
     return out('added');
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -37,9 +46,8 @@ function localPaths(dir) {
   out('added');
 }
 
-function appendOrRestore(file, suffix) {
+function appendOrRestore(fd, suffix) {
   const bytes = Buffer.from(suffix);
-  const fd = fs.openSync(file, 'a+');
   let written = 0;
   try {
     while (written < bytes.length) written += fs.writeSync(fd, bytes, written);
@@ -56,8 +64,6 @@ function appendOrRestore(file, suffix) {
       // The append error is the one to report.
     }
     throw err;
-  } finally {
-    fs.closeSync(fd);
   }
 }
 

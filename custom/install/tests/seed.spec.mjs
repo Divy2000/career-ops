@@ -614,10 +614,8 @@ fs.writeSync = (fd, data, ...rest) => {
   return realWrite(fd, Buffer.from(data).subarray(0, 3));
 };
 fs.appendFileSync = (p, data, ...rest) => {
-  if (p !== file) return realAppend(p, data, ...rest);
-  realAppend(file, 'other/\\n');
-  realAppend(p, String(data).slice(0, 3));
-  throw full();
+  if (p === file) throw new Error('local-paths.txt must be appended through its open fd');
+  return realAppend(p, data, ...rest);
 };
 syncBuiltinESMExports();
 `);
@@ -625,6 +623,24 @@ syncBuiltinESMExports();
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /no space left/);
   assert.equal(fs.readFileSync(f, 'utf8'), 'my-notes/\nother/\n');
+});
+
+test('given another installer adds custom/ after local-paths reads the file, when local-paths opens it to append, then custom/ is not added twice (R28-scr-rev-01 review)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const preload = put(path.join(d, 'late-writer.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realOpen = fs.openSync;
+fs.openSync = (p, ...rest) => {
+  if (p === ${JSON.stringify(f)}) fs.appendFileSync(p, 'custom/\\n');
+  return realOpen(p, ...rest);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'present');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
 });
 
 test('given no article-digest.md, when the volume fills while projects-seed writes it, then no partial article-digest.md is left for a re-run to keep (R28-scripts-b-L1-02)', () => {
@@ -777,8 +793,8 @@ syncBuiltinESMExports();
 `);
   const res = seedWith(preload, ['local-paths', '--dir', d]);
   assert.equal(res.status, 0, res.stderr);
-  // No temp file at all (the line is appended in place) is never readable by others either.
-  assert.ok(!fs.existsSync(seen) || fs.readFileSync(seen, 'utf8') === '600');
+  // The line is appended in place, so no temp file is ever written to be read by others.
+  assert.equal(fs.existsSync(seen), false);
   assert.equal(fs.statSync(f).mode & 0o777, 0o600);
 });
 
