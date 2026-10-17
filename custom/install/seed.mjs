@@ -282,7 +282,7 @@ function cvWrite(data, resume, replace) {
   for (let n = 1; exists(backup); n++) backup = `${cv}.bak-${stamp()}-${n}`;
   let backedUp = false;
   try {
-    writeAtomic(cv, wanted, () => {
+    replaceFile(cv, wanted, () => {
       fs.copyFileSync(cv, backup, fs.constants.COPYFILE_EXCL);
       backedUp = true;
     });
@@ -365,13 +365,23 @@ function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSyn
   }
 }
 
+// Swaps a new copy in for an existing file at the file its symlinks end at, so the links stay, and with the old file's
+// mode, so a file the user made private stays private.
+function replaceFile(file, text, beforeRename = () => {}) {
+  const target = linkTarget(file);
+  writeAtomic(target, text, (tmp) => {
+    fs.chmodSync(tmp, fs.statSync(target).mode & 0o7777);
+    beforeRename(tmp);
+  });
+}
+
 // Unconditional and idempotent: adds the projects-library house rule when its heading is absent.
 function projectsRule(data, template) {
   const target = path.join(data, 'modes', '_custom.md');
   if (!exists(target)) return out('absent');
   const next = insertHouseRule(fs.readFileSync(target, 'utf8'), fs.readFileSync(template, 'utf8'));
   if (next === null) return out('present');
-  writeAtomic(target, next);
+  replaceFile(target, next);
   out('added');
 }
 
