@@ -37,6 +37,8 @@ export interface ScanSummary {
   companiesScanned?: number;
   companiesAvailable?: number;
   unreachableBoards?: number;
+  /** Postings skipped for having no posting date, counted before the title filter. */
+  postingsDroppedNoDate?: number;
 }
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
@@ -52,7 +54,7 @@ export function parseScanOutput(lines: RawLine[]): ScanSummary | null {
     try {
       const obj = JSON.parse(l.line) as Record<string, unknown>;
       const list = (obj.postings ?? obj.offers ?? obj.results ?? []) as ScanPosting[];
-      return { postings: Array.isArray(list) ? list : [], capHit: Boolean(obj.capHit), stoppedEarly: Boolean(obj.stoppedEarly || obj.stoppedByOutage), datasetStatus: statusRecord(obj.datasetStatus), companiesScanned: num(obj.companiesScanned), companiesAvailable: num(obj.companiesAvailable), unreachableBoards: num(obj.unreachableBoards) };
+      return { postings: Array.isArray(list) ? list : [], capHit: Boolean(obj.capHit), stoppedEarly: Boolean(obj.stoppedEarly || obj.stoppedByOutage), datasetStatus: statusRecord(obj.datasetStatus), companiesScanned: num(obj.companiesScanned), companiesAvailable: num(obj.companiesAvailable), unreachableBoards: num(obj.unreachableBoards), postingsDroppedNoDate: num(obj.postingsDroppedNoDate) };
     } catch {
       /* not the summary line */
     }
@@ -206,8 +208,8 @@ function RunLog({ lines, status }: { lines: RawLine[]; status: string | null }) 
   );
 }
 
-/** Why a finished scan saw fewer postings than its filters allow: missing or expired company lists, unreachable boards. */
-function scanDegradations(summary: ScanSummary): { notes: string[]; noData: boolean } {
+/** Why a finished scan saw fewer postings than its filters allow: missing or expired company lists, unreachable boards, undated postings. */
+export function scanDegradations(summary: ScanSummary): { notes: string[]; noData: boolean } {
   const sources = Object.entries(summary.datasetStatus ?? {});
   const empty = sources.filter(([, st]) => st === 'empty').map(([name]) => name);
   const stale = sources.filter(([, st]) => st === 'stale').map(([name]) => name);
@@ -216,8 +218,12 @@ function scanDegradations(summary: ScanSummary): { notes: string[]; noData: bool
   if (stale.length) notes.push(`Degraded: the scan used an expired cached company list for ${stale.join(', ')}, since the download failed.`);
   const unreachable = summary.unreachableBoards ?? 0;
   if (unreachable > 0) notes.push(`${unreachable} ${unreachable === 1 ? 'board' : 'boards'} could not be reached.`);
-  // A scan stopped before it finished (a DNS outage) found no reliable "no matches", so the empty state is withheld.
-  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 || summary.stoppedEarly === true };
+  // Counted before the title filter, so these are skipped postings, not skipped matches.
+  const undated = summary.postingsDroppedNoDate ?? 0;
+  if (undated > 0) notes.push(`${undated} undated ${undated === 1 ? 'posting was' : 'postings were'} skipped: ${undated === 1 ? 'its board gives' : 'their boards give'} no posting date, so the date filter cannot place ${undated === 1 ? 'it' : 'them'}.`);
+  // A scan stopped before it finished (a DNS outage) found no reliable "no matches", so the empty state is withheld; so
+  // does one that skipped undated postings, since a match may be among them.
+  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 || summary.stoppedEarly === true || undated > 0 };
 }
 
 // The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.
