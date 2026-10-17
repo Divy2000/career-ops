@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
-import type { Runner } from '../runner/runner.js';
+import { pidAlive, type Runner } from '../runner/runner.js';
 import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
@@ -110,7 +110,35 @@ interface TurnProgress {
   rawOffset: number;
 }
 
-function readProgress(file: string): TurnProgress | null {
+/** How old a progress temp file of a live process may get before it counts as left behind (a save takes milliseconds). */
+const PROGRESS_TMP_STALE_MS = 10 * 60_000;
+
+/** A save that died between its write and its rename leaves its temp file; each has its own name, so none is ever reused. */
+function sweepProgressTemps(file: string): void {
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.tmp-`;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  for (const name of names) {
+    const m = name.startsWith(prefix) ? /^(\d+)-[0-9a-f]+$/.exec(name.slice(prefix.length)) : null;
+    if (!m) continue;
+    const tmp = path.join(dir, name);
+    try {
+      if (pidAlive(Number(m[1])) && Date.now() - fs.statSync(tmp).mtimeMs < PROGRESS_TMP_STALE_MS) continue;
+      fs.rmSync(tmp, { force: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+  }
+}
+
+export function readProgress(file: string): TurnProgress | null {
+  sweepProgressTemps(file);
   try {
     const p = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<TurnProgress>;
     return typeof p.rawSeq === 'number' && typeof p.rawOffset === 'number' ? { rawSeq: p.rawSeq, rawOffset: p.rawOffset } : null;

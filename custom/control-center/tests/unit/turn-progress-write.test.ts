@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { writeProgress } from '../../server/claude/manager.js';
+import { spawnSync } from 'node:child_process';
+import { readProgress, writeProgress } from '../../server/claude/manager.js';
 import { tempDir } from '../helpers/tmp.js';
 
 describe("a turn's saved transcript progress", () => {
@@ -25,5 +26,21 @@ describe("a turn's saved transcript progress", () => {
 
     expect(() => writeProgress(file, { rawSeq: 1, rawOffset: 0 })).toThrow();
     expect(fs.readdirSync(dir)).toEqual(['progress.json']);
+  });
+  it('given temp files left by a save that crashed before its rename, when progress is read, then those of a process that is gone or that are old are swept, and a live peer\'s save in flight is kept', () => {
+    const dir = tempDir('cc-progress-');
+    const file = path.join(dir, 'progress.json');
+    writeProgress(file, { rawSeq: 2, rawOffset: 40 });
+    const gone = spawnSync(process.execPath, ['-e', '']).pid!;
+    fs.writeFileSync(`${file}.tmp-${gone}-aaaaaa`, '{');
+    const old = `${file}.tmp-${process.pid}-bbbbbb`;
+    fs.writeFileSync(old, '{');
+    const hourAgo = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(old, hourAgo, hourAgo);
+    fs.writeFileSync(`${file}.tmp-${process.ppid}-cccccc`, '{');
+
+    expect(readProgress(file)).toEqual({ rawSeq: 2, rawOffset: 40 });
+
+    expect(fs.readdirSync(dir).sort()).toEqual(['progress.json', `progress.json.tmp-${process.ppid}-cccccc`]);
   });
 });
