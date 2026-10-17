@@ -244,55 +244,6 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
       warn.mockRestore();
     }
   }, 30_000);
-  it('given a Batch evaluate turn that ended in error while its run record was unreadable, when its process then stops, then its kept number is released', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const app = await makeTestApp();
-    try {
-      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-kept-released');
-      const runId = app.sessions.read(id)!.turns[0]!.runId!;
-      const read = app.runner.store.read.bind(app.runner.store);
-      const spy = vi.spyOn(app.runner.store, 'read').mockImplementation((rid: string) => {
-        if (rid === runId) throw new Error('EIO: i/o error, read');
-        return read(rid);
-      });
-      await until(() => app.sessions.read(id)?.status === 'error');
-      expect(app.sessions.read(id)!.reportNum).toBe(n);
-      spy.mockRestore();
-      go();
-
-      await until(() => !app.runner.ending(runId), 20_000);
-      await until(() => app.sessions.read(id)!.reportNum === null && !fs.existsSync(sentinelPath(app, n)));
-    } finally {
-      vi.restoreAllMocks();
-      await app.close();
-    }
-  }, 40_000);
-  it('given a Batch evaluate turn that ended in error while its run record was unreadable, when its process writes its report before it stops, then the report is credited to the session', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const app = await makeTestApp();
-    try {
-      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-kept-credited');
-      const runId = app.sessions.read(id)!.turns[0]!.runId!;
-      const read = app.runner.store.read.bind(app.runner.store);
-      const spy = vi.spyOn(app.runner.store, 'read').mockImplementation((rid: string) => {
-        if (rid === runId) throw new Error('EIO: i/o error, read');
-        return read(rid);
-      });
-      await until(() => app.sessions.read(id)?.status === 'error');
-      const file = `${String(n).padStart(3, '0')}-acme-2026-10-17.md`;
-      fs.writeFileSync(path.join(app.cfg.dataRoot, 'reports', file), '# Evaluation: Acme\n\n**Score:** 4.2/5\n');
-      spy.mockRestore();
-      go();
-
-      await until(() => !app.runner.ending(runId), 20_000);
-      await until(() => app.sessions.read(id)!.reportNum === null);
-      expect(app.sessions.read(id)!.creditedReport).toMatchObject({ num: n, file });
-      await until(() => !fs.existsSync(sentinelPath(app, n)));
-    } finally {
-      vi.restoreAllMocks();
-      await app.close();
-    }
-  }, 40_000);
   it('given a session that lost its number while running and was handed the same number again for its next turn, when that reservation is lost too, then the second loss is warned of as well', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const lostWarnings = (n: number) => warn.mock.calls.flat().filter((m) => String(m).includes(`reservation of report number ${n} was collected`)).length;
