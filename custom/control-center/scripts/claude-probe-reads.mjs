@@ -211,12 +211,20 @@ function runClaude(name, opts) {
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
     const timer = setTimeout(() => child.kill('SIGKILL'), 300_000);
+    let settled = false;
     // A spawn failure (ENOENT, EAGAIN) emits 'error'; unheard it would crash the probe past its cleanup.
+    // An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' still settles that case.
     child.on('error', (err) => {
+      stderr += `\n${err?.message ?? err}`;
+      if (child.pid !== undefined || settled) return;
+      settled = true;
       clearTimeout(timer);
-      resolve({ name, sessionId, status: null, stdout: '', stderr: redact(err?.message ?? err), events: [], hook: [], prep });
+      fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
+      resolve({ name, sessionId, status: null, stdout: '', stderr: redact(stderr).slice(-2000), events: [], hook: [], prep });
     });
     child.on('close', (status) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       const events = stdout.split('\n').filter(Boolean).map((l) => {
         try {

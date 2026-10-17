@@ -19,8 +19,8 @@ function sandbox() {
   return { root, bin, home, tmp, calls };
 }
 
-function runProbe(script: string, box: ReturnType<typeof sandbox>, claudeBin: string, extraEnv: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', script)], {
+function runProbe(script: string, box: ReturnType<typeof sandbox>, claudeBin: string, extraEnv: Record<string, string> = {}, args: string[] = []) {
+  return spawnSync(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', script), ...args], {
     encoding: 'utf8',
     timeout: 60_000,
     env: {
@@ -81,5 +81,19 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
     expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
     expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
     expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+  });
+
+  it('keeps the spawn error in each case\'s stderr.txt under --keep when the CLI cannot be spawned', () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, '#!/bin/sh\nrm -f "$0"\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
+    const r = runProbe('claude-probe-reads.mjs', box, claude, {}, ['--keep']);
+    const kept = /probe dir kept: (.+)/.exec(r.stderr)?.[1];
+    expect(kept, r.stderr).toBeTruthy();
+    const guard = path.join(String(kept), 'guard');
+    const logs = fs.readdirSync(guard).map((n) => path.join(guard, n, 'stderr.txt')).filter((f) => fs.existsSync(f)).map((f) => fs.readFileSync(f, 'utf8'));
+    fs.rmSync(String(kept), { recursive: true, force: true });
+    expect(logs.length).toBeGreaterThan(0);
+    for (const log of logs) expect(log).toMatch(/ENOENT/);
   });
 });
