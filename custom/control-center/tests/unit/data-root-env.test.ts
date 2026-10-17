@@ -86,6 +86,9 @@ describe('configFromEnv claudeProjectsDir', () => {
       expect(configFromEnv({ ...base, CLAUDE_CONFIG_DIR: value }).claudeProjectsDir, JSON.stringify(value)).toBe(path.join(os.homedir(), '.claude', 'projects'));
     }
   });
+  it('resolves a relative CLAUDE_CONFIG_DIR against the code root, the claude child\'s cwd, not the server\'s (R28-claude-L2-03 review)', () => {
+    expect(configFromEnv({ ...base, CC_CODE_ROOT: '/code', CLAUDE_CONFIG_DIR: 'cfg' }).claudeProjectsDir).toBe('/code/cfg/projects');
+  });
   it('lets CC_CLAUDE_PROJECTS_DIR override both', () => {
     expect(configFromEnv({ ...base, CLAUDE_CONFIG_DIR: '/x', CC_CLAUDE_PROJECTS_DIR: '/p' }).claudeProjectsDir).toBe('/p');
   });
