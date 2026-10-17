@@ -409,3 +409,13 @@ test('given the volume refuses hard links and cv.md appears meanwhile, when cv-w
   assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
   assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
 });
+
+test('given the temp file cannot be removed once linked, when cv-write seeds an absent cv.md, then it still reports the write that happened (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'rm-fails'), ['cv-write', '--data', data, '--resume', r]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'created');
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), '# New resume\n');
+});

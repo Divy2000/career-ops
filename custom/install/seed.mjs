@@ -150,7 +150,12 @@ function linkNew(tmp, file) {
     fs.renameSync(tmp, file);
     return;
   }
-  fs.rmSync(tmp, { force: true });
+  // cv.md is in place: a temp name that cannot be removed must not turn the write into a reported failure.
+  try {
+    fs.rmSync(tmp, { force: true });
+  } catch {
+    /* a leftover temp link, not a failed write */
+  }
 }
 
 // beforeRename runs once the new copy is fully written, so a failed write leaves nothing behind.
