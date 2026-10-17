@@ -130,10 +130,10 @@ const alive = (pid: number) => {
 };
 
 /** A failing run must not leave its server children behind: stop the ones this test started that are still this package's. */
-async function reap(pids: number[]): Promise<void> {
+async function reap(pids: number[], packageRoot = PACKAGE_ROOT): Promise<void> {
   const ours = (pid: number) => {
     try {
-      return execFileSync('/bin/ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes(path.join(PACKAGE_ROOT, 'server', 'index.ts'));
+      return execFileSync('/bin/ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).includes(path.join(packageRoot, 'server', 'index.ts'));
     } catch {
       return false;
     }
@@ -797,4 +797,91 @@ describe('one Control Center per data root (SW-claude-02)', () => {
       await new Promise((r) => blocker.close(r));
     }
   });
+});
+
+describe('stopping the supervisor holds the data-root lock until every server child has exited (R27-supervisor-L1-01)', () => {
+  /** A copy of the package (its node_modules linked) whose server child never finishes close(), as a run that will not stop would make it. */
+  function packageWhoseCloseHangs(): string {
+    const pkg = path.join(tempDir('cc-sup-pkg-closehang-'), 'control-center');
+    for (const part of ['server', 'shared', 'supervisor', 'web', 'package.json', 'vite.config.ts', 'tsconfig.json', 'tsconfig.server.json', 'tsconfig.web.json']) fs.cpSync(path.join(PACKAGE_ROOT, part), path.join(pkg, part), { recursive: true });
+    fs.symlinkSync(path.join(PACKAGE_ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    // The server imports custom/immigration (the policy pass reads its news), a sibling of the package.
+    fs.symlinkSync(path.join(PACKAGE_ROOT, '..', 'immigration'), path.join(pkg, '..', 'immigration'));
+    const app = path.join(pkg, 'server', 'app.ts');
+    const text = fs.readFileSync(app, 'utf8');
+    const close = "      bus.drain('server closing');\n";
+    expect(text).toContain(close);
+    fs.writeFileSync(app, text.replace(close, `${close}      await new Promise<void>(() => undefined);\n`));
+    return pkg;
+  }
+
+  const lockFile = (root: string) => path.join(root, 'data', 'control-center', 'supervisor.lock');
+
+  /** SIGTERMs the supervisor and returns which of `pids` were still alive the moment it exited, and whether its lock was. */
+  async function stopAndCheck(s: Started, root: string, pids: number[]): Promise<{ code: number | null; aliveAtExit: number[] }> {
+    const aliveAtExit: number[] = [];
+    s.proc.once('exit', () => {
+      for (const pid of pids) if (alive(pid)) aliveAtExit.push(pid);
+    });
+    s.proc.kill('SIGTERM');
+    const code = await s.exited;
+    expect(fs.existsSync(lockFile(root))).toBe(false);
+    return { code, aliveAtExit };
+  }
+
+  const serverChildren = (s: Started) => descendants(s.proc.pid!).filter((p) => {
+    try {
+      return execFileSync('/bin/ps', ['-o', 'command=', '-p', String(p.pid)], { encoding: 'utf8' }).includes(path.join('server', 'index.ts'));
+    } catch {
+      return false;
+    }
+  }).map((p) => p.pid);
+
+  it('a server child stuck in shutdown is killed before the supervisor exits and releases the lock', async () => {
+    const root = copyFixtureRoot();
+    const pkg = packageWhoseCloseHangs();
+    const s = startSupervisor(await freePort(), root, { packageRoot: pkg });
+    let pids: number[] = [];
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      pids = serverChildren(s);
+      expect(pids.length, s.output()).toBe(1);
+      expect(fs.existsSync(lockFile(root))).toBe(true);
+      const r = await stopAndCheck(s, root, pids);
+      expect(r.aliveAtExit, s.output()).toEqual([]);
+      expect(r.code).toBe(0);
+    } finally {
+      await stop(s);
+      // A stuck child ignores SIGTERM; reap's SIGKILL after 5 s is what stops one a failing run leaves behind.
+      await reap(pids, pkg);
+    }
+  }, 90_000);
+
+  it('a child still draining after a reload is killed too, not only the active one', async () => {
+    const root = copyFixtureRoot();
+    const pkg = packageWhoseCloseHangs();
+    const s = startSupervisor(await freePort(), root, { packageRoot: pkg, reload: true });
+    let pids: number[] = [];
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      const old = serverChildren(s);
+      expect(old.length, s.output()).toBe(1);
+      // A new file under server/ asks for a blue/green reload; retried until the watcher is up.
+      for (let i = 0; !/reload ok/.test(s.output()); i++) {
+        fs.writeFileSync(path.join(pkg, 'server', `touch-${i}.ts`), 'export {};\n');
+        await until(() => /reload ok/.test(s.output()), 'the reload', 3000).catch(() => undefined);
+      }
+      pids = serverChildren(s);
+      // The old child is draining (stuck in close) next to the new active one (a retried touch may queue one more reload).
+      expect(pids, s.output()).toEqual(expect.arrayContaining(old));
+      expect(pids.length, s.output()).toBeGreaterThanOrEqual(2);
+      const r = await stopAndCheck(s, root, pids);
+      expect(r.aliveAtExit, s.output()).toEqual([]);
+      expect(r.code).toBe(0);
+    } finally {
+      await stop(s);
+      // A stuck child ignores SIGTERM; reap's SIGKILL after 5 s is what stops one a failing run leaves behind.
+      await reap(pids, pkg);
+    }
+  }, 90_000);
 });

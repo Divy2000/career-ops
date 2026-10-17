@@ -60,6 +60,12 @@ interface Child extends ChildHandle {
   proc: ChildProcess;
 }
 
+/**
+ * Every server child not yet exited: the active one, ones still draining after a reload, and one a reload is starting.
+ * The supervisor releases the data-root lock only once all of them are gone.
+ */
+const liveChildren = new Map<ChildProcess, Promise<void>>();
+
 function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
   return new Promise((resolve, reject) => {
     const command = serverChildCommand(PACKAGE_ROOT);
@@ -69,6 +75,14 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
       stdio: ['ignore', 'inherit', 'pipe', 'ipc'],
       shell: false,
     });
+    // A spawn that failed emits 'error' and never 'exit': that child never ran, so it is not waited for.
+    liveChildren.set(
+      proc,
+      new Promise<void>((gone) => {
+        proc.once('exit', () => gone());
+        proc.once('error', () => proc.pid === undefined && gone());
+      }).then(() => void liveChildren.delete(proc)),
+    );
     // Raw for the terminal; everything that shows it (pages, replies, the status API) gets it without escape sequences.
     const tail = plainTail();
     const exited = new Promise<void>((done) => proc.once('exit', () => done()));
@@ -453,11 +467,21 @@ async function main(): Promise<void> {
     });
   }
 
+  // The lock is released at exit, so exit only once no server child is left: one still shutting down would otherwise keep
+  // tracking runs and sessions next to the next instance's. A child stuck in shutdown is killed; the timer is not unref'd.
   const stop = () => {
+    if (stopping) return;
     stopping = true;
-    bg.active?.kill();
     proxy.close();
-    setTimeout(() => process.exit(0), 200);
+    const children = [...liveChildren.keys()];
+    for (const c of children) c.kill('SIGTERM');
+    const hard = setTimeout(() => {
+      for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
+    }, 5000);
+    void Promise.all([...liveChildren.values()]).then(() => {
+      clearTimeout(hard);
+      process.exit(0);
+    });
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
