@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { apiGet, apiSend } from '../../lib/api';
+import { ApiError, apiGet, apiSend } from '../../lib/api';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { ActionButton, Message } from '../../components/ActionBar';
 import { Md } from '../../components/Md';
@@ -33,7 +33,12 @@ export function PluginsTab() {
       toast.success(`${id} ${enabled ? 'enabled' : 'disabled'} in config/plugins.yml`);
       await qc.invalidateQueries({ queryKey: ['config', 'plugins'] });
     } catch (err) {
-      setError(`Could not update ${id}: ${describeError(err)}`);
+      if (err instanceof ApiError && err.status === 409) {
+        // The If-Match was stale: without the new ETag every retry would get the same 409.
+        await qc.invalidateQueries({ queryKey: ['config', 'plugins'] });
+        const reloaded = qc.getQueryState(['config', 'plugins'])?.status === 'success';
+        setError(`Could not update ${id}: config/plugins.yml changed on disk${reloaded ? '; the current settings were reloaded. Toggle it again to apply.' : ' and could not be reloaded.'}`);
+      } else setError(`Could not update ${id}: ${describeError(err)}`);
     } finally {
       inFlight.current = false;
       setToggling(false);

@@ -10,6 +10,8 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { toast } from 'sonner';
 import type { ModePolicy, SessionMeta } from '@shared/api';
 import { plainPostingUrl } from '@shared/posting-url';
+import { localJdPath } from '@shared/local-jd';
+import { useActiveEvaluation } from '../today/evaluate';
 import { formatLocalMinute } from '../../lib/time';
 import { forgetDevSession } from '../../lib/devchatSession';
 
@@ -127,11 +129,21 @@ export function SessionsPage() {
   );
 }
 
-/** The New session panel, held back while its target is a URL the session route would refuse. */
+/**
+ * The New session panel, held back while its target is a URL the session route would refuse, or a posting an oferta
+ * session is still evaluating (the guard the Evaluate entry points share: the route does not dedupe by target).
+ */
 function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['target'] }) {
   // Once this panel has started a session the target no longer reaches the route, so its controls stay usable.
   const [started, setStarted] = useState(false);
   const badUrl = !started && target.type === 'url' && !plainPostingUrl(target.value);
+  const sessions = useSessions();
+  const activeFor = useActiveEvaluation();
+  const posting = !started && !badUrl && mode === 'oferta' && target.value !== null && (target.type === 'url' || localJdPath(target.value) !== null) ? target.value : null;
+  // Until the sessions list first loads (and when it cannot), a running evaluation of the posting cannot be told apart
+  // from none. A failed later poll keeps the list it had, so it does not lock the prompt being typed.
+  const checking = posting !== null && sessions.data === undefined;
+  const active = posting !== null && !checking ? activeFor(posting) : undefined;
   return (
     <>
       {badUrl && (
@@ -139,8 +151,22 @@ function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['
           Not a plain http(s) job posting URL: remove spaces and credentials, or enter a company name or row number instead.
         </p>
       )}
+      {checking && (
+        <p role="status" className="muted">
+          Waiting for the sessions list to check for a running evaluation of this posting.
+        </p>
+      )}
+      {active && (
+        <p role="status" className="muted">
+          This posting is already being evaluated:{' '}
+          <Link to="/sessions/$id" params={{ id: active.id }}>
+            open that session
+          </Link>
+          .
+        </p>
+      )}
       {/* Always wrapped, so a target being fixed does not remount the panel and drop the typed prompt. */}
-      <fieldset disabled={badUrl} className="turn-hold">
+      <fieldset disabled={badUrl || checking || active !== undefined} className="turn-hold">
         <SessionPanel mode={mode} target={target} placeholder="What should this session do?" onSessionId={() => setStarted(true)} />
       </fieldset>
     </>
