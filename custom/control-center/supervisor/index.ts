@@ -421,22 +421,41 @@ async function main(): Promise<void> {
     socket.on('error', () => target.destroy());
   });
 
+  // The lock is released at exit, so exit only once no server child is left: one still shutting down would otherwise keep
+  // tracking runs and sessions next to the next instance's. A child stuck in shutdown is killed; the timer is not unref'd.
+  const shutdown = (code: number) => {
+    if (stopping) return;
+    stopping = true;
+    if (proxy.listening) proxy.close();
+    const children = [...liveChildren.keys()];
+    for (const c of children) c.kill('SIGTERM');
+    const hard = setTimeout(() => {
+      for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
+    }, 5000);
+    void Promise.all([...liveChildren.values()]).then(() => {
+      clearTimeout(hard);
+      process.exit(code);
+    });
+  };
+  const stop = () => shutdown(0);
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+
   proxy.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`Port ${PORT} is already in use. Stop the other process or set CC_PORT to a free port.`);
     } else {
       console.error(`Supervisor failed to listen: ${err.message}`);
     }
-    bg.active?.kill();
-    process.exit(1);
+    shutdown(1);
   });
 
   proxy.listen(PORT, '127.0.0.1', () => {
     // Only the instance whose lock is still the one on disk may reconcile; one displaced while starting stops here.
     if (!lock.verify()) {
       console.error(`Another Control Center took this data root's lock while this one was starting: ${dataRoot}. This one stops.`);
-      bg.active?.kill();
-      process.exit(1);
+      shutdown(1);
+      return;
     }
     // A reload that already swapped the first child out activates its replacement itself.
     if (first && bg.active === first) first.activate();
@@ -469,25 +488,6 @@ async function main(): Promise<void> {
       if (st.state === 'ok' || st.state === 'failed') void core.refresh();
     });
   }
-
-  // The lock is released at exit, so exit only once no server child is left: one still shutting down would otherwise keep
-  // tracking runs and sessions next to the next instance's. A child stuck in shutdown is killed; the timer is not unref'd.
-  const stop = () => {
-    if (stopping) return;
-    stopping = true;
-    proxy.close();
-    const children = [...liveChildren.keys()];
-    for (const c of children) c.kill('SIGTERM');
-    const hard = setTimeout(() => {
-      for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
-    }, 5000);
-    void Promise.all([...liveChildren.values()]).then(() => {
-      clearTimeout(hard);
-      process.exit(0);
-    });
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
 }
 
 main().catch((err: Error) => {

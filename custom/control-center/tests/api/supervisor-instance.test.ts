@@ -817,13 +817,23 @@ describe('stopping the supervisor holds the data-root lock until every server ch
 
   const lockFile = (root: string) => path.join(root, 'data', 'control-center', 'supervisor.lock');
 
+  /**
+   * The supervisor's own process, below tsx. Signalled directly: tsx relays a signal only if the child acknowledges it
+   * within 30 ms, and SIGKILLs it otherwise, which a loaded machine can miss.
+   */
+  const supervisorPid = (s: Started) => {
+    const pid = descendants(s.proc.pid!).find((p) => p.ppid === s.proc.pid)?.pid;
+    expect(pid, s.output()).toBeDefined();
+    return pid!;
+  };
+
   /** SIGTERMs the supervisor and returns which of `pids` were still alive the moment it exited, and whether its lock was. */
   async function stopAndCheck(s: Started, root: string, pids: number[]): Promise<{ code: number | null; aliveAtExit: number[] }> {
     const aliveAtExit: number[] = [];
     s.proc.once('exit', () => {
       for (const pid of pids) if (alive(pid)) aliveAtExit.push(pid);
     });
-    s.proc.kill('SIGTERM');
+    process.kill(supervisorPid(s), 'SIGTERM');
     const code = await s.exited;
     expect(fs.existsSync(lockFile(root))).toBe(false);
     return { code, aliveAtExit };
@@ -875,16 +885,33 @@ describe('stopping the supervisor holds the data-root lock until every server ch
         fs.writeFileSync(path.join(pkg, 'server', `touch-${i}.ts`), 'export {};\n');
         await until(() => /reload ok/.test(s.output()), 'the reload', 3000).catch(() => undefined);
       }
-      s.proc.kill('SIGTERM');
+      process.kill(supervisorPid(s), 'SIGTERM');
       await new Promise((r) => setTimeout(r, 300));
       fs.writeFileSync(path.join(pkg, 'server', 'touch-after-stop.ts'), 'export {};\n');
-      expect(await s.exited).toBe(0);
+      const code = await s.exited;
+      expect(code, s.output()).toBe(0);
       // A child spawned late would still be starting: give it the time a start takes before looking.
       await new Promise((r) => setTimeout(r, 3000));
       expect(childrenOfPackage(pkg), s.output()).toEqual([]);
     } finally {
       await stop(s);
       await reap(childrenOfPackage(pkg), pkg);
+    }
+  }, 90_000);
+
+  it('a launch whose port is taken exits only after its server child, stuck in shutdown, is gone', async () => {
+    const pkg = packageWhoseCloseHangs();
+    const blocker = net.createServer();
+    const port = await new Promise<number>((resolve) => blocker.listen(0, '127.0.0.1', () => resolve((blocker.address() as net.AddressInfo).port)));
+    const s = startSupervisor(port, copyFixtureRoot(), { packageRoot: pkg });
+    try {
+      expect(await s.exited, s.output()).toBe(1);
+      expect(s.output()).toMatch(/already in use/);
+      expect(childrenOfPackage(pkg), s.output()).toEqual([]);
+    } finally {
+      await stop(s);
+      await reap(childrenOfPackage(pkg), pkg);
+      await new Promise((r) => blocker.close(r));
     }
   }, 90_000);
 
