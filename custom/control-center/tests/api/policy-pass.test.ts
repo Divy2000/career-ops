@@ -8,8 +8,8 @@ import { FAKE_TOKEN, makeTestApp, PACKAGE_ROOT, type TestApp } from '../helpers/
 import type { RunMeta } from '../../server/runner/store.js';
 import { tempDir } from '../helpers/tmp.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
-import { SessionManager } from '../../server/claude/manager.js';
-import { donePolicyBatches, dropUnreadablePolicyBatch, recordDonePolicyBatch } from '../../server/domains/policyPass.js';
+import { NotFoundError, SessionManager } from '../../server/claude/manager.js';
+import { donePolicyBatches, dropUnreadablePolicyBatch, policyClaim, recordDonePolicyBatch } from '../../server/domains/policyPass.js';
 import { acquirePipelineLock } from '../../../../pipeline-lock.mjs';
 import { localDate } from '../../shared/local-date.js';
 
@@ -263,6 +263,94 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
     // Deleting the paused session releases it.
     expect((await del(a.id)).statusCode).toBe(200);
     expect(claim()).toBeNull();
+  });
+
+  describe('a claim lock held past its wait while the claim is handed over (R30-srv-core-L1-01)', () => {
+    const LOCK_BUSY = () => {
+      throw new Error('.policy-pass.claim.lock is held by another claimant; try again');
+    };
+    const SLOW_PASS = [INIT, { __sleep: 1500 }, result('Pass done.')];
+
+    it('given the handover to a started pass throws, when the pass is started, then that session is cancelled, the start answers 409 naming it, and the claim does not stay with the start', async () => {
+      writePending([item(7)]);
+      const retag = vi.spyOn(policyClaim, 'retag').mockImplementationOnce(LOCK_BUSY);
+      try {
+        const res = await withScenario({ events: SLOW_PASS }, start);
+        expect(res.statusCode, res.body).toBe(409);
+        const session = res.json().session as { id: string };
+        expect(session.id).toBeTruthy();
+        expect((await settle(session.id)).meta.status).toBe('cancelled');
+      } finally {
+        retag.mockRestore();
+      }
+      expect(claim()?.owner ?? '').not.toMatch(/^starting:/);
+      for (let i = 0; i < 100 && claim(); i++) await wait(50);
+      expect(claim()).toBeNull();
+    });
+
+    it('given the handover and the release of the start claim both throw, when the pass is started, then the start still answers 409 with its cancelled session, not 500', async () => {
+      writePending([item(8)]);
+      const retag = vi.spyOn(policyClaim, 'retag').mockImplementationOnce(LOCK_BUSY);
+      const realRelease = policyClaim.release;
+      const release = vi.spyOn(policyClaim, 'release').mockImplementation((root, owner) => (owner.startsWith('starting:') ? LOCK_BUSY() : realRelease(root, owner)));
+      let starting: string | undefined;
+      try {
+        const res = await withScenario({ events: SLOW_PASS }, start);
+        expect(res.statusCode, res.body).toBe(409);
+        const session = res.json().session as { id: string };
+        expect((await settle(session.id)).meta.status).toBe('cancelled');
+        starting = claim()?.owner;
+      } finally {
+        release.mockRestore();
+        retag.mockRestore();
+      }
+      if (starting) policyClaim.release(t.cfg.dataRoot, starting);
+      for (let i = 0; i < 100 && claim(); i++) await wait(50);
+      expect(claim()).toBeNull();
+    });
+
+    it('given the handover to a fork throws, when a paused pass is forked, then the fork is cancelled, the request answers 409 naming it, and the paused pass keeps the claim and its batch', async () => {
+      writePending([item(9)]);
+      const a = (await withScenario({ events: PAUSE }, start)).json() as { id: string };
+      expect((await settle(a.id)).meta.status).toBe('awaiting_user');
+      const batch = t.sessions.read(a.id)!.policyBatch;
+      expect(batch).toBeTruthy();
+      const retag = vi.spyOn(policyClaim, 'retag').mockImplementationOnce(LOCK_BUSY);
+      let forkId: string;
+      try {
+        const res = await withScenario({ events: SLOW_PASS }, () => fork(a.id));
+        expect(res.statusCode, res.body).toBe(409);
+        forkId = (res.json().session as { id: string }).id;
+      } finally {
+        retag.mockRestore();
+      }
+      expect((await settle(forkId)).meta.status).toBe('cancelled');
+      expect(t.sessions.read(forkId)!.policyBatch).toBeNull();
+      expect(t.sessions.read(a.id)!.policyBatch).toBe(batch);
+      expect(claim()?.owner).toBe(`session:${a.id}`);
+      expect((await del(a.id)).statusCode).toBe(200);
+      expect(claim()).toBeNull();
+    });
+
+    it('given a fork that fails and a claim that cannot be given back, when a paused pass is forked, then the request answers with the fork\'s own error, not 500', async () => {
+      writePending([item(10)]);
+      const a = (await withScenario({ events: PAUSE }, start)).json() as { id: string };
+      expect((await settle(a.id)).meta.status).toBe('awaiting_user');
+      const forkFails = vi.spyOn(SessionManager.prototype, 'fork').mockRejectedValueOnce(new NotFoundError('no such session to fork'));
+      const retag = vi.spyOn(policyClaim, 'retag').mockImplementationOnce(LOCK_BUSY);
+      try {
+        const res = await fork(a.id);
+        expect(res.statusCode, res.body).toBe(404);
+        expect(res.json().error).toBe('no such session to fork');
+      } finally {
+        retag.mockRestore();
+        forkFails.mockRestore();
+      }
+      const starting = claim()?.owner;
+      if (starting?.startsWith('starting:')) policyClaim.retag(t.cfg.dataRoot, starting, `session:${a.id}`);
+      expect((await del(a.id)).statusCode).toBe(200);
+      expect(claim()).toBeNull();
+    });
   });
 
   it('a pass is refused while a daily run the app started is still queued (no lock, no pidfile yet)', async () => {
