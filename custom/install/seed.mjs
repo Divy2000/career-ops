@@ -174,7 +174,12 @@ function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSyn
     beforeRename();
     publish(tmp, file);
   } catch (err) {
-    fs.rmSync(tmp, { force: true });
+    // The original failure is the one to report; a temp file that cannot be removed must not replace it.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* leftover temp file */
+    }
     throw err;
   }
 }

@@ -432,3 +432,27 @@ test('given the volume refuses hard links and cv.md is a dangling symlink, when 
   assert.equal(fs.readlinkSync(path.join(data, 'cv.md')), path.join(d, 'nowhere.md'));
   assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
 });
+
+test('given the volume fills and the partial temp file cannot be removed, when cv-write runs, then it reports the full volume, not the cleanup (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const preload = put(path.join(d, 'full-busy.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync, realRm = fs.rmSync;
+fs.writeFileSync = (...args) => {
+  if (!String(args[0]).includes('.tmp-')) return realWrite(...args);
+  realWrite(args[0], String(args[1]).slice(0, 3), args[2]);
+  const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; throw err;
+};
+fs.rmSync = (...args) => {
+  if (String(args[0]).includes('.tmp-')) { const err = new Error('EBUSY: resource busy'); err.code = 'EBUSY'; throw err; }
+  return realRm(...args);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.doesNotMatch(res.stderr, /EBUSY/);
+});
