@@ -65,6 +65,21 @@ describe('useParseSession when a new pick gets the same upload path back', () =>
     expect(cancelled).toEqual(['s1', 's2']);
   });
 
+  it('cancels a fork the retired pick reports after the re-pick, and keeps the new parse armed', () => {
+    act(() => hook.begin('projects/x.pdf'));
+    const first = hook.panelFor('projects/x.pdf');
+    act(() => first.onSessionId('s1'));
+    act(() => {
+      hook.begin(null);
+      hook.begin('projects/x.pdf');
+    });
+    expect(cancelled).toEqual(['s1']);
+    // A reply sent before the re-pick forked s1; the fork's id answers only now.
+    act(() => first.onSessionId('s3'));
+    expect(cancelled).toEqual(['s1', 's3']);
+    expect(hook.parsing).toBe(true);
+  });
+
   it('ignores a retired pick panel ending status', () => {
     const { first, second } = pickSamePathTwice();
     act(() => second.onSessionId('s2'));

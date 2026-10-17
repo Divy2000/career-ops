@@ -57,9 +57,13 @@ export function useParseSession() {
     const mine = pick.current;
     // The last status the panel reported, so a repeat of it is told apart from a new turn.
     let last: string | null = null;
+    // The last session id the panel reported: a new one after its pick was retired is a fork nothing will receive.
+    let reported: string | null = null;
     const made = {
       onSessionId: (id: string) => {
-        if (retiredStarts.current.delete(mine)) void cancelSession(id).catch(() => undefined);
+        const fresh = id !== reported;
+        reported = id;
+        if (retiredStarts.current.delete(mine) || (pick.current !== mine && fresh)) void cancelSession(id).catch(() => undefined);
         else if (pick.current === mine && id !== sessionId.current) {
           // The first id, or a fork's new session: that is the one to cancel now. A fork runs for a result again.
           // A retry after a failed start (settled with no id yet) runs for a result too.
