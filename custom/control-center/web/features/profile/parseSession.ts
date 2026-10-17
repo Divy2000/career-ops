@@ -11,10 +11,13 @@ const ENDED = new Set(['done', 'error', 'cancelled', 'gone']);
 export function useParseSession() {
   const [parsing, setParsing] = useState(false);
   const running = useRef(false);
-  const forPath = useRef<string | null>(null);
+  // Bumped by every pick. Panel callbacks are bound to the pick they were made for, not to its upload path: a re-pick of
+  // the same file gets the same path back (the upload keeps one copy of identical bytes), and the retired pick's late
+  // reports must not act on the new parse.
+  const pick = useRef(0);
   const sessionId = useRef<string | null>(null);
-  // Uploads retired before their start answered: their session is cancelled as soon as its id arrives.
-  const retiredStarts = useRef(new Set<string>());
+  // Picks retired before their start answered: their session is cancelled as soon as its id arrives.
+  const retiredStarts = useRef(new Set<number>());
   // Whether the current parse has settled (its result landed, or it ended): only a new turn after that re-arms it, not
   // the panel re-sending the status it already reported.
   const settled = useRef(false);
@@ -34,29 +37,34 @@ export function useParseSession() {
     const id = sessionId.current;
     // A cancel that fails leaves a session that already ended or is going away: nothing more to stop.
     if (running.current && id) void cancelSession(id).catch(() => undefined);
-    else if (running.current && forPath.current) retiredStarts.current.add(forPath.current);
+    else if (running.current) retiredStarts.current.add(pick.current);
     sessionId.current = null;
   }, []);
   useEffect(() => retire, [retire]);
   /** A new pick: retires the running parse, and starts tracking the one for `path` (null: no parse). */
   const begin = (path: string | null) => {
     retire();
-    forPath.current = path;
+    pick.current += 1;
     running.current = path !== null;
     settled.current = false;
     callbacks.current.clear();
     setParsing(path !== null);
   };
-  /** The parse's panel callbacks, bound to its upload so a retired panel's late report is ignored. */
+  /** The parse's panel callbacks, bound to the current pick so a retired panel's late report is ignored. */
   const panelFor = (path: string) => {
     const known = callbacks.current.get(path);
     if (known) return known;
+    const mine = pick.current;
     // The last status the panel reported, so a repeat of it is told apart from a new turn.
     let last: string | null = null;
+    // The last session id the panel reported: a new one after its pick was retired is a fork nothing will receive.
+    let reported: string | null = null;
     const made = {
       onSessionId: (id: string) => {
-        if (retiredStarts.current.delete(path)) void cancelSession(id).catch(() => undefined);
-        else if (forPath.current === path && id !== sessionId.current) {
+        const fresh = id !== reported;
+        reported = id;
+        if (retiredStarts.current.delete(mine) || (pick.current !== mine && fresh)) void cancelSession(id).catch(() => undefined);
+        else if (pick.current === mine && id !== sessionId.current) {
           // The first id, or a fork's new session: that is the one to cancel now. A fork runs for a result again.
           // A retry after a failed start (settled with no id yet) runs for a result too.
           const fork = sessionId.current !== null;
@@ -65,7 +73,7 @@ export function useParseSession() {
         }
       },
       onStatus: (status: string) => {
-        if (forPath.current !== path) return;
+        if (pick.current !== mine) return;
         const previous = last;
         last = status;
         // A parse waiting for the user's reply has not delivered its result yet either.
@@ -75,8 +83,8 @@ export function useParseSession() {
         else if ((status === 'queued' || status === 'running') && settled.current && previous !== null && ENDED.has(previous)) arm();
       },
       onStartFailed: () => {
-        retiredStarts.current.delete(path);
-        if (forPath.current === path) settle();
+        retiredStarts.current.delete(mine);
+        if (pick.current === mine) settle();
       },
     };
     callbacks.current.set(path, made);

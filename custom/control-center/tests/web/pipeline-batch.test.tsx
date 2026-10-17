@@ -98,6 +98,20 @@ describe('Pipeline > Batch', () => {
     expect(host.textContent).toMatch(/Started 2 evaluations with report numbers 12, 13/);
   });
 
+  it('two spellings of one posting are one evaluation: only the first is sent, and the box says the other was left out (R27-feat-b-L2-01)', async () => {
+    fanoutResponse = { status: 202, body: { sessions: [{ id: 's1' }], reserved: [12] } };
+    await mount();
+    await type(textarea(), 'https://jobs.example.com/acme/123\nhttps://jobs.example.com/acme/123?utm_source=x');
+    expect(host.textContent).toMatch(/1 URL(?!s)/);
+    expect(host.textContent).toMatch(/Left out as the same posting as one above: https:\/\/jobs\.example\.com\/acme\/123\?utm_source=x/);
+    await click(button('Batch evaluate')!);
+    expect(document.body.textContent).toMatch(/Start 1 evaluation session\?/);
+    await click(button('Start them')!);
+    await until(() => (started === 1 ? true : null), 'the started callback');
+    expect(sent.filter((s) => s.method === 'POST')).toEqual([{ method: 'POST', url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.example.com/acme/123'] } }]);
+    expect(textarea().value).toBe('');
+  });
+
   it('cancelling the confirm starts nothing', async () => {
     await mount();
     await type(textarea(), 'https://jobs.example.com/1');
