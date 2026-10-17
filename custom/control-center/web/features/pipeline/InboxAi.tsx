@@ -76,6 +76,18 @@ export function watchLeavingInbox(router: AnyRouter): { left: () => boolean; sto
   return { left: () => left, stop };
 }
 
+type InboxNote = { tone: 'ok' | 'danger'; text: string };
+// An Evaluate visible fan-out can answer after the Inbox that started it unmounted (another tab, or DataState showing
+// its error card on a failed refetch): its note goes to the Inbox shown now, or a failure waits for the next one shown,
+// since only this note says which rows did not start and why.
+let keptNote: InboxNote | null = null;
+const noteListeners = new Set<(n: InboxNote) => void>();
+function handOverNote(n: InboxNote): void {
+  const shown = [...noteListeners][0];
+  if (shown) shown(n);
+  else if (n.tone === 'danger') keptNote = n;
+}
+
 export const PROCESS_INBOX_PROMPT =
   'Process the pending pipeline rows following the pipeline mode: triage, evaluate the strong matches and write their reports. Leave every local:jds/ row out of this run: not in the liveness sweep (its URL file takes http(s) URLs only) and not processed. Those rows stay pending; each is evaluated from its saved JD on its own.';
 
@@ -133,7 +145,22 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
     process.panel.onStatus('gone');
     setFresh((n) => n + 1);
   };
-  const [note, setNote] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
+  const [note, setNote] = useState<InboxNote | null>(null);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    const take = (n: InboxNote) => setNote(n);
+    if (keptNote) {
+      take(keptNote);
+      keptNote = null;
+    }
+    noteListeners.add(take);
+    return () => {
+      mounted.current = false;
+      noteListeners.delete(take);
+    };
+  }, []);
+  const showNote = (n: InboxNote) => (mounted.current ? setNote(n) : handOverNote(n));
   // Process inbox evaluates every pending row, and an evaluation started for one of them would evaluate, report and
   // bill it a second time: while either runs, the other does not start.
   const sessions = useSessions();
@@ -172,11 +199,11 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
       marked = true;
       const r = await fanOut('oferta', unique);
       const outcome = fanoutOutcome(r);
-      setNote({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
+      showNote({ tone: outcome.failedUrls.length > 0 ? 'danger' : 'ok', text: outcome.text });
       // A session that did not start is reported here; the Sessions page would hide why.
       if (outcome.failedUrls.length === 0 && !leaving.left()) await navigate({ to: '/sessions' });
     } catch (err) {
-      setNote({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
+      showNote({ tone: 'danger', text: `Could not start the evaluations: ${describeError(err)}` });
     } finally {
       // Even a failed fan-out may have started some: the host reads the sessions list again to leave them out.
       onFanOut?.();
