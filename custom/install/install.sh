@@ -1414,6 +1414,23 @@ if [ "$DRY_RUN" = 1 ]; then
   say "Dry run finished. Nothing was changed."
   exit 0
 fi
+# A failed preflight means the Control Center would not run as it should: it is not started, so the pending actions
+# below (and exit 3) stay what the run ends with. Whether it is running is asked once, so the pending list and the
+# start below cannot disagree about it.
+CC_START=0
+CC_LIVE=0
+if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ "$PREFLIGHT_FAILED" = 0 ]; then
+  CC_START=1
+fi
+if [ "$CC_START" = 1 ] || [ "$CC_DEPS_DEFERRED" = 1 ]; then
+  if cc_running; then CC_LIVE=1; fi
+fi
+# The skipped npm ci is installed below only when this run starts the Control Center; while it is still running, or
+# when this run will not start it, the new code would run on the old node_modules (bin/cc only checks they exist).
+# It goes first: a failed preflight listed above ran against those old dependencies.
+if [ "$CC_DEPS_DEFERRED" = 1 ] && { [ "$CC_LIVE" = 1 ] || [ "$CC_START" = 0 ]; }; then
+  PENDING=("The Control Center was running, so its dependencies were not reinstalled: stop it, run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it again." ${PENDING[@]+"${PENDING[@]}"})
+fi
 if [ "${#PENDING[@]}" -gt 0 ]; then
   say "Done, with pending actions:"
   n=0
@@ -1422,10 +1439,8 @@ else
   say "Done."
 fi
 
-# A failed preflight means the Control Center would not run as it should: it is not started, so the pending actions
-# above (and exit 3) stay what the run ends with.
-if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ "$PREFLIGHT_FAILED" = 0 ]; then
-  if cc_running; then
+if [ "$CC_START" = 1 ]; then
+  if [ "$CC_LIVE" = 1 ]; then
     say "Control Center is already running; not starting a second instance"
   else
     # It was running when its npm ci was skipped and has stopped since: install what it was left without first, and
