@@ -311,6 +311,25 @@ describe('installTutorial with a quick guide', () => {
     expect(r.files.filter((n) => n === 'poster.jpg')).toHaveLength(1);
   });
 
+  it('refuses two different files whose names differ only in Unicode normalization', () => {
+    const nfc = 'caf\u00e9.jpg';
+    const nfd = 'cafe\u0301.jpg';
+    folder({ manifest: { ...manifest, poster: nfc }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: nfd }] }) });
+    write(nfc, 'TUTORIAL-POSTER');
+    if (!fs.readdirSync(src()).includes(nfd) && !fs.existsSync(path.join(src(), nfd))) write(nfd, 'GUIDE-POSTER');
+    else {
+      // A normalization-insensitive disk (APFS) cannot hold both, so report the NFD name as another file, as ext4 would.
+      const realStat = fs.statSync;
+      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+        const st = realStat(p, o);
+        if (st && path.basename(String(p)) === nfd) st.ino = typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1;
+        return st;
+      }) as typeof fs.statSync);
+    }
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/is used by both the poster and the guide poster file/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
   it.each([
     ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
     ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],

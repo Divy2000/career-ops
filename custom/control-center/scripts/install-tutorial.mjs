@@ -297,6 +297,9 @@ function partCopies(manifest) {
   });
 }
 
+/** How a case- and normalization-insensitive disk (APFS) compares names: "Poster.jpg" is "poster.jpg", NFC "é" is NFD "é". */
+const diskKey = (name) => name.normalize('NFC').toLowerCase();
+
 /** One file on disk, whatever the path spelling: on a case-insensitive disk "Poster.jpg" and "poster.jpg" are. */
 function sameFile(a, b) {
   const x = fs.statSync(a, { bigint: true });
@@ -371,9 +374,9 @@ export function installTutorial(opts) {
   for (const c of planned) {
     // A guide that is the manifest file itself is written back unchanged.
     if (c.to === 'tutorial.json' && !built && sameFile(c.from, manifestPath)) continue;
-    // Staging may sit on a case-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
-    if (c.to.toLowerCase() === 'tutorial.json') throw new Error(`"${c.to}" is used by both the manifest and the ${c.kind} file, so the manifest would overwrite it`);
-    const clash = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase() && !sameFile(o.from, c.from));
+    // Staging may sit on a case- and normalization-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
+    if (diskKey(c.to) === 'tutorial.json') throw new Error(`"${c.to}" is used by both the manifest and the ${c.kind} file, so the manifest would overwrite it`);
+    const clash = copies.find((o) => diskKey(o.to) === diskKey(c.to) && !sameFile(o.from, c.from));
     if (clash) throw new Error(`"${c.to}" is used by both the ${clash.kind} and the ${c.kind} file, which are different files`);
     if (!copies.some((o) => o.to === c.to)) copies.push(c);
   }
