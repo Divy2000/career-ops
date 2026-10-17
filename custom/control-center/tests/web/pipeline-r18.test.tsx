@@ -201,7 +201,7 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
       await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
       await until(() => button('Evaluate visible (2)'), 'the Inbox tab');
       await settle();
-      expect(host.textContent).not.toContain('Evaluations started from Pipeline are still starting');
+      expect(host.textContent).not.toContain('Other evaluations are still starting');
     } finally {
       vi.useRealTimers();
     }
@@ -284,7 +284,7 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
     await until(() => button('Process inbox'), 'the Inbox tab');
     await act(async () => button('Process inbox')!.click());
-    await until(() => host.textContent?.includes('Evaluations started from Pipeline are still starting'), 'the note');
+    await until(() => host.textContent?.includes('Other evaluations are still starting'), 'the note');
     expect(pipelinePanel()).toBeUndefined();
     await act(async () => hold!.release());
   });
@@ -328,7 +328,7 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await act(async () => button('Evaluate visible (2)')!.click());
     await until(() => hold, 'the fan-out sent');
     await settle();
-    expect(host.textContent).not.toContain('Evaluations started from Pipeline are still starting');
+    expect(host.textContent).not.toContain('Other evaluations are still starting');
   });
 
   it('given an Evaluate visible fan-out in flight and the Inbox mounted again, Process inbox is held without naming a Batch evaluate', async () => {
@@ -382,9 +382,9 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
       await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
       await until(() => button('Process inbox'), 'the Inbox tab');
       await act(async () => button('Process inbox')!.click());
-      await until(() => host.textContent?.includes('Evaluations started from Pipeline are still starting'), 'the note');
+      await until(() => host.textContent?.includes('Other evaluations are still starting'), 'the note');
       await act(async () => vi.advanceTimersByTime(60_000));
-      expect(host.textContent).toContain('Evaluations started from Pipeline are still starting');
+      expect(host.textContent).toContain('Other evaluations are still starting');
       expect(pipelinePanel()).toBeUndefined();
     } finally {
       vi.useRealTimers();
