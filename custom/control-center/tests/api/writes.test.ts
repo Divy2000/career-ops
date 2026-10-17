@@ -436,6 +436,14 @@ describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
         '| 20 | 2026-10-01 | Initech Cloud | - | Backend Engineer II | 3.0/5 | Evaluated | ❌ | [4](../reports/004-initech-cloud.md) | |',
         // #21 is a re-added row that now carries a report; the page previewed it without one.
         '| 21 | 2026-10-02 | Acme Robotics | - | Engineer | 3.0/5 | Evaluated | ❌ | [12](../reports/012-acme.md) | |',
+        // tracker.mjs matches a trimmed line, so an indented row under #22 goes with it; so does a row too short to parse (#23).
+        '| 22 | 2026-10-03 | Umbrella Labs | - | Engineer | 3.0/5 | Evaluated | ❌ | [13](../reports/013-umbrella.md) | |',
+        '  | 22 | 2026-10-03 | Indented Corp | - | SRE | 3.0/5 | Evaluated | ❌ | [14](../reports/014-indented.md) | |',
+        '| 23 | 2026-10-04 | Umbrella Labs | - | Analyst | 3.0/5 | Evaluated | ❌ | [15](../reports/015-umbrella.md) | |',
+        '| 23 | Shortrow Inc |',
+        // tracker.mjs deletes a number cell that is exactly "24", so a "024" row is neither deleted nor a second #24.
+        '| 24 | 2026-10-05 | Vandelay Industries | - | Importer | 3.0/5 | Evaluated | ❌ | [16](../reports/016-vandelay.md) | |',
+        '| 024 | 2026-10-05 | Zeropad Systems | - | Exporter | 3.0/5 | Evaluated | ❌ | [17](../reports/017-zeropad.md) | |',
         '',
       ].join('\n'),
     );
@@ -458,6 +466,34 @@ describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
     const r = await confirmDelete({ n: 21, expectCompany: 'Acme Robotics', expectRole: 'Engineer', expectReport: null });
     expect(r.statusCode, r.body).toBe(409);
     expect(tracker()).toContain('| 21 | 2026-10-02 | Acme Robotics |');
+  });
+
+  it('given an indented row shares the number, when the other row is confirmed, then it is refused and both stay', async () => {
+    const r = await confirmDelete({ n: 22, expectCompany: 'Umbrella Labs', expectRole: 'Engineer', expectReport: 13 });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(tracker()).toContain('Indented Corp');
+    expect(tracker()).toContain('[13](../reports/013-umbrella.md)');
+  });
+
+  it('given a row too short to read shares the number, when the other row is confirmed, then it is refused and both stay', async () => {
+    const r = await confirmDelete({ n: 23, expectCompany: 'Umbrella Labs', expectRole: 'Analyst', expectReport: 15 });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(tracker()).toContain('| 23 | Shortrow Inc |');
+    expect(tracker()).toContain('[15](../reports/015-umbrella.md)');
+  });
+
+  it('given a "024" row beside #24, when #24 is confirmed, then only #24 is deleted', async () => {
+    const r = await confirmDelete({ n: 24, expectCompany: 'Vandelay Industries', expectRole: 'Importer', expectReport: 16 });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(tracker()).not.toContain('Vandelay Industries');
+    expect(tracker()).toContain('Zeropad Systems');
+  });
+
+  it('given the palette sends the expectations as typed text, when it names the row, then the delete goes through', async () => {
+    fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), '| 30 | 2026-10-06 | Palette Typed Co | - | Engineer | 3.0/5 | Evaluated | ❌ | [18](../reports/018-palette.md) | |\n');
+    const r = await confirmDelete({ n: 30, expectCompany: 'Palette Typed Co ', expectRole: ' Engineer', expectReport: '18' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(tracker()).not.toContain('Palette Typed Co');
   });
 });
 
