@@ -56,6 +56,19 @@ const rowParams = {
   stringify: ({ n }: { n: string }) => ({ n }),
 };
 
+/**
+ * A session id (the shape lastSession.ts keeps), or not found. The page puts it in /api/sessions/ fetch paths, so it
+ * must not name another route there (engine answers with no session record) or decode into a sibling path.
+ */
+const NOT_SESSIONS = new Set(['engine', 'fanout']);
+const sessionParams = {
+  parse: ({ id }: { id: string }): { id: string } => {
+    if (!/^[\w-]{1,80}$/.test(id) || NOT_SESSIONS.has(id)) throw notFound();
+    return { id };
+  },
+  stringify: ({ id }: { id: string }) => ({ id }),
+};
+
 // A different row is a different page: without the remount, its tab and a delete preview carry over to the next row.
 const applicationRoute = createRoute({ getParentRoute: () => rootRoute, path: '/tracker/$n', component: ApplicationPage, params: rowParams, remountDeps: ({ params }) => params });
 
@@ -135,7 +148,7 @@ export const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/interviews', component: InterviewsPage }),
   discoverRoute,
   createRoute({ getParentRoute: () => rootRoute, path: '/sessions', component: SessionsPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: SessionDetailPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: SessionDetailPage, params: sessionParams }),
   createRoute({ getParentRoute: () => rootRoute, path: '/runs', component: RunsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: '/profile', component: ProfilePage }),
   settingsRoute,

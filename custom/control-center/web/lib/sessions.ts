@@ -182,7 +182,7 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
     const load = (): void => {
       clearTimeout(retry);
       const asked = ++generation;
-      void apiGet<{ meta?: SessionMeta; events: StoredEvent[] }>(`/api/sessions/${id}`).then(
+      void apiGet<{ meta?: SessionMeta; events: StoredEvent[] }>(`/api/sessions/${encodeURIComponent(id)}`).then(
         (r) => {
           if (closed || asked !== generation) return;
           failures = 0;
@@ -303,14 +303,14 @@ export function startTailoredCvSession(n: string): Promise<SessionMeta> {
 }
 export async function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/turns`, { prompt, ...unlock.body }, unlock.headers);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${encodeURIComponent(id)}/turns`, { prompt, ...unlock.body }, unlock.headers);
 }
 export function forkSession(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/fork`, { prompt, ...unlock.body }, unlock.headers);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${encodeURIComponent(id)}/fork`, { prompt, ...unlock.body }, unlock.headers);
 }
 export function cancelSession(id: string): Promise<SessionMeta> {
-  return apiSend<SessionMeta>('POST', `/api/sessions/${id}/cancel`);
+  return apiSend<SessionMeta>('POST', `/api/sessions/${encodeURIComponent(id)}/cancel`);
 }
 export function fanOut(mode: string, urls: string[]): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
   return apiSend('POST', '/api/sessions/fanout', { mode, urls });
