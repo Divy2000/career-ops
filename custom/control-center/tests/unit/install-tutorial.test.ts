@@ -29,6 +29,26 @@ const write = (rel: string, content: string | Buffer, base = path.join(work, 'sr
 };
 const src = () => path.join(work, 'src');
 
+/** Reports `name` as a different file from every other path, as a case- or normalization-sensitive source disk would. */
+function asAnotherFile(name: string) {
+  const realStat = fs.statSync;
+  vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+    const st = realStat(p, o);
+    if (st && path.basename(String(p)) === name) st.ino = typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1;
+    return st;
+  }) as typeof fs.statSync);
+}
+
+/** Reports inode 0 for every file, as some FUSE and network disks do. */
+function inodesAllZero() {
+  const realStat = fs.statSync;
+  vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+    const st = realStat(p, o);
+    if (st) st.ino = typeof st.ino === 'bigint' ? 0n : 0;
+    return st;
+  }) as typeof fs.statSync);
+}
+
 /** The folder layout of a recording: chapters/toc.json, one mp4, one srt and tutorial/script.md. */
 function recordingFolder() {
   write('chapters/toc.json', JSON.stringify(TOC));
@@ -247,6 +267,115 @@ describe('installTutorial with a quick guide', () => {
     write('guide/poster.jpg', 'GUIDE-POSTER');
     write('guide/guide.json', JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'poster.jpg' }] }));
     expect(() => installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' })).toThrow(/poster\.jpg.*both/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
+  it('refuses a guide poster whose name differs from a tutorial file only in case', () => {
+    recording();
+    write('poster.jpg', 'TUTORIAL-POSTER');
+    write('guide/Poster.jpg', 'GUIDE-POSTER');
+    write('guide/guide.json', JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }));
+    expect(() => installTutorial({ source: src(), dataRoot, id: 'guided', title: 'Guided' })).toThrow(/"Poster\.jpg" is used by both the poster and the guide poster file/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
+  it('installs a guide poster that names a tutorial poster in another case when both names are the same file', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg' }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }) });
+    write('poster.jpg', 'POSTER');
+    // On a case-insensitive disk Poster.jpg already is poster.jpg; elsewhere a hard link makes it the same file.
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) fs.linkSync(path.join(src(), 'poster.jpg'), path.join(src(), 'Poster.jpg'));
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readFileSync(path.join(dest('guided'), 'poster.jpg'), 'utf8')).toBe('POSTER');
+    expect(fs.readFileSync(path.join(dest('guided'), 'Poster.jpg'), 'utf8')).toBe('POSTER');
+  });
+
+  it('refuses two spellings of a name on a disk that reports inode 0 for every file, where sameness is unknowable', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg' }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }) });
+    write('poster.jpg', 'POSTER');
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) fs.linkSync(path.join(src(), 'poster.jpg'), path.join(src(), 'Poster.jpg'));
+    inodesAllZero();
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Poster\.jpg" is used by both the poster and the guide poster file/);
+  });
+
+  it('installs one file named twice by the same name on a disk that reports inode 0 for every file', () => {
+    folder({ manifest: { ...manifest, poster: 'today.jpg' } });
+    inodesAllZero();
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readFileSync(path.join(dest('guided'), 'today.jpg'), 'utf8')).toBe('JPEG');
+  });
+
+  it('installs a guide that is the tutorial.json itself on a disk that reports inode 0 for every file', () => {
+    folder({ manifest: { ...manifest, guide: 'tutorial.json', sections: [GUIDE.sections[0]] }, guide: null });
+    inodesAllZero();
+    expect(installTutorial({ source: src(), dataRoot }).files).toContain('tutorial.json');
+  });
+
+  it('refuses a guide whose name differs from tutorial.json only in case, which the manifest would overwrite', () => {
+    // Valid as both a manifest and a guide, so only the name clash can refuse it.
+    const both = JSON.stringify({ ...manifest, guide: 'Tutorial.json', sections: [GUIDE.sections[0]] });
+    folder({ manifest: JSON.parse(both), guide: null });
+    if (!fs.existsSync(path.join(src(), 'Tutorial.json'))) write('Tutorial.json', both);
+    // A case-insensitive source disk cannot hold both, so report Tutorial.json as another file.
+    else asAnotherFile('Tutorial.json');
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Tutorial\.json" is used by both the manifest and the guide file/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
+  it('installs a guide named Tutorial.json that is the tutorial.json file itself', () => {
+    const both = { ...manifest, guide: 'Tutorial.json', sections: [GUIDE.sections[0]] };
+    folder({ manifest: both, guide: null });
+    if (!fs.existsSync(path.join(src(), 'Tutorial.json'))) fs.linkSync(path.join(src(), 'tutorial.json'), path.join(src(), 'Tutorial.json'));
+    installTutorial({ source: src(), dataRoot });
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'tutorial.json'), 'utf8'))).toEqual(both);
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'Tutorial.json'), 'utf8'))).toEqual(both);
+  });
+
+  it('installs a guide that is the tutorial.json itself, which the manifest write leaves byte for byte', () => {
+    const both = { ...manifest, guide: 'tutorial.json', sections: [GUIDE.sections[0]] };
+    folder({ manifest: both, guide: null });
+    installTutorial({ source: src(), dataRoot });
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'tutorial.json'), 'utf8'))).toEqual(both);
+  });
+
+  it('refuses two tutorial files whose names differ only in case when they are different files', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg', posterLight: 'Poster.jpg' } });
+    write('poster.jpg', 'DARK');
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) write('Poster.jpg', 'LIGHT');
+    else {
+      // A case-insensitive source disk cannot hold both, so report Poster.jpg as another file, as a case-sensitive one would.
+      asAnotherFile('Poster.jpg');
+    }
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Poster\.jpg" is used by both the poster and the light poster file/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
+  it('lists and copies a file once when three entries name it in two spellings of one file', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg', posterLight: 'Poster.jpg' }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }) });
+    write('poster.jpg', 'POSTER');
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) fs.linkSync(path.join(src(), 'poster.jpg'), path.join(src(), 'Poster.jpg'));
+    const r = installTutorial({ source: src(), dataRoot, dryRun: true });
+    expect(r.files.filter((n) => n === 'Poster.jpg')).toHaveLength(1);
+    expect(r.files.filter((n) => n === 'poster.jpg')).toHaveLength(1);
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readFileSync(path.join(dest('guided'), 'poster.jpg'), 'utf8')).toBe('POSTER');
+    expect(fs.readFileSync(path.join(dest('guided'), 'Poster.jpg'), 'utf8')).toBe('POSTER');
+  });
+
+  it.each([
+    ['Unicode normalization', 'caf\u00e9.jpg', 'cafe\u0301.jpg'],
+    ['a final and a medial sigma', '\u03c3.jpg', '\u03c2.jpg'],
+    ['a long s', 's.jpg', '\u017f.jpg'],
+    ['a Greek letter that case mapping decomposes', '\u0390.jpg', '\u03aa\u0301.jpg'],
+    ['a capital and a small sharp s', '\u00df.jpg', '\u1e9e.jpg'],
+  ])('refuses two different files whose names differ only in %s', (_label, nfc, nfd) => {
+    folder({ manifest: { ...manifest, poster: nfc }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: nfd }] }) });
+    write(nfc, 'TUTORIAL-POSTER');
+    if (!fs.readdirSync(src()).includes(nfd) && !fs.existsSync(path.join(src(), nfd))) write(nfd, 'GUIDE-POSTER');
+    else {
+      // A normalization-insensitive disk (APFS) cannot hold both, so report the NFD name as another file, as ext4 would.
+      asAnotherFile(nfd);
+    }
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/is used by both the poster and the guide poster file/);
     expect(fs.existsSync(dest('guided'))).toBe(false);
   });
 

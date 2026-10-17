@@ -297,6 +297,22 @@ function partCopies(manifest) {
   });
 }
 
+/**
+ * How a case- and normalization-insensitive disk (APFS) compares names: "Poster.jpg" is "poster.jpg", NFC "é" is NFD "é".
+ * Upper-casing folds what lower-casing alone keeps apart, such as "ς" and "σ", "ſ" and "s" or "ß" and "ss"; lower-casing
+ * first brings "ẞ" to "ß" so it folds too. Case mapping can decompose a letter ("ΐ"), so the result is normalized again.
+ */
+const diskKey = (name) => name.normalize('NFC').toLowerCase().toUpperCase().toLowerCase().normalize('NFC');
+
+/** One file on disk, whatever the path spelling: on a case-insensitive disk "Poster.jpg" and "poster.jpg" are. */
+function sameFile(a, b) {
+  if (path.resolve(a) === path.resolve(b)) return true;
+  const x = fs.statSync(a, { bigint: true });
+  const y = fs.statSync(b, { bigint: true });
+  // Some FUSE and network disks report inode 0 for every file, so a 0 proves nothing.
+  return x.ino !== 0n && x.dev === y.dev && x.ino === y.ino;
+}
+
 /** guide.json and the files it names, from `guideRoot`: validated like the server does, before anything is copied. */
 function planGuide(guideRoot, name, chapterCount, strictDims) {
   const guideFrom = path.join(guideRoot, name);
@@ -355,16 +371,25 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
   }
 
-  const copies = partCopies(manifest).map(({ kind, name }) => ({ kind, from: path.join(source, name), to: name }));
-  if (manifest.transcript !== undefined) copies.push({ kind: 'transcript', from: path.join(source, built && scriptFrom ? scriptFrom : manifest.transcript), to: manifest.transcript });
-  for (const c of copies) if (!isFile(c.from)) throw new Error(`${c.kind} file "${c.to}" not found in the source folder`);
+  const planned = partCopies(manifest).map(({ kind, name }) => ({ kind, from: path.join(source, name), to: name }));
+  if (manifest.transcript !== undefined) planned.push({ kind: 'transcript', from: path.join(source, built && scriptFrom ? scriptFrom : manifest.transcript), to: manifest.transcript });
+  for (const c of planned) if (!isFile(c.from)) throw new Error(`${c.kind} file "${c.to}" not found in the source folder`);
   if (opts.strictDims === true) for (const p of manifest.parts) checkPosters(source, p);
-  if (manifest.guide !== undefined) {
-    for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true)) {
-      const same = copies.find((o) => o.to === c.to);
-      if (same && same.from !== c.from) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
-      if (!same) copies.push(c);
+  if (manifest.guide !== undefined) planned.push(...planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true));
+  const copies = [];
+  for (const c of planned) {
+    // Staging may sit on a case- and normalization-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
+    if (diskKey(c.to) === 'tutorial.json') {
+      // A guide that is the manifest file itself is written back unchanged; another spelling of it is copied as-is.
+      if (!built && sameFile(c.from, manifestPath)) {
+        if (c.to !== 'tutorial.json' && !copies.some((o) => o.to === c.to)) copies.push(c);
+        continue;
+      }
+      throw new Error(`"${c.to}" is used by both the manifest and the ${c.kind} file, so the manifest would overwrite it`);
     }
+    const clash = copies.find((o) => diskKey(o.to) === diskKey(c.to) && !sameFile(o.from, c.from));
+    if (clash) throw new Error(`"${c.to}" is used by both the ${clash.kind} and the ${c.kind} file, which are different files`);
+    if (!copies.some((o) => o.to === c.to)) copies.push(c);
   }
 
   const tutorialsDir = path.join(dataRoot, 'data', 'control-center', 'tutorials');
