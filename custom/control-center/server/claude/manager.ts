@@ -1201,11 +1201,15 @@ export class SessionManager {
    */
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
     const claimed = !this.sending.has(meta.id);
+    // A send holds the claim already; a new session's (or fork's) is taken here, so another server process refuses to
+    // delete it while it prepares.
+    const unclaimTurn = claimed ? this.claimTurn(meta.id) : () => {};
     if (claimed) this.sending.add(meta.id);
     this.preparing.add(meta.id);
     try {
       return await this.prepareAndSpawn(meta, policy, prompt, opts);
     } finally {
+      unclaimTurn();
       if (claimed) this.sending.delete(meta.id);
       this.preparing.delete(meta.id);
       this.cancelledBeforeSpawn.delete(meta.id);

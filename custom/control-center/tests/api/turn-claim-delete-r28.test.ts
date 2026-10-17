@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { copyFixtureRoot, makeTestApp } from '../helpers/app.js';
+import { copyFixtureRoot, FAKE_TOKEN, makeTestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
 // R28-claude-X-01 review: another server process holds a session's turn claim while it prepares a turn (a slow token
@@ -53,6 +53,29 @@ describe('deleting a session another server process is starting a turn on (R28-c
       expect(fs.existsSync(guard)).toBe(false);
     } finally {
       vi.restoreAllMocks();
+      await app.close();
+    }
+  });
+
+  it('given a new session whose first turn is being prepared, when another process looks, then the session\'s turn claim is held', async () => {
+    let claimed: boolean | null = null;
+    let guard = '';
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') }, {
+      readToken: async () => {
+        claimed = fs.existsSync(path.join(guard, 'turn.claim'));
+        return FAKE_TOKEN;
+      },
+    });
+    try {
+      const meta = await app.sessions.start({ mode: 'advisor', target: { type: 'none', value: null }, prompt: 'What is overdue?' }, (m) => {
+        guard = app.sessions.store.guardDirOf(m.id);
+      });
+      expect(claimed).toBe(true);
+      for (const deadline = Date.now() + 15_000; ['queued', 'running'].includes(app.sessions.read(meta.id)!.status); await new Promise((r) => setTimeout(r, 50))) {
+        if (Date.now() > deadline) throw new Error('the first turn never ended');
+      }
+      expect(fs.existsSync(path.join(guard, 'turn.claim'))).toBe(false);
+    } finally {
       await app.close();
     }
   });
