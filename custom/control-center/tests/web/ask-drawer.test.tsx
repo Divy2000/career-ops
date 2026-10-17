@@ -1059,6 +1059,15 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
     expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
   });
 
+  it('given a language-directory Process inbox (de/pipeline) is running, an evaluate of a pending Inbox row fails before asking and starts nothing (R30-feat-b-X-01b)', async () => {
+    listed = [{ ...PIPELINE, mode: 'de/pipeline' }];
+    const item = await propose('evaluate', { url: 'https://jobs.acme.example/1' });
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+  });
+
   it('given Process inbox is running, an evaluate of a pending Inbox row fails before asking and starts nothing', async () => {
     const item = await propose('evaluate', { url: 'https://jobs.acme.example/1' });
     expect(document.body.querySelector('.dialog')).toBeNull();

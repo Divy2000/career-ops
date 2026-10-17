@@ -19,6 +19,7 @@ import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { activeEvaluationIn, evaluationStarting, useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
+import { isProcessInboxMode } from '../features/pipeline/evaluating';
 import { useTracker } from '../lib/queries';
 import { STATES } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
@@ -184,7 +185,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     const process = lastSession('cc.pipeline.process');
     const remembered = process.read();
     const unlisted = remembered !== null && remembered !== knownProcess && !list.some((s) => s.id === remembered);
-    if (!process.starting() && !unlisted && !list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
+    if (!process.starting() && !unlisted && !list.some((s) => isProcessInboxMode(s.mode) && LIVE.has(s.status))) return false;
     return p.action === 'evaluateCompany' || (await isPendingInboxRow(String(p.params.url).trim()));
   };
 
