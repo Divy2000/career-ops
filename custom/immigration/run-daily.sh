@@ -279,8 +279,13 @@ const { REASON, TODAY, FILE } = process.env;
 const before = fs.existsSync(FILE) ? fs.readFileSync(FILE, "utf8") : "";
 const after = noteSkippedPass(before, TODAY, `${REASON}. The official items stay pending for the next run.`);
 if (after !== before) {
-  fs.writeFileSync(`${FILE}.tmp-${process.pid}`, after);
-  fs.renameSync(`${FILE}.tmp-${process.pid}`, FILE);
+  const tmp = `${FILE}.tmp-${process.pid}`;
+  try {
+    fs.writeFileSync(tmp, after);
+    fs.renameSync(tmp, FILE);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 ' || return 1
     return 0

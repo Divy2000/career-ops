@@ -286,6 +286,25 @@ jobTest('an unapproved Claude Code skips the pass, not the job: a clear log line
   assert.deepEqual(r.leftovers, []);
 });
 
+jobTest('an unapproved Claude Code whose digest note cannot be moved into place fails the step and leaves no temp digest in data/immigration (R27-scripts-a-L1-02)', () => {
+  const w = dailyWorld();
+  const preload = path.join(w.T, 'rename-eio.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (String(to).endsWith('policy-digest.md')) { const err = new Error('i/o error'); err.code = 'EIO'; throw err; }
+  return real(from, to);
+};
+syncBuiltinESMExports();
+`);
+  const r = w.run({ FAKE_CLAUDE_VERSION: '2.1.290 (Claude Code)', NODE_OPTIONS: `--import ${preload}` });
+  assert.match(r.log, /policy pass skipped: Claude Code 2\.1\.290 is not approved/);
+  assert.match(r.log, /EIO/, 'the failed rename reached the log');
+  assert.equal(r.digest, null, 'no digest was published');
+  assert.deepEqual(fs.readdirSync(r.imm).filter((f) => f.includes('.tmp-')), [], 'the failed note left its temp digest behind');
+});
+
 jobTest('a Claude Code whose version cannot be read fails the step and never runs the pass', () => {
   const w = dailyWorld();
   const r = w.run({ FAKE_CLAUDE_VERSION: 'Claude Code is updating...' });
