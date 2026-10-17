@@ -18,7 +18,7 @@ import { plainPostingUrl, postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
-import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
+import { endBatchStarting, markBatchStarting, withinSessionsReadLimit } from '../features/pipeline/InboxAi';
 import { useTracker } from '../lib/queries';
 import { STATES } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
@@ -247,9 +247,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
     }
-    // Counted like a Batch fan-out from before the recheck on, so a Process inbox cannot start between the recheck and
-    // the fan-out and evaluate these rows too.
-    let holding = p.action === 'evaluateCompany';
+    // Counted like a Batch fan-out from before the recheck until the started sessions are listed, so a Process inbox
+    // cannot start in between and evaluate these rows too.
+    let holding = p.action === 'evaluateCompany' || p.action === 'evaluate';
     if (holding) markBatchStarting(true);
     const letGo = async () => {
       if (!holding) return;
@@ -285,7 +285,11 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
             await router.navigate({ to: '/sessions/$id', params: { id: active.id } });
             break;
           }
-          const m = await startEvaluation(url);
+          const start = startEvaluation(url);
+          // A start that never answers (a restarting server) gives up the hold rather than keep Process inbox off for good.
+          await withinSessionsReadLimit(start.catch(() => undefined));
+          await letGo();
+          const m = await start;
           if (m.status === 'error') {
             update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
             return;
