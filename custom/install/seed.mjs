@@ -23,39 +23,35 @@ const exists = (f) => fs.existsSync(f);
 
 function localPaths(dir) {
   const file = path.join(dir, 'config', 'local-paths.txt');
-  const merged = mergeLocalPaths(exists(file) ? fs.readFileSync(file, 'utf8') : '');
+  const text = exists(file) ? fs.readFileSync(file, 'utf8') : null;
+  const merged = mergeLocalPaths(text ?? '');
   if (merged === null) return out('present');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const target = linkTarget(file);
-  const st = exists(target) ? fs.statSync(target) : null;
-  if (st) {
-    // A rename would replace a file the user cannot write; it fails as the write in place would.
-    try {
-      fs.accessSync(target, fs.constants.W_OK);
-    } catch (err) {
-      throw new Error(`cannot write ${target}: ${err.code}`);
-    }
-    // A rename would split a hard-linked file from its other names, so that one is written in place.
-    if (st.nlink > 1) {
-      fs.writeFileSync(target, merged);
-      return out('added');
-    }
+  if (text !== null) {
+    // The merge only appends, so the user's file is extended where it is (through its links, keeping its inode, owner,
+    // mode, ACLs and hard links); a failed append is cut back to the user's own lines.
+    appendOrRestore(file, merged.slice(text.length));
+    return out('added');
   }
-  // The rename replaces the file, so the replacement takes the user's permissions and, where allowed, owner.
-  const mode = st ? st.mode & 0o7777 : null;
-  writeAtomic(target, merged, (tmp) => {
-    if (!st) return;
-    fs.chmodSync(tmp, mode);
-    try {
-      fs.chownSync(tmp, st.uid, st.gid);
-    } catch {
-      // Only root can give a file away; the mode still carries the user's intent.
-    }
-  }, fs.renameSync, mode ?? 0o666);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  writeAtomic(linkTarget(file), merged);
   out('added');
 }
 
-// The file a chain of symlinks at `file` ends at, so a rename into place updates a linked file instead of replacing the link.
+function appendOrRestore(file, suffix) {
+  const size = fs.statSync(file).size;
+  try {
+    fs.appendFileSync(file, suffix);
+  } catch (err) {
+    try {
+      fs.truncateSync(file, size);
+    } catch {
+      // The append error is the one to report.
+    }
+    throw err;
+  }
+}
+
+// The file a chain of symlinks at `file` ends at, so a rename into place creates a dangling link's file instead of replacing the link.
 function linkTarget(file) {
   let target = file;
   for (let hops = 0; hops < 40; hops++) {
@@ -256,12 +252,11 @@ function copyNew(tmp, file) {
 }
 
 // beforeRename runs once the new copy is fully written, so a failed write leaves nothing behind.
-function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync, mode = 0o666) {
+function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync) {
   // Random as well as per process: a temp file a crashed run left under a reused pid must not block this write.
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
   try {
-    // Created with the target's mode, so a private file's contents are never readable by others under the temp name.
-    fs.writeFileSync(tmp, text, { flag: 'wx', mode });
+    fs.writeFileSync(tmp, text, { flag: 'wx' });
     beforeRename(tmp);
     publish(tmp, file);
   } catch (err) {

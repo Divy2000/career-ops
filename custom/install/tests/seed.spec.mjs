@@ -555,6 +555,12 @@ fs.writeFileSync = (file, data, ...rest) => {
   realWrite(file, String(data).slice(0, 3), ...rest);
   throw full();
 };
+const realAppend = fs.appendFileSync;
+fs.appendFileSync = (file, data, ...rest) => {
+  if (!hit(file)) return realAppend(file, data, ...rest);
+  realAppend(file, String(data).slice(0, 3), ...rest);
+  throw full();
+};
 const realCopy = fs.copyFileSync;
 fs.copyFileSync = (src, dest, ...rest) => {
   if (!hit(dest)) return realCopy(src, dest, ...rest);
@@ -666,6 +672,22 @@ test('given a config/local-paths.txt the user cannot write, when local-paths run
   }
 });
 
+test('given config/ the user cannot add files to, when local-paths adds custom/ to its writable local-paths.txt, then the line is added in the same file (R28-scripts-b-L1-01 review 4)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const ino = fs.statSync(f).ino;
+  fs.chmodSync(path.dirname(f), 0o555);
+  try {
+    const res = seed(['local-paths', '--dir', d]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), 'added');
+    assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+    assert.equal(fs.statSync(f).ino, ino);
+  } finally {
+    fs.chmodSync(path.dirname(f), 0o755);
+  }
+});
+
 test('given config/local-paths.txt is hard-linked elsewhere, when local-paths adds custom/, then both names still show the same file (R28-scripts-b-L1-01 review 3)', () => {
   const d = tmp();
   const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
@@ -708,7 +730,8 @@ syncBuiltinESMExports();
 `);
   const res = seedWith(preload, ['local-paths', '--dir', d]);
   assert.equal(res.status, 0, res.stderr);
-  assert.equal(fs.readFileSync(seen, 'utf8'), '600');
+  // No temp file at all (the line is appended in place) is never readable by others either.
+  assert.ok(!fs.existsSync(seen) || fs.readFileSync(seen, 'utf8') === '600');
   assert.equal(fs.statSync(f).mode & 0o777, 0o600);
 });
 
