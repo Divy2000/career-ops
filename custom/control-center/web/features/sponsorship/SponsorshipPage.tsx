@@ -78,7 +78,7 @@ export function SponsorshipPage() {
       <div className="page-header">
         <h1 id="page-title">Sponsorship</h1>
         <div className="row gap">
-          <ActionButton meta={actions.data?.find((a) => a.id === 'immigration.watch')} onRun={() => void run('immigration.watch', {}, 'Feed check started; see Runs for its log')}>
+          <ActionButton meta={actions.data?.find((a) => a.id === 'immigration.watch')} onRun={() => run('immigration.watch', {}, 'Feed check started; see Runs for its log')}>
             Check official feeds now
           </ActionButton>
           <button type="button" onClick={pass.start} disabled={pass.busy}>

@@ -234,7 +234,7 @@ export function RepliesTab() {
         </div>
         <textarea aria-label="Reply body" rows={6} placeholder="Paste the email body" value={body} onChange={(e) => setBody(e.target.value)} />
         <div className="row gap">
-          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyPaste')} disabled={busy !== null || !subject.trim() || !body.trim()} params={{ subject, from, body }} onRun={(p) => void run('followups.replyPaste', p).then((out) => {
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyPaste')} disabled={busy !== null || !subject.trim() || !body.trim()} params={{ subject, from, body }} onRun={(p) => run('followups.replyPaste', p).then((out) => {
               // A paste always appends a new candidate (every paste gets a fresh message_id), so the form is cleared on
               // success: a second click would otherwise append the same email twice.
               if (out) {
@@ -243,7 +243,7 @@ export function RepliesTab() {
                 setBody('');
               }
             })} />
-          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyWatch')} disabled={busy !== null} onRun={() => void run('followups.replyWatch', {})} />
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyWatch')} disabled={busy !== null} onRun={() => run('followups.replyWatch', {})} />
         </div>
       </div>
       <div className="card" aria-labelledby="invite-heading">
@@ -252,7 +252,7 @@ export function RepliesTab() {
         <ActionButton meta={actions.data?.find((a) => a.id === 'followups.inviteMatch')} disabled={busy !== null || !invite.trim()} params={{ text: invite }} onRun={(p) => {
             // A failed match must not leave the previous invite's row under the new text.
             setResult(null);
-            void run('followups.inviteMatch', p).then((out) => out && 'result' in out && setResult(out.result));
+            return run('followups.inviteMatch', p).then((out) => out && 'result' in out && setResult(out.result));
           }} />
         {result !== null && <pre tabIndex={0} className="log mono small">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
       </div>
@@ -289,10 +289,10 @@ function ContactsTab() {
           <label className="row gap" title='Each card is named "Jane Doe (Acme recruiter)", so a call shows who it is'>
             <input type="checkbox" checked={callerId} onChange={(e) => setCallerId(e.target.checked)} /> Caller ID names
           </label>
-          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.contactsVcf')} disabled={busy !== null} onRun={() => void exportVcf()}>
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.contactsVcf')} disabled={busy !== null} onRun={() => exportVcf()}>
             Export vCard
           </ActionButton>
-          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.linkedinJoin')} disabled={busy !== null} onRun={() => void run('followups.linkedinJoin', {})} />
+          <ActionButton meta={actions.data?.find((a) => a.id === 'followups.linkedinJoin')} disabled={busy !== null} onRun={() => run('followups.linkedinJoin', {})} />
         </div>
       </div>
       <Message message={message} />

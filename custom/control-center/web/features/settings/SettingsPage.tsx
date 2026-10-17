@@ -98,7 +98,7 @@ function HealthTab() {
             meta={actions.data?.find((a) => a.id === id)}
             disabled={busy !== null}
             params={['tracker.normalize', 'tracker.dedup', 'tracker.merge', 'tracker.reconcile'].includes(id) ? { dryRun: true } : {}}
-            onRun={(p) => void run(id, p)}
+            onRun={(p) => run(id, p)}
           />
         ))}
       </div>
@@ -120,8 +120,8 @@ function UpdatesTab() {
         This fork receives upstream changes through the weekly sync pull request, never through <span className="mono">update-system.mjs apply</span>. Status is read-only here.
       </p>
       <div className="row gap">
-        <ActionButton meta={actions.data?.find((a) => a.id === 'system.updateStatus')} onRun={() => void run('system.updateStatus', {}).then((out) => out && 'result' in out && setStatus(out.result))} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'system.updateCheck')} onRun={(p) => void run('system.updateCheck', p)} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'system.updateStatus')} onRun={() => run('system.updateStatus', {}).then((out) => out && 'result' in out && setStatus(out.result))} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'system.updateCheck')} onRun={(p) => run('system.updateCheck', p)} />
         <a className="button-link" href={SYNC_PR_URL} target="_blank" rel="noreferrer noopener">
           Latest upstream-sync PR
         </a>
