@@ -103,6 +103,8 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
     const app = await makeTestApp();
     try {
       const { id, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-unreadable');
+      // Its init event handled first: that reads the record too, and only the refresh is under test here.
+      await until(() => app.sessions.read(id)?.conversationStarted === true);
       const read = app.sessions.store.read.bind(app.sessions.store);
       let refused = 0;
       const spy = vi.spyOn(app.sessions.store, 'read').mockImplementation((sid: string) => {

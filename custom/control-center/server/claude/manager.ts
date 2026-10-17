@@ -494,6 +494,7 @@ export class SessionManager {
         if (released.startsWith('could not') || released.includes('already lost')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
     }
+    for (const key of this.reservationWarned) if (key.startsWith(`${id}\0`)) this.reservationWarned.delete(key);
     if (deleted && batch !== null) this.dropUnheldPolicyBatch(batch);
     return deleted;
   }
@@ -769,7 +770,7 @@ export class SessionManager {
 
   /** Said once per session and number: the tracker ticks again every poll. Finalize then leaves the number alone. */
   private warnReservationLost(id: string, num: number, why: string): void {
-    this.warnOnce(`${id}\0${num}`, `[sessions] session ${id}: its reservation of report number ${num} ${why}`);
+    this.warnOnce(`${id}\0${num}\0${why}`, `[sessions] session ${id}: its reservation of report number ${num} ${why}`);
   }
 
   private warnOnce(key: string, message: string): void {
