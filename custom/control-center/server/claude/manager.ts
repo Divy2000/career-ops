@@ -1351,10 +1351,12 @@ export class SessionManager {
         if (ev.type === 'tool.result') {
           const sessionDir = this.store.guardDirOf(id);
           const nums = reserveRuns.delete(ev.id) && ev.ok ? printedReservation(ev.summary) : [];
-          if (nums.length) recordHeldReportNums(sessionDir, nums, this.cfg.dataRoot);
           const released = releaseRuns.get(ev.id);
           releaseRuns.delete(ev.id);
-          if (released && !ev.ok) restoreHeldReportNums(sessionDir, released, ev.id);
+          // A replayed result's holds were settled by the server that handled it: the sentinel under a number now may be
+          // another evaluation's.
+          if (emit && nums.length) recordHeldReportNums(sessionDir, nums, this.cfg.dataRoot);
+          if (emit && released && !ev.ok) restoreHeldReportNums(sessionDir, released, ev.id);
         }
         if (ev.type === 'turn.done') {
           turnDone = ev;
