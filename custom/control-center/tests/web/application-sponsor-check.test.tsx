@@ -44,9 +44,10 @@ const detail = (company: string): ApplicationDetail => ({
   report: { kind: 'none' },
   timeline: { statusLog: [], followups: [], pin: null },
   companyHistory: [],
-  sponsorship: { companyFile: null, alert: null, error: null },
+  sponsorship: { companyFile: null, alert: null, error: null, companiesError },
 });
 let company = 'Acme Robotics';
+let companiesError: string | null = null;
 
 /** Opens /tracker/7 and its Sponsorship tab, the way a user reaches Refresh check. */
 async function openApplication(name: string) {
@@ -73,6 +74,7 @@ async function leave() {
 
 beforeEach(() => {
   panels = [];
+  companiesError = null;
   sessionStorage.clear();
   vi.stubGlobal(
     'fetch',
@@ -199,5 +201,20 @@ describe('Application > Sponsorship > Refresh check', () => {
     await render(createElement(SponsorCheckLauncher, { company: 'STRIPE, INC.' }));
     expect(lastPanel()).toMatchObject({ sessionId: 'check-app' });
     expect([...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Sponsorship check running'))!.disabled).toBe(true);
+  });
+});
+
+describe('Application > Sponsorship with unreadable company files', () => {
+  it('says the company files could not be read instead of saying none exists yet (R28-spons-rev-01)', async () => {
+    companiesError = 'could not read acme-robotics.md: EACCES';
+    await openApplication('Acme Robotics');
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('could not read acme-robotics.md: EACCES');
+    expect(host.textContent).not.toContain('No company sponsorship file yet');
+  });
+
+  it('still says no company file exists yet when every company file was read', async () => {
+    await openApplication('Acme Robotics');
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.textContent).toContain('No company sponsorship file yet');
   });
 });

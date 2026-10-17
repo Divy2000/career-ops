@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
-import { readReport } from './reports.js';
+import { readReport, reportNumberOf } from './reports.js';
 import { inside } from '../lib/paths.js';
 import { isProcessedHeading, pipelineSection, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
 import { WRITTEN_SEGMENT } from './pipeline.js';
@@ -159,9 +159,10 @@ type PipelineLock = { withPipelineLock: <T>(p: string, fn: () => T | Promise<T>,
 export async function markPipelineEvaluated(codeRoot: string, dataRoot: string, url: string, reportFile: string): Promise<boolean> {
   const pipelinePath = path.join(dataRoot, 'data', 'pipeline.md');
   if (!fs.existsSync(pipelinePath)) return false;
-  const report = reportFile.match(/^(\d+)-/)?.[1];
-  if (!report) throw new Error(`not a numbered report file: ${reportFile}`);
-  const read = readReport(dataRoot, parseInt(report, 10));
+  const num = reportNumberOf(reportFile);
+  if (num === null) throw new Error(`not a numbered report file: ${reportFile}`);
+  const report = reportFile.match(/^\d+/)![0];
+  const read = readReport(dataRoot, num);
   const r = read.kind === 'ok' ? read.report : null;
   const posting: EvaluatedPosting = { report, company: r?.company ?? '', role: r?.role ?? '', score: r?.score ?? null, pdf: pdfGenerated(r?.pdf ?? null, dataRoot) };
   const { withPipelineLock } = await importCore<PipelineLock>(codeRoot, 'pipeline-lock.mjs');

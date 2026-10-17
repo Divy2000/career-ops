@@ -248,4 +248,15 @@ describe('a PDF header path that cannot be resolved', () => {
       expect(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8')).toContain(`- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌`);
     }
   });
+
+  it('refuses a bare-date digest such as 2026-10-17.md, which is no report, and leaves the Pending row alone (R28-srvx-rev-01)', async () => {
+    const root = tempDir('cc-pp-digest-');
+    fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'reports'), { recursive: true });
+    const pipeline = `## Pending\n\n- [ ] ${URL} | Acme | Eng\n`;
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), pipeline);
+    fs.writeFileSync(path.join(root, 'reports', '2026-10-17.md'), '# Digest\n');
+    await expect(markPipelineEvaluated(DEFAULT_CODE_ROOT, root, URL, '2026-10-17.md')).rejects.toThrow('not a numbered report file: 2026-10-17.md');
+    expect(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8')).toBe(pipeline);
+  });
 });

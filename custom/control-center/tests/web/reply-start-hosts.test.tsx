@@ -43,7 +43,7 @@ const trackerRow = (num: number, company: string): TrackerRow =>
     num, date: '2026-10-01', company, role: 'Robotics Engineer', score: 4.2, scoreRaw: '4.2/5', status: 'Evaluated', pdf: false, pdfRaw: '', report: null, reportLabel: null,
     notes: '', location: null, url: null, posted: null, lastContact: null, summary: null, reportState: 'none',
   }) as TrackerRow;
-const detail = (): ApplicationDetail => ({ row: trackerRow(7, 'Acme Robotics'), report: { kind: 'none' }, timeline: { statusLog: [], followups: [], pin: null }, companyHistory: [], sponsorship: { companyFile: null, alert: null, error: null } });
+const detail = (): ApplicationDetail => ({ row: trackerRow(7, 'Acme Robotics'), report: { kind: 'none' }, timeline: { statusLog: [], followups: [], pin: null }, companyHistory: [], sponsorship: { companyFile: null, alert: null, error: null, companiesError: null } });
 
 let host: HTMLElement;
 let root: Root | undefined;

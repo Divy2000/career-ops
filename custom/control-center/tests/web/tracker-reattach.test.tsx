@@ -34,7 +34,7 @@ const trackerRow = (num: number, company: string, url: string | null): TrackerRo
 }) as TrackerRow;
 let url: string | null;
 const applications: Record<number, string> = { 7: 'Acme Robotics', 8: 'Globex Robotics' };
-const detail = (num: number): ApplicationDetail => ({ row: trackerRow(num, applications[num]!, url), report: { kind: 'none' }, timeline: { statusLog: [], followups: [], pin: null }, companyHistory: [], sponsorship: { companyFile: null, alert: null, error: null } });
+const detail = (num: number): ApplicationDetail => ({ row: trackerRow(num, applications[num]!, url), report: { kind: 'none' }, timeline: { statusLog: [], followups: [], pin: null }, companyHistory: [], sponsorship: { companyFile: null, alert: null, error: null, companiesError: null } });
 
 async function render(element: ReturnType<typeof createElement>) {
   root = createRoot(host);
