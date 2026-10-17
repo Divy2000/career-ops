@@ -196,7 +196,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
         </span>
       </div>
       {pipelineLive && <p className="muted small">Process inbox is processing the pending rows, so Batch evaluate is off until it ends.</p>}
-      {!pipelineLive && fanningOut && !busy && <p className="muted small">Evaluations started from Pipeline are still starting, so Batch evaluate is off until they have.</p>}
+      {!pipelineLive && fanningOut && !busy && <p className="muted small">Other evaluations are still starting, so Batch evaluate is off until they have.</p>}
       {!pipelineLive && !fanningOut && !sessions.isError && (sessions.isPending || (processUnlisted && readFor !== processId)) && <p className="muted small">Checking for a running Process inbox.</p>}
       {!pipelineLive && sessions.isError && <p className="danger-text small">Could not check for a running Process inbox, so Batch evaluate is off until the sessions list loads.</p>}
       {folded.length > 0 && <p className="muted small">Left out as the same posting as one above: {folded.join(', ')}.</p>}

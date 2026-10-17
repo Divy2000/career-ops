@@ -166,9 +166,9 @@ function Inbox() {
       {/* Outside the data state: Add URLs is how a first pipeline gets created (appendToPipeline makes the file). */}
       <div className="toolbar" aria-label="Inbox actions">
         <AddUrls onDone={(n) => { setMessage({ tone: 'ok', text: `Added ${n} URL${n === 1 ? '' : 's'} to the pipeline` }); void qc.invalidateQueries({ queryKey: ['pipeline'] }); }} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} disabled={busy !== null} onRun={() => void run('pipeline.prioritize', {}, 'Prioritize started')} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} disabled={busy !== null} onRun={() => void run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
-        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} disabled={busy !== null} onRun={() => void run('pipeline.rank', { limit: 50 }, 'Rank started')}>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.prioritize')} disabled={busy !== null} onRun={() => run('pipeline.prioritize', {}, 'Prioritize started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.shortlist')} disabled={busy !== null} onRun={() => run('pipeline.shortlist', {}, 'Shortlist rebuild started')} />
+        <ActionButton meta={actions.data?.find((a) => a.id === 'pipeline.rank')} disabled={busy !== null} onRun={() => run('pipeline.rank', { limit: 50 }, 'Rank started')}>
           Rank (50)
         </ActionButton>
       </div>

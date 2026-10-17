@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { until } from '../helpers/until';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -373,20 +374,27 @@ describe('Ask drawer: a 202 whose session already failed shows failed, not done 
 
 describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () => {
   let starts: number;
+  let refuseStarts: Array<() => void>;
   beforeEach(() => {
     starts = 0;
+    refuseStarts = [];
     vi.stubGlobal(
       'fetch',
       vi.fn((url: string, init?: RequestInit) => {
         if (init?.method === 'POST' && url === '/api/sessions') {
           starts++;
-          return new Promise<Response>(() => undefined);
+          return new Promise<Response>((r) => refuseStarts.push(() => r(new Response('{"error":"gone"}', { status: 500, headers: { 'content-type': 'application/json' } }))));
         }
         return Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } }));
       }),
     );
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(async () => {
+    // A start left pending would hold Process inbox back into the next test.
+    await act(async () => refuseStarts.forEach((r) => r()));
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    vi.unstubAllGlobals();
+  });
 
   const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
 
@@ -398,6 +406,45 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
     expect(starts).toBe(1);
     expect(item.dataset.proposalState).toBe('running');
     expect(bodyButton('Review and run')).toBeUndefined();
+  });
+
+  it('given a start slower than the sessions read limit, holds Process inbox back until the start answers (R27-comp-askdrawer-01)', async () => {
+    const { useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    // The posting is a pending Inbox row, which Process inbox would evaluate too.
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url: string | URL | Request, init?: RequestInit) =>
+      String(url) === '/api/pipeline'
+        ? Promise.resolve(new Response(JSON.stringify({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows: [{ url: 'https://jobs.example.com/1', company: 'Acme', role: 'Engineer', done: false, section: 'pending' }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+        : answer(url as string, init),
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.example.com/1' } }, 1));
+      await act(async () => bodyButton('Review and run')!.click());
+      await act(async () => bodyButton('Do it')!.click());
+      expect(starts).toBe(1);
+      expect(seen.at(-1)).toBe(true);
+      // Past the 10 s sessions read limit the POST is still out: the session may yet start, so the hold stays.
+      await act(async () => vi.advanceTimersByTime(30_000));
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => refuseStarts.forEach((r) => r()));
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(seen.at(-1)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
   });
 });
 
@@ -792,6 +839,183 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(item.dataset.proposalState).toBe('failed');
     expect(item.textContent).toContain('No pending Inbox posting at Initech');
   });
+
+  it('given an unsendable spelling of a posting whose plain twin is evaluated, does not say that posting is left out (R27-shared-comp-X-01 review)', async () => {
+    rows.push(row('https://jobs.acme.example/1 ', 'Acme'));
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+    expect(item.textContent).not.toContain('left out');
+  });
+
+  it('given two spellings of one posting pending at the company, starts one evaluation for it and reports done (R27-shared-comp-L2-01)', async () => {
+    rows.push(row('https://jobs.acme.example/1?gh_src=abc', 'Acme'));
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('holds Process inbox back from the confirm on, so one started during the recheck cannot join this fan-out (R27-shared-comp-X-01 review)', async () => {
+    const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    let confirmed = false;
+    let answerRecheck: (() => void) | undefined;
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (confirmed && !answerRecheck && String(url) === '/api/sessions' && !init?.method) await new Promise<void>((r) => (answerRecheck = r));
+      return answer(url as string, init);
+    });
+    try {
+      await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+      const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+      await act(async () => bodyButton('Review and run')!.click());
+      const doIt = await until(() => bodyButton('Do it'), 'the confirm');
+      // Set in the same task as the click, so no sessions poll can be taken for the recheck.
+      await act(async () => {
+        confirmed = true;
+        doIt.click();
+      });
+      await until(() => answerRecheck, 'the recheck of live Process inbox runs');
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => answerRecheck!());
+      await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+      expect(seen.at(-1)).toBe(false);
+    } finally {
+      if (seen.at(-1)) markBatchStarting(false);
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
+
+  it('holds Process inbox back while an evaluate of a pending Inbox row starts (R27-shared-comp-X-01 review)', async () => {
+    const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    let answerStart: (() => void) | undefined;
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === '/api/sessions' && init?.method === 'POST') {
+        await new Promise<void>((r) => (answerStart = r));
+        return new Response(JSON.stringify({ id: 's-new', mode: 'oferta', status: 'queued', target: { type: 'url', value: 'https://jobs.acme.example/1' } }), { status: 202, headers: { 'content-type': 'application/json' } });
+      }
+      return answer(url as string, init);
+    });
+    try {
+      await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.acme.example/1' } }, 1));
+      const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+      await act(async () => bodyButton('Review and run')!.click());
+      const doIt = await until(() => bodyButton('Do it'), 'the confirm');
+      await act(async () => doIt.click());
+      await until(() => answerStart, 'the evaluation start');
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => answerStart!());
+      await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+      expect(seen.at(-1)).toBe(false);
+    } finally {
+      if (seen.at(-1)) markBatchStarting(false);
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
+
+  it('does not hold Process inbox back while an evaluate of a posting not in the Inbox starts (R27-shared-comp-X-01 review)', async () => {
+    const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    let answerStart: (() => void) | undefined;
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === '/api/sessions' && init?.method === 'POST') {
+        await new Promise<void>((r) => (answerStart = r));
+        return new Response(JSON.stringify({ id: 's-new', mode: 'oferta', status: 'queued', target: { type: 'url', value: 'https://jobs.initech.example/9' } }), { status: 202, headers: { 'content-type': 'application/json' } });
+      }
+      return answer(url as string, init);
+    });
+    try {
+      await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.initech.example/9' } }, 1));
+      const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+      await act(async () => bodyButton('Review and run')!.click());
+      const doIt = await until(() => bodyButton('Do it'), 'the confirm');
+      await act(async () => doIt.click());
+      await until(() => answerStart, 'the evaluation start');
+      expect(seen).not.toContain(true);
+      await act(async () => answerStart!());
+      await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+      expect(seen.at(-1)).toBe(false);
+    } finally {
+      if (seen.at(-1)) markBatchStarting(false);
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
+
+  it('holds Process inbox back while the fan-out starts, and refreshes the sessions list before letting go (R27-shared-comp-L1-01)', async () => {
+    const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    const calls: string[] = [];
+    let answerFanout!: () => void;
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    // The first sessions read after the fan-out answered is held open, to check the hold outlasts it.
+    let fanoutAnswered = false;
+    let answerRefresh: (() => void) | undefined;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${String(url)}`);
+      if (String(url) === '/api/sessions' && !init?.method && fanoutAnswered && !answerRefresh) await new Promise<void>((r) => (answerRefresh = r));
+      if (String(url) === '/api/sessions/fanout') await new Promise<void>((r) => (answerFanout = r));
+      return answer(url as string, init);
+    });
+    try {
+      const item = await runProposal('Acme');
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => {
+        fanoutAnswered = true;
+        answerFanout();
+      });
+      await until(() => answerRefresh, 'the sessions refresh');
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => answerRefresh!());
+      await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+      expect(seen.at(-1)).toBe(false);
+      expect(calls).toContain('POST /api/sessions/fanout');
+      expect(calls.slice(calls.indexOf('POST /api/sessions/fanout'))).toContain('GET /api/sessions');
+    } finally {
+      // A failed run must not leave the shared mark set for the next test.
+      if (seen.at(-1)) markBatchStarting(false);
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
 });
 
 describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-comp-L3-01)', () => {
@@ -880,6 +1104,61 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
       expect(item.dataset.proposalState).toBe('failed');
       expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
       await remountDrawer();
+    }
+  });
+
+  it('given a Process inbox start sent while the confirm is open but not answered yet, Do it starts nothing (R27-shared-comp-X-01 review)', async () => {
+    const { lastSession } = await import('@web/lib/lastSession');
+    const process = lastSession('cc.pipeline.process');
+    for (const [action, params] of [['evaluateCompany', { company: 'Acme' }], ['evaluate', { url: 'https://jobs.acme.example/1' }]] as const) {
+      listed = [];
+      await remountDrawer();
+      const item = await propose(action, params);
+      // The Inbox's start form marks the start before its POST; the session is in no list until the POST answers.
+      process.setStarting(true);
+      try {
+        await act(async () => bodyButton('Do it')!.click());
+        expect(posts).toEqual([]);
+        expect(item.dataset.proposalState).toBe('failed');
+        expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+      } finally {
+        process.setStarting(false);
+      }
+    }
+  });
+
+  it('given a Process inbox that reported its id while the confirm was open but is not listed yet, Do it starts nothing (R27-shared-comp-X-01 review)', async () => {
+    const { lastSession } = await import('@web/lib/lastSession');
+    const process = lastSession('cc.pipeline.process');
+    for (const [action, params] of [['evaluateCompany', { company: 'Acme' }], ['evaluate', { url: 'https://jobs.acme.example/1' }]] as const) {
+      listed = [];
+      await remountDrawer();
+      const item = await propose(action, params);
+      process.write('s-reported');
+      try {
+        await act(async () => bodyButton('Do it')!.click());
+        expect(posts).toEqual([]);
+        expect(item.dataset.proposalState).toBe('failed');
+      } finally {
+        process.write(null);
+      }
+    }
+  });
+
+  it('given a remembered Process inbox id from before the proposal that the server no longer lists, the evaluation still runs', async () => {
+    const { lastSession } = await import('@web/lib/lastSession');
+    const process = lastSession('cc.pipeline.process');
+    listed = [];
+    process.write('s-gone');
+    try {
+      await remountDrawer();
+      const item = await propose('evaluateCompany', { company: 'Acme' });
+      await act(async () => bodyButton('Do it')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(posts.map((p) => p.url)).toEqual(['/api/sessions/fanout']);
+      expect(item.dataset.proposalState).toBe('done');
+    } finally {
+      process.write(null);
     }
   });
 

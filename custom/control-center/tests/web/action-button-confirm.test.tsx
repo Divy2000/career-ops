@@ -64,3 +64,127 @@ describe('ActionButton with a confirm text', () => {
     expect(onRun).toHaveBeenCalledWith({ dryRun: false }, { confirmed: false });
   });
 });
+
+describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () => {
+  async function renderPending() {
+    const releases: Array<(ok: boolean) => void> = [];
+    const onRun = vi.fn(() => new Promise<void>((resolve, reject) => releases.push((ok) => (ok ? resolve() : reject(new Error('refused'))))));
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun }))));
+    return { onRun, releases, button: host.querySelector('button')! };
+  }
+
+  it('given the run has not settled, then a second click does not start it again', async () => {
+    const { onRun, button } = await renderPending();
+    await press(button);
+    await press(button);
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('given the run has not settled, then the button shows it is busy until it does', async () => {
+    const { releases, button } = await renderPending();
+    await press(button);
+    expect(button.disabled).toBe(true);
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(button.disabled).toBe(false);
+  });
+
+  it('given the disabled button lost focus to the page during its run, then focus is back on it once the run settles', async () => {
+    const { releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    // A browser moves focus off a focused button that becomes disabled; jsdom does not (and ignores blur() on one), so
+    // the test drops focus to the page through an element that goes away.
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('given the caller keeps the button off after the run settles (its started run is still going), then focus is back on it once the caller turns it on (R27-comp-actionbar-02)', async () => {
+    const { onRun, releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    // The run's answer gave the caller a run id it now watches: the button stays off until that run ends.
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: true }))));
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(button.disabled).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: false }))));
+    await settle();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('given the button did not have focus when its run started (a mouse click in Safari), then the settled run does not focus it', async () => {
+    const { releases, button } = await renderPending();
+    expect(document.activeElement).toBe(document.body);
+    await press(button);
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('given the user moved focus elsewhere during the run, then the settled run leaves it there', async () => {
+    const { releases, button } = await renderPending();
+    const other = document.createElement('input');
+    document.body.append(other);
+    try {
+      button.focus();
+      await press(button);
+      other.focus();
+      await act(async () => releases[0]!(true));
+      await settle();
+      expect(document.activeElement).toBe(other);
+    } finally {
+      other.remove();
+    }
+  });
+
+  it('given the run settled, then the next click starts it again', async () => {
+    const { onRun, releases, button } = await renderPending();
+    await press(button);
+    await act(async () => releases[0]!(true));
+    await press(button);
+    expect(onRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('given the run never settles (its runs refetch stalls), then the button is locked only until the server 30 s sync timeout has passed (R27-comp-actionbar-01)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { onRun, button } = await renderPending();
+      await press(button);
+      await act(async () => vi.advanceTimersByTime(34_000));
+      expect(button.disabled).toBe(true);
+      await press(button);
+      expect(onRun).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(2_000));
+      await settle();
+      expect(button.disabled).toBe(false);
+      await press(button);
+      expect(onRun).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given the run failed, then the failure is logged and the next click starts it again', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { onRun, releases, button } = await renderPending();
+    await press(button);
+    await act(async () => releases[0]!(false));
+    await settle();
+    expect(logged).toHaveBeenCalledWith('daily.runNow failed:', expect.objectContaining({ message: 'refused' }));
+    logged.mockRestore();
+    await press(button);
+    expect(onRun).toHaveBeenCalledTimes(2);
+  });
+});

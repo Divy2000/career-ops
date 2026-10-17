@@ -83,3 +83,30 @@ describe('one run per click', () => {
     expect(button(/^Run network scan/)!.disabled).toBe(true);
   });
 });
+
+describe('Discover script tab: the run its button starts (R27-comp-discover-01)', () => {
+  it('given the focused button lost focus to the page while it was off during a run the server refused, then focus is back on it once the run ends', async () => {
+    let release: (() => void) | undefined;
+    vi.mocked(fetch).mockImplementation((url: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        posts.push(String(url));
+        return new Promise<Response>((r) => (release = () => r(new Response('{"error":"busy"}', { status: 409, headers: { 'content-type': 'application/json' } }))));
+      }
+      return Promise.resolve(json(String(url) === '/api/actions' ? ACTIONS : []));
+    });
+    await render(createElement(ScriptTab, { id: 'scan.portals', intro: 'Scans every enabled portal.', params: {} }));
+    const b = await until(() => { const found = button(/^Scan portals/); return found && !found.disabled ? found : null; }, 'Scan portals to be ready');
+    b.focus();
+    await act(async () => b.click());
+    // A browser moves focus off a focused button that becomes disabled; jsdom does not, so focus drops through an element that goes away.
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => release!());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(button(/^Scan portals/)!.disabled).toBe(false);
+    expect(document.activeElement).toBe(button(/^Scan portals/));
+  });
+});

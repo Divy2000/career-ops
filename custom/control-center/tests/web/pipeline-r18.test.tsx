@@ -201,7 +201,7 @@ describe('Batch evaluate beside Process inbox (R18-feat-b-L3-01)', () => {
       await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
       await until(() => button('Evaluate visible (2)'), 'the Inbox tab');
       await settle();
-      expect(host.textContent).not.toContain('Evaluations started from Pipeline are still starting');
+      expect(host.textContent).not.toContain('Other evaluations are still starting');
     } finally {
       vi.useRealTimers();
     }
@@ -284,7 +284,7 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
     await until(() => button('Process inbox'), 'the Inbox tab');
     await act(async () => button('Process inbox')!.click());
-    await until(() => host.textContent?.includes('Evaluations started from Pipeline are still starting'), 'the note');
+    await until(() => host.textContent?.includes('Other evaluations are still starting'), 'the note');
     expect(pipelinePanel()).toBeUndefined();
     await act(async () => hold!.release());
   });
@@ -318,7 +318,24 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await typeUrls('https://jobs.example.com/busy');
     await settle();
     expect(button('Batch evaluate')!.disabled).toBe(true);
-    expect(host.textContent).toContain('Evaluations started from Pipeline are still starting, so Batch evaluate is off');
+    expect(host.textContent).toContain('Other evaluations are still starting, so Batch evaluate is off');
+  });
+
+  it('given an Ask drawer evaluation still starting, Batch evaluate is off and does not say it came from Pipeline (R27-comp-batchtab-01)', async () => {
+    const { markBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const router = await mount();
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'batch' } }));
+    await typeUrls('https://jobs.example.com/busy');
+    // The Ask drawer holds the same mark while its evaluate starts.
+    await act(async () => markBatchStarting(true));
+    try {
+      await settle();
+      expect(button('Batch evaluate')!.disabled).toBe(true);
+      expect(host.textContent).toContain('Other evaluations are still starting, so Batch evaluate is off');
+      expect(host.textContent).not.toContain('from Pipeline');
+    } finally {
+      await act(async () => markBatchStarting(false));
+    }
   });
 
   it('given only its own Evaluate visible fan-out in flight, the Inbox does not say other evaluations are starting', async () => {
@@ -328,7 +345,7 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await act(async () => button('Evaluate visible (2)')!.click());
     await until(() => hold, 'the fan-out sent');
     await settle();
-    expect(host.textContent).not.toContain('Evaluations started from Pipeline are still starting');
+    expect(host.textContent).not.toContain('Other evaluations are still starting');
   });
 
   it('given an Evaluate visible fan-out in flight and the Inbox mounted again, Process inbox is held without naming a Batch evaluate', async () => {
@@ -382,9 +399,9 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
       await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'inbox' } }));
       await until(() => button('Process inbox'), 'the Inbox tab');
       await act(async () => button('Process inbox')!.click());
-      await until(() => host.textContent?.includes('Evaluations started from Pipeline are still starting'), 'the note');
+      await until(() => host.textContent?.includes('Other evaluations are still starting'), 'the note');
       await act(async () => vi.advanceTimersByTime(60_000));
-      expect(host.textContent).toContain('Evaluations started from Pipeline are still starting');
+      expect(host.textContent).toContain('Other evaluations are still starting');
       expect(pipelinePanel()).toBeUndefined();
     } finally {
       vi.useRealTimers();

@@ -16,9 +16,11 @@ let puts: Array<Record<string, unknown>>;
 let hold: boolean;
 let release: Array<() => void>;
 let job: Record<string, unknown>;
+let actionPosts: string[];
 
 beforeEach(async () => {
   puts = [];
+  actionPosts = [];
   hold = false;
   release = [];
   job = {
@@ -32,7 +34,12 @@ beforeEach(async () => {
         puts.push(JSON.parse(String(init.body)) as Record<string, unknown>);
         if (hold) await new Promise<void>((r) => release.push(r));
       }
-      const body = url === '/api/schedule' ? { jobs: [job], agentsDir: '/agents' } : url === '/api/actions' ? [] : { ok: true };
+      if (init?.method === 'POST' && url.startsWith('/api/actions/')) {
+        actionPosts.push(url);
+        if (hold) await new Promise<void>((r) => release.push(r));
+        return new Response(JSON.stringify({ runId: 'r1' }), { status: 202, headers: { 'content-type': 'application/json' } });
+      }
+      const body = url === '/api/schedule' ? { jobs: [job], agentsDir: '/agents' } : url === '/api/actions' ? [RUN_NOW] : { ok: true };
       return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
     }),
   );
@@ -51,6 +58,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+const RUN_NOW = { id: 'daily.runNow', label: 'Run the daily job now', cost: 'tokens', confirm: 'Runs the full daily job. Continue?', resources: [], claude: true, sync: false, params: {} };
+const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
+const inDialog = (name: string) => [...dialog()!.querySelectorAll('button')].find((b) => b.textContent?.trim() === name)!;
 const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === name)!;
 const field = (label: string) => host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
 
@@ -89,5 +99,20 @@ describe('schedule job card', () => {
     await act(async () => button('Save time').click());
     await until(() => puts.length === 2 || undefined, 'the save update');
     expect(puts[1]).toEqual({ hour: 3, minute: 0, weekday: 0, enabled: true });
+  });
+
+  it('Run now clicked again while its run is still starting asks nothing and starts no second run (R27-shared-comp-X-01)', async () => {
+    const runNow = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Run the daily job now'))!;
+    await until(() => runNow(), 'the Run now button');
+    hold = true;
+    await act(async () => runNow().click());
+    await until(() => dialog(), 'the confirm');
+    await act(async () => inDialog('Run').click());
+    await until(() => actionPosts.length === 1 || undefined, 'the held run');
+    await act(async () => runNow().click());
+    await act(async () => new Promise((r) => setTimeout(r, 30)));
+    expect(dialog()).toBeNull();
+    expect(actionPosts).toEqual(['/api/actions/daily.runNow']);
+    await act(async () => release.forEach((r) => r()));
   });
 });

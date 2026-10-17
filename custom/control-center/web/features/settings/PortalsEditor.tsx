@@ -165,12 +165,12 @@ function PortalsHealth() {
       <p className="muted small">Validate is free and instant. Verify and audit hit the ATS endpoints. Fix slugs runs as a dry run first; apply it from the second button.</p>
       <div className="row gap" style={{ flexWrap: 'wrap' }}>
         {['portals.validate', 'portals.verify', 'portals.audit'].map((id) => (
-          <ActionButton key={id} meta={actions.data?.find((a) => a.id === id)} disabled={busy !== null} params={id === 'portals.audit' ? { smallThreshold: 3 } : {}} onRun={(p) => void run(id, p)} />
+          <ActionButton key={id} meta={actions.data?.find((a) => a.id === id)} disabled={busy !== null} params={id === 'portals.audit' ? { smallThreshold: 3 } : {}} onRun={(p) => run(id, p)} />
         ))}
-        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: false }} onRun={(p, o) => void run('portals.fixSlugs', p, undefined, o)}>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: false }} onRun={(p, o) => run('portals.fixSlugs', p, undefined, o)}>
           Fix slugs (dry run)
         </ActionButton>
-        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: true }} onRun={(p, o) => void run('portals.fixSlugs', p, undefined, o)}>
+        <ActionButton meta={actions.data?.find((a) => a.id === 'portals.fixSlugs')} disabled={busy !== null} params={{ apply: true }} onRun={(p, o) => run('portals.fixSlugs', p, undefined, o)}>
           Fix slugs (apply)
         </ActionButton>
       </div>

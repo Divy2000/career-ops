@@ -18,6 +18,7 @@ import { plainPostingUrl, postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
+import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
 import { useTracker } from '../lib/queries';
 import { STATES } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
@@ -75,10 +76,14 @@ async function pendingUrlsAt(company: string): Promise<{ urls: string[]; leftOut
   const pipeline = await apiGet<PipelineRead>('/api/pipeline');
   const names = new Set([company.toLowerCase(), unescapeMarkdownCell(company).toLowerCase()]);
   const evaluable = (pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && names.has(r.company.trim().toLowerCase()));
-  // The fan-out refuses a whole body over one URL that is not a plain posting address, so such a row is left out and counted.
-  const unsendable = evaluable.filter((r) => !plainPostingUrl(r.url)).length;
+  // One URL per posting, as the fan-out counts them: a second spelling (a tracking param) would be refused as its twin.
+  const byKey = new Map<string, string>();
+  for (const r of evaluable) if (plainPostingUrl(r.url) && !byKey.has(dedupUrlKey(r.url))) byKey.set(dedupUrlKey(r.url), r.url);
+  // The fan-out refuses a whole body over one URL that is not a plain posting address, so such a row is left out and
+  // counted, unless a plain spelling of the same posting is evaluated.
+  const unsendable = evaluable.filter((r) => !plainPostingUrl(r.url) && !byKey.has(dedupUrlKey(r.url))).length;
   const leftOut = unsendable === 0 ? null : `${unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and is left out.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and are left out.`} Fix it in data/pipeline.md.`;
-  const urls = [...new Set(evaluable.filter((r) => plainPostingUrl(r.url)).map((r) => r.url))];
+  const urls = [...byKey.values()];
   if (urls.length === 0) throw new Error(leftOut ? `No pending Inbox posting at ${company} can be evaluated. ${leftOut}` : `No pending Inbox posting at ${company}.`);
   if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
   return { urls, leftOut };
@@ -166,13 +171,18 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   /**
    * Whether a running Process inbox session already evaluates what an evaluate or evaluateCompany would: every pending
    * row, so a second evaluation would run, report and bill it twice. Read fresh, not from the 5 s poll, since Process
-   * inbox can start in the gap (or while the confirm is open).
+   * inbox can start in the gap (or while the confirm is open). A start the Inbox sent that is in no list yet counts too,
+   * as Batch evaluate counts it: one still awaiting its answer, or one that reported an id other than knownProcess (the
+   * id remembered when the proposal was run) that the list does not show yet.
    */
-  const processInboxOwns = async (p: Proposal): Promise<boolean> => {
+  const processInboxOwns = async (p: Proposal, knownProcess: string | null): Promise<boolean> => {
     if (p.action !== 'evaluate' && p.action !== 'evaluateCompany') return false;
     // Its own request: the shared query would join a poll sent before the run started, or be cancelled by a start.
     const list = await apiGet<SessionMeta[]>('/api/sessions');
-    if (!list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
+    const process = lastSession('cc.pipeline.process');
+    const remembered = process.read();
+    const unlisted = remembered !== null && remembered !== knownProcess && !list.some((s) => s.id === remembered);
+    if (!process.starting() && !unlisted && !list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
     return p.action === 'evaluateCompany' || (await isPendingInboxRow(String(p.params.url).trim()));
   };
 
@@ -182,6 +192,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     const def = askAction(p.action);
     if (!def || started.current.has(p.id)) return;
     started.current.add(p.id);
+    const knownProcess = lastSession('cc.pipeline.process').read();
     // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
     update(p.id, { state: 'running', note: null });
     // Checked before the question: a proposal that cannot run is not offered to the user as a write to approve.
@@ -195,7 +206,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     let companyUrls: string[] = [];
     let companyLeftOut: string | null = null;
     try {
-      if (await processInboxOwns(p)) {
+      if (await processInboxOwns(p, knownProcess)) {
         update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
         return;
       }
@@ -237,8 +248,23 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
     }
+    // Counted like a Batch fan-out from before the recheck until the started sessions are listed, so a Process inbox
+    // cannot start in between and evaluate these rows too. An evaluate holds it only for a pending Inbox row.
+    let holding = false;
+    const hold = () => {
+      holding = true;
+      markBatchStarting(true);
+    };
+    const letGo = async () => {
+      if (!holding) return;
+      holding = false;
+      await endBatchStarting(qc);
+    };
+    if (p.action === 'evaluateCompany') hold();
     try {
-      if (await processInboxOwns(p)) {
+      // An unreadable Inbox holds too: the row may be pending.
+      if (p.action === 'evaluate' && (await isPendingInboxRow(String(p.params.url).trim()).catch(() => true))) hold();
+      if (await processInboxOwns(p, knownProcess)) {
         update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
         return;
       }
@@ -266,7 +292,12 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
             await router.navigate({ to: '/sessions/$id', params: { id: active.id } });
             break;
           }
-          const m = await startEvaluation(url);
+          const start = startEvaluation(url);
+          // Held until the start answers, however long: a slow start can still create the session, and Process inbox
+          // started meanwhile would evaluate the row too. A Batch fan-out holds the same way.
+          await start.catch(() => undefined);
+          await letGo();
+          const m = await start;
           if (m.status === 'error') {
             update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
             return;
@@ -275,7 +306,12 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'evaluateCompany': {
-          const outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
+          let outcome: ReturnType<typeof fanoutOutcome>;
+          try {
+            outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
+          } finally {
+            await letGo();
+          }
           // A posting that did not start stays pending in the Inbox; the note names it, and the page stays to say why.
           if (outcome.failedUrls.length > 0) {
             update(p.id, { state: 'failed', note: `${outcome.text}. Not started: ${outcome.failedUrls.join(', ')}${companyLeftOut ? ` ${companyLeftOut}` : ''}` });
@@ -358,6 +394,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       update(p.id, { state: 'done', note: null });
     } catch (err) {
       update(p.id, { state: 'failed', note: describeError(err) });
+    } finally {
+      await letGo();
     }
   };
 

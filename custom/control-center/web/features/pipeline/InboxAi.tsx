@@ -188,7 +188,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
   };
   // Rows being evaluated (or about to be) that Process inbox would evaluate again: no start, reply or fork until they end.
   const heldBack = busy || batchStarting || pendingEvaluating > 0;
-  const heldBackText = `${busy ? 'Evaluations of the visible rows are starting' : batchStarting ? 'Evaluations started from Pipeline are still starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again.`;
+  const heldBackText = `${busy ? 'Evaluations of the visible rows are starting' : batchStarting ? 'Other evaluations are still starting' : pendingEvaluating === 1 ? '1 pending row is being evaluated' : `${pendingEvaluating} pending rows are being evaluated`}, and Process inbox would evaluate them again.`;
   // A finished run's panel keeps its reply and Fork, which carry the run on over the pending rows.
   const replyHeld = process.shown && !process.busy && heldBack;
   return (
@@ -201,7 +201,7 @@ export function InboxAi({ urls, savedJds = 0, evaluating = 0, onFanOut, checking
           Evaluate visible ({unique.length}) <Pill tone="warn">Uses tokens</Pill>
         </button>
         {pipelineLive && <span className="muted small">Process inbox is processing the pending rows, so Evaluate visible is off until it ends.</span>}
-        {batchStarting && !busy && <span className="muted small">Evaluations started from Pipeline are still starting, so Evaluate visible is off until they have.</span>}
+        {batchStarting && !busy && <span className="muted small">Other evaluations are still starting, so Evaluate visible is off until they have.</span>}
         {evaluating > 0 && <span className="muted small">{evaluating === 1 ? '1 row is already being evaluated and is left out.' : `${evaluating} rows are already being evaluated and are left out.`}</span>}
         {uncheckable && <span className="danger-text small">Could not check which rows are already being evaluated, so Evaluate visible is off until the sessions list loads.</span>}
         {savedJds > 0 && (

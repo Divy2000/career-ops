@@ -135,3 +135,32 @@ describe('Enable on the Plugins tab when the reload after a 409 fails', () => {
     expect(host.textContent).toMatch(/config\/plugins\.yml changed on disk and could not be reloaded/);
   });
 });
+
+describe('Audit plugins on the Plugins tab (R27-comp-plugins-01)', () => {
+  it('given an audit in flight, then a second click starts no second audit and the button shows it is busy', async () => {
+    const AUDIT_META = { id: 'plugins.audit', label: 'Audit plugins', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} };
+    const plugins = { plugins: [plugin('notion', ['export'])], config: { kind: 'ok', path: 'config/plugins.yml', raw: '', etag: 'e' } };
+    const posts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          posts.push(url);
+          return new Promise<Response>(() => undefined);
+        }
+        return new Response(JSON.stringify(url === '/api/actions' ? [RUN_META, AUDIT_META] : url === '/api/runs' ? [] : plugins), { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(PluginsTab)))));
+    const audit = await until(() => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim().startsWith('Audit plugins')), 'the Audit plugins button');
+    await act(async () => audit.click());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(audit.disabled).toBe(true);
+    await act(async () => audit.click());
+    expect(posts).toEqual(['/api/actions/plugins.audit']);
+  });
+});
