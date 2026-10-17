@@ -1,6 +1,7 @@
 // A stand-in for claude in the run-daily.sh specs (the world prepends a shebang for this node). It records the argv,
 // the settings and guard policy it was given, and runs the settings' PreToolUse hook commands for the tool calls in
 // FAKE_HOOK_PROBES the way Claude Code does (the command through a shell, the hook JSON on stdin), recording each exit.
+// Like the real CLI (2.1.288), CLAUDE_CODE_SUBPROCESS_ENV_SCRUB keeps credentials out of those hook children.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -27,10 +28,15 @@ const settingsArg = at === -1 ? null : argv[at + 1];
 const settings = settingsArg === null ? null : JSON.parse(settingsArg.trimStart().startsWith('{') ? settingsArg : fs.readFileSync(settingsArg, 'utf8'));
 const policyFile = process.env.CC_POLICY_FILE;
 const policyBytes = policyFile && fs.existsSync(policyFile) ? fs.readFileSync(policyFile) : null;
+const CREDENTIALS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_CUSTOM_HEADERS', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_REFRESH_TOKEN'];
+const scrub = /^(1|true|yes|on)$/i.test(String(process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB ?? '').trim());
+const subprocessEnv = scrub ? Object.fromEntries(Object.entries(process.env).filter(([k]) => !CREDENTIALS.includes(k))) : process.env;
+// A probe hook child, run with the env every hook command gets: whether the OAuth token reaches it.
+const hookChildToken = spawnSync('/bin/sh', ['-c', 'printf %s "${CLAUDE_CODE_OAUTH_TOKEN:+present}"'], { encoding: 'utf8', env: subprocessEnv }).stdout === 'present';
 const probes = process.env.FAKE_HOOK_PROBES ? JSON.parse(process.env.FAKE_HOOK_PROBES) : [];
 const hookRuns = probes.map((p) => {
   const hooks = (settings?.hooks?.PreToolUse ?? []).filter((h) => h.matcher.split('|').includes(p.tool)).flatMap((h) => h.hooks);
-  const runs = hooks.map((h) => spawnSync('/bin/sh', ['-c', h.command], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: p.tool, tool_input: p.input, cwd: process.cwd(), session_id: 'daily-pass' }), encoding: 'utf8', env: process.env }));
+  const runs = hooks.map((h) => spawnSync('/bin/sh', ['-c', h.command], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: p.tool, tool_input: p.input, cwd: process.cwd(), session_id: 'daily-pass' }), encoding: 'utf8', env: subprocessEnv }));
   return { ...p, statuses: runs.map((r) => r.status), stderr: runs.map((r) => r.stderr.trim()).join('\n') };
 });
 fs.appendFileSync(
@@ -40,6 +46,8 @@ fs.appendFileSync(
     cwd: process.cwd(),
     settings,
     token: Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN),
+    scrub,
+    hookChildToken,
     policy: policyBytes ? JSON.parse(policyBytes.toString('utf8')) : null,
     policyShaMatches: policyBytes ? crypto.createHash('sha256').update(policyBytes).digest('hex') === process.env.CC_POLICY_SHA256 : false,
     sessionDir: process.env.CC_SESSION_DIR ?? null,
