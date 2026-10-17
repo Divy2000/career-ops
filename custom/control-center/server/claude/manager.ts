@@ -1212,17 +1212,42 @@ export class SessionManager {
       }
     };
     if (!following()) {
-      this.active.delete(id);
+      void this.settleKeptReservation(id).finally(() => this.active.delete(id));
       return;
     }
     const timer = setInterval(() => {
       this.keepReservationFresh(id);
       if (following()) return;
       clearInterval(timer);
-      this.active.delete(id);
+      void this.settleKeptReservation(id).finally(() => this.active.delete(id));
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
+  }
+
+  /**
+   * The number a turn that ended in error kept while its process could still write, settled once that process stopped:
+   * a report it wrote under the number is credited and holds it, otherwise the sentinel goes back to the pool.
+   */
+  private async settleKeptReservation(id: string): Promise<void> {
+    try {
+      const meta = this.store.read(id);
+      const num = meta?.reportNum ?? null;
+      if (!meta || num === null) return;
+      const written = this.creditedHolds(meta, num) ? null : (detectNewReports(this.cfg.dataRoot, new Set()).find((x) => x.num === num) ?? null);
+      const used = written !== null || this.creditedHolds(meta, num);
+      const owns = used ? undefined : this.reservationOwnership(meta, num);
+      // Claimed before the await, as finalize does, so the number is released once.
+      this.store.setReportNum(id, null);
+      if (written) {
+        this.store.setCreditedReport(id, written);
+        this.emit(id, { type: 'evaluation', reports: [written] });
+        this.bus.publish('data.changed', { domain: 'reports' });
+      }
+      console.warn(`[sessions] session ${id}: its stopped run left report number ${num} behind: ${await this.releaseReportNum(num, used, owns)}`);
+    } catch (err) {
+      console.error(`[sessions] session ${id}: could not settle the report number its stopped run kept: ${(err as Error).message}`);
+    }
   }
 
   private turnEnded(id: string, n: number): boolean {
