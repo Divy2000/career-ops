@@ -994,7 +994,7 @@ jobTest('an exported CC_OAUTH_TOKEN never reaches the data-root resolver that ru
   const r = w.run({ CC_OAUTH_TOKEN: 'inherited-from-launchd' });
   assert.equal(r.status, 0, r.log);
   const lines = readFileSync(seen, 'utf8').trim().split('\n');
-  assert.ok(lines.length >= 1, 'the resolver ran');
+  assert.ok(lines.length >= 1 && lines[0] !== '', 'the resolver ran');
   assert.deepEqual([...new Set(lines)], ['none'], `the resolver saw CC_OAUTH_TOKEN: ${lines}`);
 });
 
