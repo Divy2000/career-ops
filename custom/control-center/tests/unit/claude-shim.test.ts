@@ -193,7 +193,7 @@ describe('claude shim: running the real binary', () => {
     expect(real.calls()).toHaveLength(1);
   });
 
-  it("a caller's timeout SIGTERM reaches the real claude too, so a timed-out rank call does not keep running orphaned (R27-claude-L1-02)", async () => {
+  it.each(['SIGTERM', 'SIGQUIT'] as const)("a caller's %s reaches the real claude too, so a stopped rank call does not keep running orphaned (R27-claude-L1-02)", async (stop) => {
     const dir = tempDir('cc-shim-orphan-');
     const bin = path.join(dir, 'claude-real');
     const pidFile = path.join(dir, 'pid');
@@ -215,9 +215,9 @@ describe('claude shim: running the real binary', () => {
       for (let i = 0; i < 200 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 25));
       realPid = Number(fs.readFileSync(pidFile, 'utf8'));
       expect(alive(realPid)).toBe(true);
-      // What execFileSync's timeout does: SIGTERM to its direct child, the shim.
-      child.kill('SIGTERM');
-      expect(await exited).toEqual({ code: null, signal: 'SIGTERM' });
+      // What execFileSync's timeout does (SIGTERM) or a caller's quit does: a signal to its direct child, the shim.
+      child.kill(stop);
+      expect(await exited).toEqual({ code: null, signal: stop });
       for (let i = 0; i < 80 && alive(realPid); i++) await new Promise((r) => setTimeout(r, 25));
       expect(alive(realPid)).toBe(false);
     } finally {

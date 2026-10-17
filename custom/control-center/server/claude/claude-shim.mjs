@@ -69,7 +69,7 @@ function refuse(message, code = 1) {
 }
 
 /** Signals a caller sends to stop the call; rank-pipeline.mjs's execFileSync timeout SIGTERMs only its direct child, this shim. */
-const FORWARDED = ['SIGTERM', 'SIGINT', 'SIGHUP'];
+const FORWARDED = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT'];
 
 /**
  * Runs the real binary and ends with its exit code or signal. A stop signal sent to the shim is passed on, so a caller
