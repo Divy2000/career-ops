@@ -165,6 +165,8 @@ bounded() {
     exit status();
   ' "$@"
 }
+# Unset first: an assignment keeps an inherited export, and only the claude calls may hold the token.
+unset CC_OAUTH_TOKEN
 keychain_rc=0
 CC_OAUTH_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s career-ops-claude-token -w 2>"$KEYCHAIN_ERR")" || keychain_rc=$?
 # Trimmed, as the Control Center trims it: a token of only whitespace is as missing as an empty one.

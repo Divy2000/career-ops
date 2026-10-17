@@ -72,7 +72,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   const nodeLog = path.join(T, 'step-nodes.log');
   // ... and which Anthropic or Claude Code variables reached them, by name.
   const envLog = path.join(T, 'step-env.log');
-  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\nfs.appendFileSync(${JSON.stringify(envLog)}, ${JSON.stringify(name)} + ' ' + Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)).sort().join(',') + '\\n');\n`;
+  const stub = (name) => `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(stepLog)}, ${JSON.stringify(name)} + ' ' + process.argv.slice(2).join(' ') + '\\n');\nfs.appendFileSync(${JSON.stringify(tokenLog)}, ${JSON.stringify(name)} + (process.env.CLAUDE_CODE_OAUTH_TOKEN ? ' token' : ' none') + '\\n');\nfs.appendFileSync(${JSON.stringify(nodeLog)}, process.execPath + '\\n');\nfs.appendFileSync(${JSON.stringify(envLog)}, ${JSON.stringify(name)} + ' ' + Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_|CC_OAUTH_TOKEN$)/.test(k)).sort().join(',') + '\\n');\n`;
   put('custom/immigration/watch.mjs', `${stub('watch')}if (!process.argv.includes('--ack')) process.stdout.write(JSON.stringify({ new_items: [] }));\n`);
   for (const rel of ['scan.mjs', 'custom/pipeline/prioritize.mjs', 'custom/pipeline/shortlist.mjs']) put(rel, stub(rel));
   // rank-pipeline.mjs stand-in: makes the call the real script makes with --cli claude, but never through an unwrapped
@@ -948,6 +948,20 @@ jobTest('no step sees an inherited ANTHROPIC_* variable or a credential CLAUDE_C
     const line = lines.find((l) => l.startsWith(`${step} `));
     assert.ok(line, `${step} did not run:\n${r.stepEnv}`);
     assert.deepEqual(line.slice(step.length + 1).split(',').filter(Boolean), ['CLAUDE_CODE_USE_BEDROCK'], `${step} saw a credential variable: ${line}`);
+  }
+  assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
+  assert.equal(r.rankCalls[0].token, true, 'the rank call gets the token through the shim');
+});
+
+jobTest('an exported CC_OAUTH_TOKEN in the job environment reaches no step: the Keychain token reassigned to it stays in the script (R27-scripts-a-H-01)', () => {
+  const w = dailyWorld();
+  const r = w.run({ CC_OAUTH_TOKEN: 'inherited-from-launchd' });
+  assert.equal(r.status, 0, r.log);
+  const lines = r.stepEnv.split('\n');
+  for (const step of ['watch', 'scan.mjs', 'custom/pipeline/prioritize.mjs', 'rank-pipeline.mjs', 'custom/pipeline/shortlist.mjs']) {
+    const line = lines.find((l) => l.startsWith(`${step} `));
+    assert.ok(line, `${step} did not run:\n${r.stepEnv}`);
+    assert.ok(!line.split(/[ ,]/).includes('CC_OAUTH_TOKEN'), `${step} saw CC_OAUTH_TOKEN: ${line}`);
   }
   assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
   assert.equal(r.rankCalls[0].token, true, 'the rank call gets the token through the shim');
