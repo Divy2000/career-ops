@@ -253,14 +253,10 @@ export class ScheduleService {
       return { ok: false, status: 409, error: `${job.title} is running now, and changing its schedule would stop it. Try again once it finishes.`, stderr: '' };
     }
     const target = `gui/${this.deps.uid}/${job.label}`;
-    // What a failed save puts back: the installed plist, whether launchd had the job loaded, and (when this save
-    // enables it) whether it was disabled.
+    // What a failed save puts back: the installed plist, whether launchd had the job loaded, and whether it was disabled.
     const wasLoaded = print.code === 0;
-    let wasDisabled = false;
-    if (input.enabled) {
-      const disabled = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
-      wasDisabled = disabled.code === 0 && parsePrintDisabled(disabled.stdout, job.label);
-    }
+    const disabledBefore = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
+    const wasDisabled = disabledBefore.code === 0 && parsePrintDisabled(disabledBefore.stdout, job.label);
     let previous: Buffer | null = null;
     try {
       previous = fs.readFileSync(plistPath);
@@ -282,8 +278,9 @@ export class ScheduleService {
     fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);
     let enabledNow = false;
+    let disabledNow = false;
     const failed = async (error: string, stderr: string): Promise<ScheduleWriteResult> => {
-      const restored = await this.restore({ plistPath, target, previous, wasLoaded, reDisable: enabledNow && wasDisabled });
+      const restored = await this.restore({ plistPath, target, previous, wasLoaded, reDisable: enabledNow && wasDisabled, reEnable: disabledNow && !wasDisabled });
       return { ok: false, status: 502, error: `${error}; ${restored ? 'the previous schedule was restored' : 'restoring the previous schedule also failed'}`, stderr };
     };
     if (input.enabled) {
@@ -293,9 +290,14 @@ export class ScheduleService {
     } else {
       const disable = await this.deps.exec('launchctl', ['disable', target], { timeoutMs: 20_000 });
       if (disable.code !== 0) return failed(`launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, disable.stderr.trim());
+      disabledNow = true;
     }
-    // bootout fails when the job is not loaded; that is the expected state before the first install.
-    await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
+    // bootout fails when the job is not loaded; that is the expected state before the first install. A loaded job still
+    // loaded after a failed bootout would keep firing on its old schedule, so that is a failed save.
+    const bootout = await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
+    if (bootout.code !== 0 && wasLoaded && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code === 0) {
+      return failed(`launchctl bootout failed (exit ${bootout.code}) and the job is still loaded`, bootout.stderr.trim());
+    }
     if (input.enabled) {
       const boot = await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, plistPath], { timeoutMs: 20_000 });
       if (boot.code !== 0) return failed(`launchctl bootstrap failed (exit ${boot.code})`, boot.stderr.trim());
@@ -305,9 +307,9 @@ export class ScheduleService {
 
   /**
    * Puts back what a save changed before a launchctl step failed: the previous plist (or none), the disabled flag the
-   * save cleared, and the loaded job the save booted out. Answers whether every step worked.
+   * save cleared or set, and the loaded job the save booted out. Answers whether every step worked.
    */
-  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; reDisable: boolean }): Promise<boolean> {
+  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; reDisable: boolean; reEnable: boolean }): Promise<boolean> {
     if (s.previous === null) fs.rmSync(s.plistPath, { force: true });
     else {
       const tmp = `${s.plistPath}.restore-${process.pid}`;
@@ -322,6 +324,7 @@ export class ScheduleService {
       ok = (await this.deps.exec('launchctl', ['bootout', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     }
     if (s.reDisable) ok = (await this.deps.exec('launchctl', ['disable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+    if (s.reEnable) ok = (await this.deps.exec('launchctl', ['enable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     return ok;
   }
 }

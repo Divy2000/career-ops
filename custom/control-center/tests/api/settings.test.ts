@@ -555,6 +555,31 @@ describe('launchd schedule through the injectable executor (never the real launc
       fake.fail.clear();
     }
   });
+  it('a disable whose bootout fails on a loaded job answers 502 and puts the plist and the enabled flag back (R28-srv-core-X-01)', async () => {
+    const label = 'com.career-ops.upstream-sync';
+    expect((await send('PUT', `/api/schedule/${label}`, { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+    const plist = path.join(t.cfg.launchAgentsDir, `${label}.plist`);
+    const installed = fs.readFileSync(plist, 'utf8');
+    fake.fail.add('launchctl bootout');
+    try {
+      const res = await send('PUT', `/api/schedule/${label}`, { hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/launchctl bootout failed .*still loaded.*previous schedule was restored/);
+    } finally {
+      fake.fail.clear();
+    }
+    expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
+    expect(fake.loaded.has(label)).toBe(true);
+    expect(fake.disabled.has(label)).toBe(false);
+  });
+  it('a disable of a job launchd never loaded still succeeds, since its bootout failing is expected (R28-srv-core-X-01)', async () => {
+    const label = 'com.career-ops.upstream-sync';
+    fake.loaded.delete(label);
+    const res = await send('PUT', `/api/schedule/${label}`, { hour: 9, minute: 0, weekday: 0, enabled: false });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(fake.loaded.has(label)).toBe(false);
+    expect(fake.disabled.has(label)).toBe(true);
+  });
   it('two saves at once both succeed, run one after the other, and the plist holds the later one (R12-srv-core-L3-01, R12-srv-core-02)', async () => {
     const base = fakeLaunchdExec();
     // The first lint is slow, so without serialization the second save writes and lints while the first one waits.
