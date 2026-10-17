@@ -419,6 +419,13 @@ describe('Ask drawer: a confirmed paid proposal starts once (SW3-web-a-05)', () 
     document.body.append(probeHost);
     const probeRoot = createRoot(probeHost);
     await act(async () => probeRoot.render(createElement(Probe)));
+    // The posting is a pending Inbox row, which Process inbox would evaluate too.
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation((url: string | URL | Request, init?: RequestInit) =>
+      String(url) === '/api/pipeline'
+        ? Promise.resolve(new Response(JSON.stringify({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows: [{ url: 'https://jobs.example.com/1', company: 'Acme', role: 'Engineer', done: false, section: 'pending' }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
+        : answer(url as string, init),
+    );
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.example.com/1' } }, 1));
@@ -904,6 +911,44 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
       await act(async () => doIt.click());
       await until(() => answerStart, 'the evaluation start');
       expect(seen.at(-1)).toBe(true);
+      await act(async () => answerStart!());
+      await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+      expect(seen.at(-1)).toBe(false);
+    } finally {
+      if (seen.at(-1)) markBatchStarting(false);
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
+
+  it('does not hold Process inbox back while an evaluate of a posting not in the Inbox starts (R27-shared-comp-X-01 review)', async () => {
+    const { markBatchStarting, useBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const seen: boolean[] = [];
+    const Probe = () => {
+      seen.push(useBatchStarting());
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(Probe)));
+    let answerStart: (() => void) | undefined;
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url) === '/api/sessions' && init?.method === 'POST') {
+        await new Promise<void>((r) => (answerStart = r));
+        return new Response(JSON.stringify({ id: 's-new', mode: 'oferta', status: 'queued', target: { type: 'url', value: 'https://jobs.initech.example/9' } }), { status: 202, headers: { 'content-type': 'application/json' } });
+      }
+      return answer(url as string, init);
+    });
+    try {
+      await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: 'https://jobs.initech.example/9' } }, 1));
+      const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+      await act(async () => bodyButton('Review and run')!.click());
+      const doIt = await until(() => bodyButton('Do it'), 'the confirm');
+      await act(async () => doIt.click());
+      await until(() => answerStart, 'the evaluation start');
+      expect(seen).not.toContain(true);
       await act(async () => answerStart!());
       await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
       expect(seen.at(-1)).toBe(false);

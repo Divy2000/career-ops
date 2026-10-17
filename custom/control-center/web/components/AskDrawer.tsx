@@ -248,15 +248,21 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       return;
     }
     // Counted like a Batch fan-out from before the recheck until the started sessions are listed, so a Process inbox
-    // cannot start in between and evaluate these rows too.
-    let holding = p.action === 'evaluateCompany' || p.action === 'evaluate';
-    if (holding) markBatchStarting(true);
+    // cannot start in between and evaluate these rows too. An evaluate holds it only for a pending Inbox row.
+    let holding = false;
+    const hold = () => {
+      holding = true;
+      markBatchStarting(true);
+    };
     const letGo = async () => {
       if (!holding) return;
       holding = false;
       await endBatchStarting(qc);
     };
+    if (p.action === 'evaluateCompany') hold();
     try {
+      // An unreadable Inbox holds too: the row may be pending.
+      if (p.action === 'evaluate' && (await isPendingInboxRow(String(p.params.url).trim()).catch(() => true))) hold();
       if (await processInboxOwns(p, knownProcess)) {
         update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
         return;
