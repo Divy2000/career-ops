@@ -9,6 +9,7 @@
 // and still exits 0, so the job reads the file to fail the step.
 // Dev Chat cannot edit it (server/claude/** is protected).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -88,6 +89,8 @@ function runReal(real, args, env) {
       // Die of the same signal, so the caller sees what it would have without the shim.
       for (const sig of FORWARDED) process.off(sig, forward);
       process.kill(process.pid, signal);
+      // Node ignores SIGPIPE and turns SIGUSR1 into the inspector, so the kill can leave the shim alive to exit 0.
+      setImmediate(() => process.exit(128 + (os.constants.signals[signal] ?? 0)));
       return;
     }
     process.exit(code ?? 1);
