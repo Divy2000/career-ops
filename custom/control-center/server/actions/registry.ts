@@ -454,7 +454,18 @@ export const ACTIONS: ActionDef[] = [
     build: (p, ctx) => node(ctx, 'fixSlugs', p.apply ? ['--apply'] : ['--dry-run']),
   }),
   // ---- immigration ----
-  define({ id: 'immigration.watch', label: 'Check official feeds', cost: 'network', resources: ['immigration:policy'], claude: false, sync: false, params: z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }), build: (p, ctx) => node(ctx, 'immigrationWatch', opt(p.since, '--since')) }),
+  define({
+    id: 'immigration.watch',
+    label: 'Check official feeds',
+    cost: 'network',
+    resources: ['immigration:policy'],
+    claude: false,
+    sync: false,
+    // A second check would only queue behind the first on immigration:policy and fetch the same feeds again.
+    single: (mine) => `Skipped: a feed check is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). Watch it on Runs & Schedule.`,
+    params: z.object({ since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
+    build: (p, ctx) => node(ctx, 'immigrationWatch', opt(p.since, '--since')),
+  }),
   define({ id: 'immigration.freshness', label: 'Company check freshness', cost: 'free', resources: [], claude: false, sync: true, params: z.object({ company }), build: (p, ctx) => node(ctx, 'freshness', [p.company]) }),
   define({
     id: 'immigration.h1b',
