@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp } from '../helpers/app.js';
+import { runsEnded } from '../helpers/runs.js';
 import { tempDir } from '../helpers/tmp.js';
 
 // R28-claude-X-01 review: another server process holds a session's turn claim while it prepares a turn (a slow token
@@ -34,7 +35,8 @@ describe('deleting a session another server process is starting a turn on (R28-c
   });
 
   it('given a session another process deletes while a reply claims its turn, when the reply is refused, then no guard folder is left behind', async () => {
-    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-test-guard-') });
     try {
       const meta = await app.sessions.start({ mode: 'advisor', target: { type: 'none', value: null }, prompt: 'What is overdue?' });
       for (const deadline = Date.now() + 15_000; ['queued', 'running'].includes(app.sessions.read(meta.id)!.status) || (app.sessions as unknown as { active: Map<string, unknown> }).active.has(meta.id); await new Promise((r) => setTimeout(r, 50))) {
@@ -54,13 +56,15 @@ describe('deleting a session another server process is starting a turn on (R28-c
     } finally {
       vi.restoreAllMocks();
       await app.close();
+      await runsEnded(dataRoot);
     }
   });
 
   it('given a new session whose first turn is being prepared, when another process looks, then the session\'s turn claim is held', async () => {
     let claimed: boolean | null = null;
     let guard = '';
-    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') }, {
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-test-guard-') }, {
       readToken: async () => {
         claimed = fs.existsSync(path.join(guard, 'turn.claim'));
         return FAKE_TOKEN;
@@ -77,6 +81,7 @@ describe('deleting a session another server process is starting a turn on (R28-c
       expect(fs.existsSync(path.join(guard, 'turn.claim'))).toBe(false);
     } finally {
       await app.close();
+      await runsEnded(dataRoot);
     }
   });
 
@@ -104,7 +109,8 @@ describe('deleting a session another server process is starting a turn on (R28-c
   });
 
   it('given a session whose turn runs in another server process, when it is deleted here, then it is refused as busy', async () => {
-    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-test-guard-') });
     try {
       const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
       const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', 'setTimeout(() => {}, 2000)'], cwd: process.cwd() } });
@@ -113,6 +119,7 @@ describe('deleting a session another server process is starting a turn on (R28-c
       expect(app.sessions.read(meta.id)).not.toBeNull();
     } finally {
       await app.close();
+      await runsEnded(dataRoot);
     }
   });
 });
