@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
+import { reconcileHeldReportNums, recordHeldReportNums, restoreHeldReportNums } from '../../server/claude/manager.js';
 import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, grepSecretExcludes, locateRead, narrowGrepInput, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { trackerDenyGlobs, writeGuardPolicy } from '../../server/claude/confinement.mjs';
 import { playwrightMcpArgs } from '../../server/claude/playwright-mcp-launcher.mjs';
@@ -444,8 +445,228 @@ describe('guard hook', () => {
       'tracker reports/nested/x.md': 2,
       'tracker reports/008-RESERVED.md': 2,
     });
-    // An evaluation still owns its reservation sentinels (reserve-report-num.mjs writes them).
-    expect(writesFor(['oferta'], ['reports/008-RESERVED.md'])).toEqual({ 'oferta reports/008-RESERVED.md': 0 });
+  });
+
+  it('an evaluation may write its reports but never a reservation sentinel: only reserve-report-num.mjs writes those, outside the hook (R28-claude-L2-02)', () => {
+    const modes = ['oferta', 'auto-pipeline', 'pipeline', 'batch', 'de/angebot', 'regional/eu-swe'];
+    const rels = ['reports/042-acme-platform-2026-10-17.md', 'reports/042-RESERVED.md', 'reports/1001-RESERVED.md'];
+    expect(writesFor(modes, rels)).toEqual(Object.fromEntries(modes.flatMap((m) => rels.map((rel, i) => [`${m} ${rel}`, i === 0 ? 0 : 2]))));
+  });
+
+  /** A reservation sentinel as reserve-report-num.mjs writes it, and the created_at a hold on it records. */
+  const reserveAs = (n: number, createdAt: string) => fs.writeFileSync(path.join(realRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`), JSON.stringify({ pid: process.pid, token: `t${n}`, created_at: createdAt }));
+  const heldAt = (n: number) => {
+    const sentinel = JSON.parse(fs.readFileSync(path.join(realRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`), 'utf8')) as { created_at: string; token: string };
+    return `${Date.parse(sentinel.created_at)}~${sentinel.token}`;
+  };
+
+  it('given a session holding report 060, when it runs reserve-report-num.mjs --release, then only 060 may go, once, in any quoting (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-held-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const bash = (command: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: realRoot, session_id: 's' });
+    // The app's records: 60 held, 59 held and let go again, 58 held but its sentinel since collected and reserved again by
+    // another evaluation (another created_at), and a record cut short.
+    for (const n of [58, 59, 60, 61]) reserveAs(n, `2026-10-17T10:00:00.0${n}Z`);
+    fs.writeFileSync(path.join(dir, 'held-report-nums.log'), `+60=${heldAt(60)};\n+59=${heldAt(59)};\n-59;\n+58=${Date.parse('2026-10-17T06:00:00.000Z')};\n+61=${heldAt(61)}`);
+    for (const cmd of ['node reserve-report-num.mjs --release 060', 'node reserve-report-num.mjs', 'node reserve-report-num.mjs --count 3', 'node reserve-report-num.mjs --gc']) expect(bash(cmd).status, cmd).toBe(0);
+    // Let go once, 60 is no longer held: another evaluation may reserve it next.
+    for (const cmd of ['node reserve-report-num.mjs --release 60-60', `node reserve-report-num.mjs '--release' "059"`, 'node reserve-report-num.mjs --release 058', 'node reserve-report-num.mjs --release 061']) {
+      const r = bash(cmd);
+      expect(r.status, cmd).toBe(2);
+      expect(r.stderr).toMatch(/releases only the report numbers it holds/);
+    }
+  }, 40_000);
+
+  it('given a held report number, when several releases of it run at once, then exactly one is let through (R28-cl2-rev-01)', async () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-parallel-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(80, '2026-10-17T10:01:20.000Z');
+    recordHeldReportNums(dir, [80], realRoot);
+    const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 080' }, cwd: realRoot, session_id: 's' });
+    const env: NodeJS.ProcessEnv = { ...process.env, CC_POLICY_FILE: pf.file, CC_POLICY_SHA256: pf.sha256, CC_SESSION_DIR: dir };
+    delete env.CC_TURN_DIR;
+    const one = () => new Promise<number | null>((resolve) => {
+      const child = spawn(process.execPath, [GUARD_HOOK_PATH], { env, stdio: ['pipe', 'ignore', 'ignore'] });
+      child.on('close', (code) => resolve(code));
+      child.stdin.end(payload);
+    });
+    const codes = await Promise.all(Array.from({ length: 6 }, one));
+    expect(codes.filter((c) => c === 0)).toHaveLength(1);
+    expect(codes.filter((c) => c === 2)).toHaveLength(5);
+  }, 30_000);
+
+  it('given a release the hook let through that then failed, when the app restores its hold, then the retry may run, and only that call\'s hold comes back (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-restore-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 070' }, tool_use_id: id, cwd: realRoot, session_id: 's' }).status;
+    reserveAs(70, '2026-10-17T10:01:10.000Z');
+    recordHeldReportNums(dir, [70], realRoot);
+    expect(release('toolu_a')).toBe(0);
+    // Another call's failure (one the hook refused) restores nothing.
+    restoreHeldReportNums(dir, [70], 'toolu_b');
+    expect(release('toolu_c')).toBe(2);
+    restoreHeldReportNums(dir, [70], 'toolu_a');
+    expect(release('toolu_d')).toBe(0);
+    // A release that failed after deleting the sentinel, which another evaluation then reserved: the restored hold no
+    // longer matches the sentinel, so the retry is refused.
+    restoreHeldReportNums(dir, [70], 'toolu_d');
+    reserveAs(70, '2026-10-17T10:02:10.000Z');
+    expect(release('toolu_e')).toBe(2);
+  }, 20_000);
+
+  /** A hold lock as a hook writes it: its pid and that process's start as ps prints it. */
+  const psStart = (pid: number) => execFileSync('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', env: { LC_ALL: 'C', TZ: 'UTC' } }).trim();
+  const lockedBy = (dir: string, start: string) => fs.writeFileSync(path.join(dir, 'held-report-nums.lock'), JSON.stringify({ pid: process.pid, start, nonce: 'other-hook' }));
+
+  it('given a hold lock left by a hook that died, its pid since reused by a live process, when a release runs, then the old lock is replaced at once (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-reused-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(74, '2026-10-17T10:01:14.000Z');
+    recordHeldReportNums(dir, [74], realRoot);
+    lockedBy(dir, 'Thu Jan  1 00:00:00 1970');
+    const at = Date.now();
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 074' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
+    expect(Date.now() - at).toBeLessThan(5_000);
+  }, 20_000);
+
+  it('given a hold lock a live hook holds, however old, when another release runs, then the lock is never taken from it (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-live-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(73, '2026-10-17T10:01:13.000Z');
+    recordHeldReportNums(dir, [73], realRoot);
+    lockedBy(dir, psStart(process.pid));
+    // Past HOOK_TIMEOUT_S: a holder ps dates is still never replaced while it runs, so it can never remove a lock taken
+    // over meanwhile.
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(path.join(dir, 'held-report-nums.lock'), old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 073' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'held-report-nums.lock'), 'utf8'))).toMatchObject({ nonce: 'other-hook' });
+  }, 30_000);
+
+  it('given a hold lock older than a hook may live whose holder recorded no start, its pid since reused, when a release runs, then the lock is replaced (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-nostart-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(72, '2026-10-17T10:01:12.000Z');
+    recordHeldReportNums(dir, [72], realRoot);
+    fs.writeFileSync(path.join(dir, 'held-report-nums.lock'), JSON.stringify({ pid: process.pid, start: null, nonce: 'ps-failed' }));
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(path.join(dir, 'held-report-nums.lock'), old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 072' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
+  }, 30_000);
+
+  it('given a held number whose sentinel cannot be read, when the session releases it, then it is refused as not held (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-unreadable-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    fs.writeFileSync(path.join(dir, 'held-report-nums.log'), '+81=1792231281000;');
+    fs.mkdirSync(path.join(realRoot, 'reports', '081-RESERVED.md'), { recursive: true });
+    const r = hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 081' }, cwd: realRoot, session_id: 's' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/not held: 081/);
+  }, 30_000);
+
+  it('given a range release that failed after deleting part of the range, when the session retries, then the refusal names the numbers it no longer holds and the rest may go (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-partial-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (arg: string, id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: `node reserve-report-num.mjs --release ${arg}` }, tool_use_id: id, cwd: realRoot, session_id: 's' });
+    for (const n of [71, 72]) reserveAs(n, `2026-10-17T10:02:${n - 60}.000Z`);
+    recordHeldReportNums(dir, [71, 72], realRoot);
+    expect(release('071-072', 'toolu_p').status).toBe(0);
+    fs.rmSync(path.join(realRoot, 'reports', '071-RESERVED.md'));
+    restoreHeldReportNums(dir, [71, 72], 'toolu_p');
+    const again = release('071-072', 'toolu_q');
+    expect(again.status).toBe(2);
+    expect(again.stderr).toMatch(/not held: 071\b/);
+    expect(again.stderr).not.toMatch(/072/);
+    expect(release('072', 'toolu_r').status).toBe(0);
+  }, 30_000);
+
+  it('given a held number whose sentinel nears the age the allocator collects it at, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-aging-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(78, '2026-10-17T10:01:18.000Z');
+    recordHeldReportNums(dir, [78], realRoot);
+    // A --gc between this check and the release could collect it and another evaluation reserve the number again.
+    const old = new Date(Date.now() - 3.5 * 3_600_000);
+    fs.utimesSync(path.join(realRoot, 'reports', '078-RESERVED.md'), old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 078' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
+  }, 20_000);
+
+  it('given a release the hook let through that never reported back, when the next turn starts, then the hold comes back only while its sentinel is still that reservation (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-orphan-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 079' }, tool_use_id: id, cwd: realRoot, session_id: 's' }).status;
+    reserveAs(79, '2026-10-17T10:01:19.000Z');
+    recordHeldReportNums(dir, [79], realRoot);
+    // The CLI was killed after the hook let the release through and before it ran: the sentinel is still there.
+    expect(release('toolu_k')).toBe(0);
+    expect(release('toolu_l')).toBe(2);
+    reconcileHeldReportNums(dir, realRoot);
+    expect(release('toolu_m')).toBe(0);
+    // This time the release ran and another evaluation reserved 079 since: nothing comes back.
+    reserveAs(79, '2026-10-17T10:02:19.000Z');
+    reconcileHeldReportNums(dir, realRoot);
+    expect(release('toolu_n')).toBe(2);
+  }, 30_000);
+
+  it('given a hold given back after its number was reserved again in the same millisecond, when the session releases it, then the other reservation\'s token refuses it (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-samems-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 082' }, tool_use_id: id, cwd: realRoot, session_id: 's' }).status;
+    const sentinel = path.join(realRoot, 'reports', '082-RESERVED.md');
+    fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'mine', created_at: '2026-10-17T10:01:22.000Z' }));
+    recordHeldReportNums(dir, [82], realRoot);
+    expect(release('toolu_s')).toBe(0);
+    // The release deleted it and another evaluation reserved 082 in that same millisecond, then the result read failed.
+    fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'another-evaluation', created_at: '2026-10-17T10:01:22.000Z' }));
+    restoreHeldReportNums(dir, [82], 'toolu_s');
+    expect(release('toolu_t')).toBe(2);
+    reconcileHeldReportNums(dir, realRoot);
+    expect(release('toolu_u')).toBe(2);
+  }, 30_000);
+
+  it('given a held number whose sentinel is gone, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-gone-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(75, '2026-10-17T10:01:15.000Z');
+    recordHeldReportNums(dir, [75], realRoot);
+    // The app dropped the sentinel at the end of the turn, logging no release.
+    fs.rmSync(path.join(realRoot, 'reports', '075-RESERVED.md'));
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 075' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
+  }, 20_000);
+
+  it('given a sentinel written after the session got its number, when the app records the hold, then none is recorded (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-since-'));
+    reserveAs(76, '2026-10-17T10:01:16.000Z');
+    reserveAs(77, '2026-10-17T10:01:17.000Z');
+    recordHeldReportNums(dir, [76, 77], realRoot, Date.parse('2026-10-17T10:01:16.500Z'));
+    expect(fs.readFileSync(path.join(dir, 'held-report-nums.log'), 'utf8').trim()).toBe(`+76=${heldAt(76)};`);
+  });
+
+  it('given any session whose scope grants reports/**, when it writes a reservation sentinel, then it is refused, Dev Chat included (R28-cl2-rev-02)', () => {
+    const modes = ['devchat', 'oferta', 'apply', 'tracker', 'patterns'];
+    expect(writesFor(modes, ['reports/042-RESERVED.md'])).toEqual(Object.fromEntries(modes.map((m) => [`${m} reports/042-RESERVED.md`, 2])));
+    expect(writesFor(['devchat'], ['reports/042-acme.md'])).toEqual({ 'devchat reports/042-acme.md': 0 });
+  });
+
+  it('given a session whose scope grants data/** or custom/**, when it writes a protected secret file, then it is refused as the read is (R28-claude-X-03)', () => {
+    const rels = ['data/.env', 'data/x.key', 'data/sub/.env.local', 'output/api.token'];
+    expect(writesFor(['devchat'], rels)).toEqual(Object.fromEntries(rels.map((rel) => [`devchat ${rel}`, 2])));
+    expect(writesFor(['devchat'], ['data/notes.md'])).toEqual({ 'devchat data/notes.md': 0 });
+    // custom/** lives in the code checkout: one root, so the code-root grant applies.
+    const root = fs.realpathSync(tempDir('cc-secret-root-'));
+    const dir = fs.realpathSync(tempDir('cc-secret-guard-'));
+    const pf = writePolicyFile(dir, { codeRoot: root, policy: getModePolicy('devchat')!, deny: [...DEVCHAT_DENIED_WRITES] });
+    const write = (rel: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: path.join(root, rel), content: 'x' }, cwd: root, session_id: 's' }).status;
+    for (const rel of ['custom/service-account.json', 'custom/x/credentials.json', 'custom/x/.env']) expect(write(rel), rel).toBe(2);
+    expect(write('custom/x/config.json')).toBe(0);
+  });
+
+  it('given a writer script, when its output path is a protected secret file inside the write scope, then the command is refused (R28-claude-X-03)', () => {
+    const code = fs.realpathSync(tempDir('cc-secret-out-'));
+    const dir = fs.realpathSync(tempDir('cc-secret-out-guard-'));
+    const policy = JSON.parse(fs.readFileSync(writePolicyFile(dir, { codeRoot: code, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] }).file, 'utf8')) as Parameters<typeof checkBash>[1];
+    expect(checkBash('node generate-pdf.mjs output/x.html output/x.pdf', policy, code)).toBeNull();
+    for (const out of ['output/x.key', 'output/.env', 'output/client_secret.json']) expect(checkBash(`node generate-pdf.mjs output/x.html ${out}`, policy, code), out).toMatch(/protected/);
   });
 
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {

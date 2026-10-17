@@ -3,7 +3,7 @@
 // frozen; tests/unit/modes.test.ts fails when the modes/ tree drifts from it.
 import generated from './modes.generated.json' with { type: 'json' };
 import { AGENT_SPAWNING_SCRIPTS } from './guard-policy.mjs';
-import { ALWAYS_DENIED_WRITES, CODE_ROOT_WRITE_GLOBS } from './confinement.mjs';
+import { ALWAYS_DENIED_WRITES, CODE_ROOT_WRITE_GLOBS, READ_DENY } from './confinement.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -36,6 +36,8 @@ export type NetworkTool = 'WebFetch' | 'WebSearch';
 
 export interface PolicyClassDef {
   writeGlobs: string[];
+  /** Paths inside writeGlobs the class may still not write. */
+  denyWrites?: string[];
   network: NetworkTool[];
   /** Scripts (relative to the code root) the class may run with Bash. */
   extraBash: string[];
@@ -267,11 +269,12 @@ const MODE_EXTRA_WRITES: Readonly<Record<string, readonly string[]>> = {
   tracker: ['data/salary-observations.tsv', 'reports/*.md'],
 };
 
-/** What a mode's extra writes still exclude: a reports/*.md grant updates reports, never the allocator's reservation sentinels. */
-const MODE_EXTRA_DENIES: Readonly<Record<string, readonly string[]>> = {
-  apply: ['reports/*-RESERVED.md'],
-  tracker: ['reports/*-RESERVED.md'],
-};
+/**
+ * What no session writes, whatever its scope grants: the allocator's reservation sentinels (reserve-report-num.mjs
+ * writes them itself, outside the hook) and the secret files no session may read either (a data/** or custom/**
+ * grant would otherwise let it overwrite a .env or a key).
+ */
+const SESSION_DENIED_WRITES: readonly string[] = ['reports/*-RESERVED.md', ...READ_DENY];
 
 /** Modes that exist only inside the Control Center (no modes/*.md file). */
 export const VIRTUAL_MODES: Record<string, { title: string; policyClass: PolicyClass; network?: NetworkTool[] }> = {
@@ -429,12 +432,13 @@ export function getModePolicy(id: string): ModePolicy | null {
   const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].filter(sessionRunnable).sort();
   const explicit = def.bashPrefixes?.filter((p) => p.every(sessionRunnable));
   const bashPrefixes = explicit ?? scripts.map(bashPrefixFor);
+  const denyWrites = [...new Set([...(def.denyWrites ?? []), ...SESSION_DENIED_WRITES])];
   return {
     id,
     title: derived?.title ?? virtual!.title,
     policyClass,
     writeGlobs: [...def.writeGlobs, ...(Object.hasOwn(MODE_EXTRA_WRITES, englishModeOf(id)) ? MODE_EXTRA_WRITES[englishModeOf(id)]! : [])],
-    ...(Object.hasOwn(MODE_EXTRA_DENIES, englishModeOf(id)) ? { denyWrites: [...MODE_EXTRA_DENIES[englishModeOf(id)]!] } : {}),
+    ...(denyWrites.length ? { denyWrites } : {}),
     network: virtual?.network ?? [...def.network],
     scripts,
     bashRules: explicit ? explicit.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),

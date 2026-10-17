@@ -10,15 +10,18 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
 import { pidAlive, type Runner } from '../runner/runner.js';
+import { createWhole, processStartTime, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS, type ProcessStart } from '../../supervisor/instance-lock.js';
 import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
 import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
+import type { EnvelopeKind } from './envelopes.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
+import { tokenize } from './guard-policy.mjs';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { reportNumberOf } from '../domains/reports.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
@@ -173,6 +176,216 @@ export function writeProgress(file: string, p: TurnProgress): void {
   }
 }
 
+/**
+ * The report numbers a session holds, logged in its guard folder (outside every write scope): the app adds the one it
+ * reserved for the session and the ones its own reserve-report-num.mjs runs printed, each naming its reservation by the
+ * sentinel's created_at and allocator token (`+N=<ms>~<token>;`), and guard-hook.mjs, which lets a session release only
+ * reservations it holds (reserve-report-num.mjs --release deletes whichever sentinels it names), removes each one it lets
+ * go. A number released, collected or reserved again is another reservation, so a hold on it no longer matches. With `since` (when
+ * the session got the numbers), a sentinel written after it is another reservation's and is not recorded.
+ */
+export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
+
+export function recordHeldReportNums(sessionDir: string, nums: readonly number[], dataRoot: string, since?: number | null): void {
+  const records = nums.flatMap((n) => {
+    const id = readSentinelIdentity(dataRoot, n);
+    return id === null || (since !== undefined && (since === null || id.at > since)) ? [] : [`\n+${n}=${id.key};`];
+  });
+  if (records.length === 0) return;
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), records.join(''));
+}
+
+/**
+ * Gives back the holds a release took (guard-hook.mjs logs each as `-N@<tool id>;`) when that release failed, so the
+ * session may retry it: the hook honours `+N@<tool id>;` only right after that same call's `-N@<tool id>;`.
+ */
+export function restoreHeldReportNums(sessionDir: string, nums: readonly number[], toolUseId: string): void {
+  if (!TOOL_USE_ID.test(toolUseId)) return;
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n}@${toolUseId};`).join(''));
+}
+
+/**
+ * Gives back each hold a release let go whose sentinel is still the reservation it named: that release never ran, or
+ * failed before deleting it (the CLI killed after the hook let it through leaves no result to restore it from). Only
+ * between turns, while no release of the session's can be running. Records are read as guard-hook.mjs reads them.
+ */
+export function reconcileHeldReportNums(sessionDir: string, dataRoot: string): void {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  const held = new Map<number, string>();
+  const letGo = new Map<number, { id: string | null; at: string | null }>();
+  for (const line of text.split('\n')) {
+    const m = HELD_RECORD.exec(line);
+    if (!m) continue;
+    const num = Number(m[2]);
+    if (m[1] === '-') {
+      letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
+      held.delete(num);
+    } else if (m[3] !== undefined) {
+      held.set(num, m[3]);
+      letGo.delete(num);
+    } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num)!.at !== null && !held.has(num)) {
+      held.set(num, letGo.get(num)!.at!);
+      letGo.delete(num);
+    }
+  }
+  const records = [...letGo].flatMap(([n, { at }]) => (at !== null && readSentinelIdentity(dataRoot, n)?.key === at ? [`\n+${n}=${at};`] : []));
+  if (records.length) fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), records.join(''));
+}
+
+const HELD_RECORD = /^([+-])(\d+)(?:=(\d+(?:~[A-Za-z0-9_-]{1,100})?)|@([A-Za-z0-9_-]{1,100}))?;$/;
+const SENTINEL_TOKEN = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** Which reservation `num`'s sentinel is: its created_at, and the key a hold names it by (guard-hook.mjs sentinelIdentity). */
+function readSentinelIdentity(dataRoot: string, num: number): { at: number; key: string } | null {
+  const file = path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+  let sentinel: { created_at?: unknown; token?: unknown };
+  try {
+    sentinel = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof sentinel;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    return null;
+  }
+  const at = typeof sentinel?.created_at === 'string' ? Date.parse(sentinel.created_at) : NaN;
+  if (Number.isNaN(at)) return null;
+  return { at, key: typeof sentinel.token === 'string' && SENTINEL_TOKEN.test(sentinel.token) ? `${at}~${sentinel.token}` : String(at) };
+}
+
+/** The tool ids the CLI hands out (toolu_...); anything else is never written into a hold record. */
+const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** The numbers a reserve-report-num.mjs --release command names, as the script reads them; empty for any other command. */
+function releasedReportNums(command: string): number[] {
+  const tokens = tokenize(command);
+  if (tokens === null || tokens[0] !== 'node' || tokens[1] !== 'reserve-report-num.mjs' || tokens[2] !== '--release') return [];
+  const m = (tokens[3] ?? '').match(/^(\d+)(?:-(\d+))?$/);
+  if (!m) return [];
+  const start = Number(m[1]);
+  const end = m[2] === undefined ? start : Number(m[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start >= 50) return [];
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+}
+
+/** The Bash commands of a stream-json assistant line by tool id, whole: a tool.use event keeps only their first 200 characters. */
+export function bashCommandsIn(line: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let obj: { type?: unknown; message?: { content?: unknown } };
+  try {
+    obj = JSON.parse(line) as typeof obj;
+  } catch {
+    return out;
+  }
+  if (obj?.type !== 'assistant' || !Array.isArray(obj.message?.content)) return out;
+  for (const b of obj.message.content as Array<{ type?: unknown; id?: unknown; name?: unknown; input?: { command?: unknown } }>) {
+    if (b?.type === 'tool_use' && b.name === 'Bash' && typeof b.input?.command === 'string') out.set(String(b.id), b.input.command);
+  }
+  return out;
+}
+
+/**
+ * The text of each tool result in a user stream line, by tool id: the tool.result event keeps only a result's first 400
+ * characters, and lines a reserve run printed before its reservation may push that out of it.
+ */
+export function toolResultsIn(line: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let obj: { type?: unknown; message?: { content?: unknown } };
+  try {
+    obj = JSON.parse(line) as typeof obj;
+  } catch {
+    return out;
+  }
+  if (obj?.type !== 'user' || !Array.isArray(obj.message?.content)) return out;
+  for (const b of obj.message.content as Array<{ type?: unknown; tool_use_id?: unknown; content?: unknown }>) {
+    if (b?.type !== 'tool_result') continue;
+    const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? (b.content as Array<{ type?: unknown; text?: unknown }>).flatMap((c) => (c?.type === 'text' && typeof c.text === 'string' ? [c.text] : [])).join('\n') : null;
+    if (text !== null) out.set(String(b.tool_use_id), text);
+  }
+  return out;
+}
+
+/** Whether a Bash command is a reserve-report-num.mjs run that reserves (the script reserves unless told to help, release or gc). */
+function reservesReportNums(command: string): boolean {
+  const tokens = tokenize(command);
+  return tokens !== null && tokens[0] === 'node' && tokens[1] === 'reserve-report-num.mjs' && !['--help', '-h', '--release', '--gc'].includes(tokens[2] ?? '');
+}
+
+/** The numbers a reserve run printed: its last output line, `042` or `042-049`. */
+export function printedReservation(output: string): number[] {
+  // The CLI puts a run's stderr after its stdout: a warning may follow the line the allocator printed.
+  const m = output
+    .split('\n')
+    .map((l) => l.trim().match(/^(\d+)(?:-(\d+))?$/))
+    .findLast((x) => x !== null);
+  if (!m) return [];
+  const start = Number(m[1]);
+  const end = m[2] === undefined ? start : Number(m[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start >= 50) return [];
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+}
+
+/**
+ * Held in a session's guard folder while a process checks the session idle and starts its next turn (until beginTurn
+ * marks it running): two server processes on one data root (blue/green) would otherwise both start a paid turn on it.
+ */
+const TURN_CLAIM_FILE = 'turn.claim';
+let ownStart: ProcessStart | undefined;
+/** Held while a process replaces a stale turn claim; it takes milliseconds, so one left this old is a crashed holder's. */
+const TURN_CLAIM_REPLACE_FILE = 'turn.claim.replace';
+
+/** The replacement lock beside a session's turn claim, or null while another process holds it. Returns its release. */
+function lockTurnClaimReplace(dir: string, text: string): (() => void) | null {
+  const file = path.join(dir, TURN_CLAIM_REPLACE_FILE);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (createWhole(file, text)) return () => removeIf(file, text);
+    const seen = readOrNull(file);
+    if (seen === null) continue;
+    let age: number;
+    try {
+      age = Date.now() - fs.statSync(file).mtimeMs;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    if (age < UNREADABLE_LOCK_GRACE_MS) return null;
+    removeIf(file, seen);
+  }
+  return null;
+}
+
+/**
+ * Whether the process a turn claim names is gone: dead or a reused PID. A live holder keeps its claim however long it
+ * prepares (a slow token read), since a peer starting the turn beside it would run two turns, and so does one ps
+ * cannot date or that recorded no start of its own. A claim cut short is gone once the unreadable grace has passed.
+ */
+export function turnClaimGone(file: string, text: string, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
+  let holder: { pid?: unknown; start?: unknown; at?: unknown };
+  try {
+    holder = JSON.parse(text) as typeof holder;
+  } catch {
+    return unreadableClaimGone(file);
+  }
+  if (!Number.isInteger(holder.pid) || (holder.pid as number) <= 0 || typeof holder.at !== 'number') return unreadableClaimGone(file);
+  const start = startOf(holder.pid as number);
+  if (start === null) return true;
+  // A holder that runs but whose start ps cannot tell is held: freeing a live one would start a second paid turn.
+  if (start === 'unknown') return false;
+  // Only a start that differs proves the PID reused; a live holder that recorded none keeps its claim.
+  return typeof holder.start === 'number' && start !== holder.start;
+}
+
+/** A claim with no readable holder is gone once the unreadable grace has passed, or once its holder removed it. */
+function unreadableClaimGone(file: string): boolean {
+  const st = fs.statSync(file, { throwIfNoEntry: false });
+  return st === undefined || Date.now() - st.mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
+}
+
 export interface ManagerDeps {
   readToken: TokenReader;
   exec: Exec;
@@ -297,11 +510,20 @@ export class SessionManager {
   }
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
-    const meta = this.must(id);
+    let meta = this.must(id);
     assertCurrentPolicy(meta);
     const policy = this.turnPolicy(meta.mode);
     // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
     this.assertIdle(meta);
+    const unclaimTurn = this.claimTurn(id);
+    try {
+      // Read again under the claim: another server process may have started a turn since.
+      meta = this.must(id);
+      this.assertIdle(meta);
+    } catch (err) {
+      unclaimTurn();
+      throw err;
+    }
     this.sending.add(id);
     try {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
@@ -318,6 +540,7 @@ export class SessionManager {
       }
     } finally {
       this.sending.delete(id);
+      unclaimTurn();
     }
   }
 
@@ -327,6 +550,13 @@ export class SessionManager {
     const policy = this.turnPolicy(first.mode);
     // A source with a turn starting or running would get a second paid run beside it, on the conversation it is writing.
     this.assertIdle(first, { finishing: false });
+    const unclaimTurn = this.claimTurn(id);
+    try {
+      this.assertIdle(this.must(id), { finishing: false });
+    } catch (err) {
+      unclaimTurn();
+      throw err;
+    }
     this.sending.add(id);
     try {
       // A cancelled turn still stopping may yet start the conversation, or write the report a replayed request would.
@@ -355,7 +585,49 @@ export class SessionManager {
       }
     } finally {
       this.sending.delete(id);
+      unclaimTurn();
     }
+  }
+
+  /**
+   * Takes the session's turn claim (TURN_CLAIM_FILE), or replaces one whose holder is gone; a live holder (another server
+   * process starting a turn on it) is refused as busy. Returns the release, which removes this claim and only this one.
+   */
+  private claimTurn(id: string): () => void {
+    const dir = this.store.guardDirOf(id);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, TURN_CLAIM_FILE);
+    // Asked again until ps dates this process: a claim with no start of its own is never freed while the PID runs.
+    if (typeof ownStart !== 'number') ownStart = processStartTime(process.pid);
+    const text = JSON.stringify({ pid: process.pid, start: ownStart, at: Date.now(), nonce: crypto.randomUUID() });
+    const release = () => {
+      removeIf(file, text);
+      // A session another process deleted after it was read leaves no guard folder made only for this claim; one that
+      // holds anything else is left as it is.
+      if (this.store.read(id) !== null) return;
+      try {
+        fs.rmdirSync(dir);
+      } catch (err) {
+        if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
+      }
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (createWhole(file, text)) return release;
+      const seen = readOrNull(file);
+      if (seen === null) continue;
+      if (!turnClaimGone(file, seen)) break;
+      // Replaced under a lock of its own: two processes replacing one stale claim at once could otherwise move aside the
+      // claim the other just took, and lose it when a third creates one meanwhile.
+      const unlock = lockTurnClaimReplace(dir, text);
+      if (!unlock) break;
+      try {
+        if (readOrNull(file) === seen) removeIf(file, seen);
+        if (createWhole(file, text)) return release;
+      } finally {
+        unlock();
+      }
+    }
+    throw new BusyError(`session ${id} is starting a turn in another server process`);
   }
 
   /**
@@ -534,6 +806,22 @@ export class SessionManager {
    */
   async delete(id: string): Promise<boolean> {
     if (this.active.has(id) || this.sending.has(id)) throw new BusyError(`session ${id} is still running`);
+    const current = this.store.read(id);
+    if (current === null) return this.store.delete(id);
+    // A turn another server process runs: only its own process tracks it, so the record is all this one can see. One
+    // still queued is preparing under the turn claim taken below.
+    if (current.status === 'running') throw new BusyError(`session ${id} is running`);
+    // Another server process starting a turn on the session holds its claim: deleting it now leaves that turn starting
+    // on a session that no longer exists.
+    const unclaimTurn = this.claimTurn(id);
+    try {
+      return await this.deleteClaimed(id);
+    } finally {
+      unclaimTurn();
+    }
+  }
+
+  private async deleteClaimed(id: string): Promise<boolean> {
     const meta = this.store.read(id);
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
@@ -970,11 +1258,22 @@ export class SessionManager {
    */
   private async runTurn(meta: SessionMeta, policy: ModePolicy, prompt: string, opts: { resume: boolean; fork: boolean; blacklistAllowed?: boolean; original?: boolean }): Promise<SessionMeta> {
     const claimed = !this.sending.has(meta.id);
+    // A send holds the claim already; a new session's (or fork's) is taken here, so another server process refuses to
+    // delete it while it prepares.
+    const unclaimTurn = claimed ? this.claimTurn(meta.id) : () => {};
+    try {
+      // Read again under the claim, as send does: another server process may have deleted the session before it.
+      if (claimed) this.must(meta.id);
+    } catch (err) {
+      unclaimTurn();
+      throw err;
+    }
     if (claimed) this.sending.add(meta.id);
     this.preparing.add(meta.id);
     try {
       return await this.prepareAndSpawn(meta, policy, prompt, opts);
     } finally {
+      unclaimTurn();
       if (claimed) this.sending.delete(meta.id);
       this.preparing.delete(meta.id);
       this.cancelledBeforeSpawn.delete(meta.id);
@@ -1017,6 +1316,15 @@ export class SessionManager {
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
       if (n > 1) meta = await this.reassertReservation(meta);
+      // Only a sentinel written no later than the session got the number is its reservation: a first turn that waited past
+      // the GC may find another evaluation's sentinel under it.
+      // A hold that cannot be recorded only means the hook refuses that release: the turn goes on.
+      try {
+        reconcileHeldReportNums(sessionDir, this.cfg.dataRoot);
+        if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum], this.cfg.dataRoot, this.ownedSince(meta, meta.reportNum));
+      } catch (err) {
+        console.warn(`[sessions] session ${meta.id}: could not record the report number it holds: ${(err as Error).message}`);
+      }
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
@@ -1118,7 +1426,11 @@ export class SessionManager {
     let seq = 0;
     let offset = 0;
     let envelopes = 0;
-    let answers = 0;
+    // Bash calls of this turn that reserve report numbers, until their result shows which.
+    const reserveRuns = new Set<string>();
+    // Bash calls of this turn that release report numbers, by tool id: a failed one gives its holds back.
+    const releaseRuns = new Map<string, number[]>();
+    const envelopeKinds: Partial<Record<EnvelopeKind, number>> = {};
     let denials = 0;
     let sawResult = false;
     let turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null = null;
@@ -1144,10 +1456,36 @@ export class SessionManager {
     };
     const handleLine = (l: RawLine, emit: boolean) => {
       const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
+      const commands = l.stream === 'stdout' && l.line.includes('"tool_use"') ? bashCommandsIn(l.line) : null;
+      const results = l.stream === 'stdout' && l.line.includes('"tool_result"') ? toolResultsIn(l.line) : null;
       for (const ev of events) {
-        if (ev.type === 'envelope') envelopes++;
-        if (ev.type === 'envelope' && ev.kind === 'answers') answers++;
+        if (ev.type === 'envelope') {
+          envelopes++;
+          const kind = ev.kind as EnvelopeKind;
+          envelopeKinds[kind] = (envelopeKinds[kind] ?? 0) + 1;
+        }
         if (ev.type === 'permission.denied') denials++;
+        if (ev.type === 'tool.use' && ev.name === 'Bash') {
+          const command = commands?.get(ev.id) ?? ev.summary;
+          if (reservesReportNums(command)) reserveRuns.add(ev.id);
+          const released = releasedReportNums(command);
+          if (released.length) releaseRuns.set(ev.id, released);
+        }
+        if (ev.type === 'tool.result') {
+          const sessionDir = this.store.guardDirOf(id);
+          const nums = reserveRuns.delete(ev.id) && ev.ok ? printedReservation(results?.get(ev.id) ?? ev.summary) : [];
+          const released = releaseRuns.get(ev.id);
+          releaseRuns.delete(ev.id);
+          // A replayed result's holds were settled by the server that handled it: the sentinel under a number now may be
+          // another evaluation's. For the same reason a hold names only a sentinel written before its output was, and a
+          // hold that cannot be recorded only means the hook refuses that release: the turn goes on.
+          try {
+            if (emit && nums.length) recordHeldReportNums(sessionDir, nums, this.cfg.dataRoot, Date.parse(l.ts));
+            if (emit && released && !ev.ok) restoreHeldReportNums(sessionDir, released, ev.id);
+          } catch (err) {
+            console.warn(`[sessions] session ${id}: could not record the report numbers it holds: ${(err as Error).message}`);
+          }
+        }
         if (ev.type === 'turn.done') {
           turnDone = ev;
           sawResult = true;
@@ -1226,7 +1564,7 @@ export class SessionManager {
       clearInterval(timer);
       safePull();
       const ended = run;
-      this.finalize(id, n, ended, policy, state, { envelopes, answers, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure })
+      this.finalize(id, n, ended, policy, state, { envelopes, envelopeKinds, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure })
         .catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err))
         .finally(() => this.active.delete(id));
     }, this.deps.pollMs ?? 250);
@@ -1367,7 +1705,7 @@ export class SessionManager {
     return Boolean(this.store.read(id)?.turns.find((t) => t.n === n)?.endedAt);
   }
 
-  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; answers: number; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string; failure: string | null }): Promise<void> {
+  private async finalize(id: string, n: number, run: RunMeta, policy: ModePolicy, state: TurnState, r: { envelopes: number; envelopeKinds: Partial<Record<EnvelopeKind, number>>; denials: number; sawResult: boolean; turnDone: Extract<SessionEvent, { type: 'turn.done' }> | null; finalText: string; failure: string | null }): Promise<void> {
     const meta = this.store.read(id);
     // Already finalized (by another server, or before a restart): its cost and report number were settled then.
     if (!meta || this.turnEnded(id, n)) return;
@@ -1395,13 +1733,14 @@ export class SessionManager {
       sawResult: r.sawResult,
       finalText: r.finalText,
       envelopeCount: r.envelopes,
+      envelopeKinds: r.envelopeKinds,
       newReports,
       resumed: state.resumed ?? n > 1,
       // Read before this turn's own answers are recorded: a turn that delivers them is done by its envelope.
       answersSeen: meta.answersSeen === true,
       reportProduced: meta.creditedReport !== undefined,
     });
-    if (r.answers > 0) this.store.markAnswersSeen(id);
+    if ((r.envelopeKinds.answers ?? 0) > 0) this.store.markAnswersSeen(id);
     if (newReports[0]) this.store.setCreditedReport(id, newReports[0]);
     // The sentinel is dropped once the turn is over: a real report now holds the number, or it goes back to the pool.
     let reason = outcome.reason;
