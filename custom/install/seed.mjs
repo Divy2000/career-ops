@@ -32,13 +32,21 @@ function localPaths(dir) {
 function customTemplate(data, template) {
   const target = path.join(data, 'modes', '_custom.md');
   fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (!createNew(target, fs.readFileSync(template))) return out('exists');
+  out('created');
+}
+
+// Writes a file that must not exist yet through a temp file, so a failed write leaves nothing a re-run would keep.
+// False when the file already exists.
+function createNew(file, data) {
+  if (exists(file)) return false;
   try {
-    fs.copyFileSync(template, target, fs.constants.COPYFILE_EXCL);
+    writeAtomic(file, data, () => {}, linkNew);
   } catch (err) {
-    if (err.code === 'EEXIST') return out('exists');
+    if (err.code === 'EEXIST') return false;
     throw err;
   }
-  out('created');
+  return true;
 }
 
 // Puts `bytes` into destDir as `base`: an identical file of that name family is reused, a different one
@@ -271,13 +279,7 @@ async function projectsSeed(lib, data, file) {
     const projects = await import(pathToFileURL(path.resolve(lib)).href);
     text = projects.serializeLibrary(projects.parseLibrary(r.text).entries.map((e) => ({ ...e, source })));
   }
-  const target = path.join(data, 'article-digest.md');
-  try {
-    fs.writeFileSync(target, text, { flag: 'wx' });
-  } catch (err) {
-    if (err.code === 'EEXIST') return out('exists');
-    throw err;
-  }
+  if (!createNew(path.join(data, 'article-digest.md'), text)) return out('exists');
   out('created');
 }
 

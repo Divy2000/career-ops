@@ -573,3 +573,34 @@ test('given a local-paths.txt with user lines, when the volume fills while local
   assert.equal(fs.readFileSync(f, 'utf8'), 'my-notes/\nmy-drafts/\n');
   assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
 });
+
+test('given no article-digest.md, when the volume fills while projects-seed writes it, then no partial article-digest.md is left for a re-run to keep (R28-scripts-b-L1-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const lib = put(path.join(d, 'src', 'lib.md'), '# My projects\n\n## Kite Tracker\n\n**Proof points:**\n- Tracked kites.\n');
+  const res = seedWith(partialWrites(d, 'article-digest.md'), ['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', lib]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.deepEqual(fs.readdirSync(data).filter((n) => n.includes('article-digest')), []);
+});
+
+test('given no modes/_custom.md, when the volume fills while custom-template copies it, then no partial _custom.md is left for a re-run to keep (R28-scripts-b-L1-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const t = put(path.join(d, 't.md'), 'TEMPLATE\n');
+  const res = seedWith(partialWrites(d, '_custom.md'), ['custom-template', '--data', data, '--template', t]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.deepEqual(fs.readdirSync(path.join(data, 'modes')), []);
+});
+
+test('given an existing modes/_custom.md, when custom-template runs, then it reports exists and leaves no temp file (R28-scripts-b-L1-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const t = put(path.join(d, 't.md'), 'TEMPLATE\n');
+  const target = put(path.join(data, 'modes', '_custom.md'), 'MINE\n');
+  const res = seed(['custom-template', '--data', data, '--template', t]);
+  assert.equal(res.stdout.trim(), 'exists', res.stderr);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'MINE\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(target)), ['_custom.md']);
+});
