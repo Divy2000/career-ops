@@ -117,6 +117,23 @@ describe('blacklist (explicit confirm gate)', () => {
 
 describe('blacklist saves keep what the editor does not manage', () => {
   const EXPLICIT = { 'x-cc-explicit': 'blacklist' };
+  it('given a legacy table whose Reason text is longer than 40 characters, when a row is added and saved, then the save succeeds (R27-srv-dom-a-L2-01)', async () => {
+    const app = await makeTestApp();
+    try {
+      const file = path.join(app.cfg.dataRoot, 'data', 'blacklist.md');
+      const longReason = 'Ghosted me after three rounds of interviews and a take-home';
+      fs.writeFileSync(file, `# Blacklist\n\n| Company | Reason | Added |\n|---|---|---|\n| Initech | ${longReason} | 2025-03-02 |\n`);
+      const req = (method: 'GET' | 'PUT', payload?: Record<string, unknown>, extra: Record<string, string> = {}) => app.app.inject({ method, url: '/api/blacklist', headers: { ...(method === 'GET' ? app.authed : app.authedWrite), ...extra }, payload });
+      const current = (await req('GET')).json();
+      expect(current.rows[0].since).toBe(longReason);
+      const rows = [...current.rows, { company: 'Globex', since: '2026-10-03', scope: 'company', reason: 'spam' }];
+      const saved = await req('PUT', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(fs.readFileSync(file, 'utf8')).toContain(`| Initech | ${longReason} | company |  | 2025-03-02 |`);
+    } finally {
+      await app.close();
+    }
+  });
   it('a save keeps the notes after the table verbatim and tolerates legacy date cells, but new rows still need YYYY-MM-DD', async () => {
     const app = await makeTestApp();
     try {

@@ -21,10 +21,10 @@ export const BLACKLIST_REL = 'data/blacklist.md';
 
 export const BLACKLIST_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** `since` is checked by the route: YYYY-MM-DD for new rows, while a legacy cell already in the file passes through as is. */
+/** `since` is checked by the route: YYYY-MM-DD for new rows, while a legacy cell already in the file passes through as is, so its cap is the reason cap: a legacy table puts its Reason text here. */
 export const blacklistRowSchema = z.object({
   company: z.string().min(1).max(200).regex(/^[^|\r\n]+$/, 'no pipes or line breaks'),
-  since: z.string().max(40).regex(/^[^|\r\n]*$/, 'no pipes or line breaks'),
+  since: z.string().max(500).regex(/^[^|\r\n]*$/, 'no pipes or line breaks'),
   scope: z.enum(['company', 'domain']),
   reason: z.string().max(500).regex(/^[^|\r\n]*$/, 'no pipes or line breaks'),
   /** Cells of the file's other columns (BlacklistParsed.extraColumns), in order; only present when the file has some. */
