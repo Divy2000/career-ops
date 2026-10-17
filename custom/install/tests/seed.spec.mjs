@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
@@ -541,4 +541,396 @@ syncBuiltinESMExports();
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /permission denied/);
   assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
+});
+
+// Preloaded into the seed process: every write or copy to a file whose name contains `name` (the target or its temp
+// file) puts part of its bytes there, then fails the way a full volume makes it fail.
+const partialWrites = (dir, name) => put(path.join(dir, 'partial-writes.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+const full = () => { const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; return err; };
+const hit = (file) => typeof file === 'string' && file.includes(${JSON.stringify(name)});
+fs.writeFileSync = (file, data, ...rest) => {
+  if (!hit(file)) return realWrite(file, data, ...rest);
+  realWrite(file, String(data).slice(0, 3), ...rest);
+  throw full();
+};
+const realAppend = fs.appendFileSync;
+fs.appendFileSync = (file, data, ...rest) => {
+  if (!hit(file)) return realAppend(file, data, ...rest);
+  realAppend(file, String(data).slice(0, 3), ...rest);
+  throw full();
+};
+const realOpen = fs.openSync;
+const realWriteFd = fs.writeSync;
+const hitFds = new Set();
+fs.openSync = (file, ...rest) => { const fd = realOpen(file, ...rest); if (hit(file)) hitFds.add(fd); return fd; };
+// As write(2) on a filling volume: a short write returns its count, and the next write fails.
+const shortWritten = new Set();
+fs.writeSync = (fd, data, ...rest) => {
+  if (!hitFds.has(fd)) return realWriteFd(fd, data, ...rest);
+  if (shortWritten.has(fd)) throw full();
+  shortWritten.add(fd);
+  return realWriteFd(fd, Buffer.from(data).subarray(0, 3));
+};
+const realCopy = fs.copyFileSync;
+fs.copyFileSync = (src, dest, ...rest) => {
+  if (!hit(dest)) return realCopy(src, dest, ...rest);
+  realWrite(dest, fs.readFileSync(src, 'utf8').slice(0, 3), { flag: 'wx' });
+  throw full();
+};
+syncBuiltinESMExports();
+`);
+
+test('given a local-paths.txt with user lines, when the volume fills while local-paths adds custom/, then the user lines are kept and no temp file is left (R28-scripts-b-L1-01)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'my-notes/\nmy-drafts/\n');
+  const res = seedWith(partialWrites(d, 'local-paths.txt'), ['local-paths', '--dir', d]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'my-notes/\nmy-drafts/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given a local-paths.txt another installer appends to, when the volume fills while local-paths adds custom/, then only the partial custom/ is cut back and the other entry stays (R28-scr-rev-01)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'my-notes/\n');
+  // Another installer appends its entry after this one read the file, then this one's append fills the volume.
+  const preload = put(path.join(d, 'race.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const file = ${JSON.stringify(f)};
+const full = () => { const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; return err; };
+const realOpen = fs.openSync;
+const realWrite = fs.writeSync;
+const realAppend = fs.appendFileSync;
+const fds = new Set();
+let writes = 0;
+fs.openSync = (p, ...rest) => { const fd = realOpen(p, ...rest); if (p === file) fds.add(fd); return fd; };
+// A short write returns its count and the next write fails, as write(2) does on a filling volume.
+fs.writeSync = (fd, data, ...rest) => {
+  if (!fds.has(fd)) return realWrite(fd, data, ...rest);
+  if (writes++ > 0) throw full();
+  realAppend(file, 'other/\\n');
+  return realWrite(fd, Buffer.from(data).subarray(0, 3));
+};
+fs.appendFileSync = (p, data, ...rest) => {
+  if (p === file) throw new Error('local-paths.txt must be appended through its open fd');
+  return realAppend(p, data, ...rest);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'my-notes/\nother/\n');
+});
+
+test('given another installer adds custom/ after local-paths reads the file, when local-paths opens it to append, then custom/ is not added twice (R28-scr-rev-01 review)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const preload = put(path.join(d, 'late-writer.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realOpen = fs.openSync;
+fs.openSync = (p, ...rest) => {
+  if (p === ${JSON.stringify(f)}) fs.appendFileSync(p, 'custom/\\n');
+  return realOpen(p, ...rest);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'present');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+});
+
+const seedAsync = (args, preload) => new Promise((resolve) => {
+  const pre = preload ? ['--import', pathToFileURL(preload).href] : [];
+  const child = spawn(process.execPath, [...pre, SEED, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (c) => { stdout += c; });
+  child.stderr.on('data', (c) => { stderr += c; });
+  child.on('close', (status) => resolve({ status, stdout, stderr }));
+});
+
+test('given another installer holding the local-paths.txt lock, when it adds custom/ and lets go, then local-paths waits and reports it present instead of adding it twice (R28-scr-rev-01 review 2)', async () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(`${f}.lock`);
+  const run = seedAsync(['local-paths', '--dir', d]);
+  await new Promise((r) => setTimeout(r, 500));
+  fs.appendFileSync(f, 'custom/\n');
+  fs.rmdirSync(`${f}.lock`);
+  const res = await run;
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'present');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given a local-paths.txt lock a crashed installer left long ago, when local-paths runs, then it breaks the lock and adds custom/ (R28-scr-rev-01 review 2)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(`${f}.lock`);
+  const old = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(`${f}.lock`, old, old);
+  const res = seed(['local-paths', '--dir', d]);
+  assert.equal(res.stdout.trim(), 'added', res.stderr);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given a stale local-paths.txt lock, when several installers find it at once, then only one breaks it and custom/ is added once (R28-scr-rev-01 review 3)', async () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(`${f}.lock`);
+  const old = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(`${f}.lock`, old, old);
+  // Every look at the lock's age is slow, so all installers judge the same lock stale before any breaks it.
+  const preload = put(path.join(d, 'slow-stat.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realStat = fs.statSync;
+fs.statSync = (p, ...rest) => {
+  const st = realStat(p, ...rest);
+  if (String(p) === ${JSON.stringify(`${f}.lock`)}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+  return st;
+};
+// And each holds the lock a while, reading the file, so a lock broken under its holder lets two read at once.
+const realRead = fs.readFileSync;
+fs.readFileSync = (p, ...rest) => {
+  const text = realRead(p, ...rest);
+  if (typeof p === 'number') Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
+  return text;
+};
+syncBuiltinESMExports();
+`);
+  const runs = await Promise.all(Array.from({ length: 4 }, () => seedAsync(['local-paths', '--dir', d], preload)));
+  for (const r of runs) assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(runs.map((r) => r.stdout.trim()).sort(), ['added', 'present', 'present', 'present']);
+});
+
+test('given its lock is broken and retaken by another installer while local-paths runs, when it finishes, then it leaves that installer\'s lock in place (R28-scr-rev-01 review 4)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const lock = `${f}.lock`;
+  const preload = put(path.join(d, 'retaken.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRead = fs.readFileSync;
+fs.readFileSync = (p, ...rest) => {
+  if (typeof p === 'number') {
+    fs.rmSync(${JSON.stringify(lock)}, { recursive: true, force: true });
+    fs.mkdirSync(${JSON.stringify(lock)});
+  }
+  return realRead(p, ...rest);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.existsSync(lock), true, 'the other installer still holds its lock');
+});
+
+test('given local-paths.txt turns into a dangling symlink after local-paths resolves it, when it updates the file, then it fails naming the path instead of looping (R28-scr-rev-01 review 3)', () => {
+  const d = tmp();
+  const f = path.join(d, 'config', 'local-paths.txt');
+  const preload = put(path.join(d, 'dangle.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realMkdir = fs.mkdirSync;
+fs.mkdirSync = (p, ...rest) => {
+  const r = realMkdir(p, ...rest);
+  if (String(p) === ${JSON.stringify(`${f}.lock`)}) fs.symlinkSync('nowhere', ${JSON.stringify(f)});
+  return r;
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.notEqual(res.status, null, 'local-paths did not finish');
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /local-paths\.txt/);
+});
+
+test('given no local-paths.txt, when another writer creates it just before local-paths publishes its own, then theirs is kept and custom/ is appended to it (R28-scr-rev-01 review 2)', () => {
+  const d = tmp();
+  const f = path.join(d, 'config', 'local-paths.txt');
+  const preload = put(path.join(d, 'late-create.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const file = ${JSON.stringify(f)};
+const theirs = () => fs.writeFileSync(file, 'theirs/\\n', { flag: 'wx' });
+const realLink = fs.linkSync;
+fs.linkSync = (src, dest) => { if (dest === file) theirs(); return realLink(src, dest); };
+const realRename = fs.renameSync;
+fs.renameSync = (src, dest) => { if (dest === file) theirs(); return realRename(src, dest); };
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'theirs/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given no article-digest.md, when the volume fills while projects-seed writes it, then no partial article-digest.md is left for a re-run to keep (R28-scripts-b-L1-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const lib = put(path.join(d, 'src', 'lib.md'), '# My projects\n\n## Kite Tracker\n\n**Proof points:**\n- Tracked kites.\n');
+  const res = seedWith(partialWrites(d, 'article-digest.md'), ['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', lib]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.deepEqual(fs.readdirSync(data).filter((n) => n.includes('article-digest')), []);
+});
+
+test('given no modes/_custom.md, when the volume fills while custom-template copies it, then no partial _custom.md is left for a re-run to keep (R28-scripts-b-L1-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const t = put(path.join(d, 't.md'), 'TEMPLATE\n');
+  const res = seedWith(partialWrites(d, '_custom.md'), ['custom-template', '--data', data, '--template', t]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.deepEqual(fs.readdirSync(path.join(data, 'modes')), []);
+});
+
+test('given an existing modes/_custom.md, when custom-template runs, then it reports exists and leaves no temp file (R28-scripts-b-L1-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const t = put(path.join(d, 't.md'), 'TEMPLATE\n');
+  const target = put(path.join(data, 'modes', '_custom.md'), 'MINE\n');
+  const res = seed(['custom-template', '--data', data, '--template', t]);
+  assert.equal(res.stdout.trim(), 'exists', res.stderr);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'MINE\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(target)), ['_custom.md']);
+});
+
+test('given a clock far from UTC, when cv-write --replace backs up cv.md, then the backup stamp is the local time, as the install log is dated (R28-scripts-b-L2-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New\n');
+  put(path.join(data, 'cv.md'), 'OLD\n');
+  // Etc/GMT-14 is UTC+14, so a UTC stamp is never inside the local window below.
+  const local = (ms) => new Date(ms + 14 * 3600_000).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '');
+  const before = local(Date.now() - 1000);
+  const res = spawnSync(process.execPath, [SEED, 'cv-write', '--data', data, '--resume', r, '--replace'], { encoding: 'utf8', timeout: 20000, env: { ...process.env, TZ: 'Etc/GMT-14' } });
+  const after = local(Date.now() + 1000);
+  const [kind, backup] = res.stdout.trim().split('\t');
+  assert.equal(kind, 'replaced', res.stderr);
+  const stamped = path.basename(backup).replace(/^cv\.md\.bak-/, '');
+  assert.match(stamped, /^\d{8}T\d{6}$/);
+  assert.ok(stamped >= before && stamped <= after, `backup stamp ${stamped} is not the local time (${before} to ${after})`);
+});
+
+test('given config/local-paths.txt is a symlink to a shared file, when local-paths adds custom/, then the shared file gets the line and the link is kept (R28-scripts-b-L1-01 review)', () => {
+  const d = tmp();
+  const shared = put(path.join(d, 'shared', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(path.join(d, 'config'));
+  const link = path.join(d, 'config', 'local-paths.txt');
+  fs.symlinkSync(path.relative(path.dirname(link), shared), link);
+  assert.equal(seed(['local-paths', '--dir', d]).stdout.trim(), 'added');
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link was replaced by a regular file');
+  assert.equal(fs.readFileSync(shared, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(link)), ['local-paths.txt']);
+});
+
+test('given a temp file a crashed earlier seed left under this process id, when projects-seed creates article-digest.md, then it is created rather than reported as existing (R28-scripts-b-L1-02 review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const text = '# My projects\n\n## Kite Tracker\n\n**Proof points:**\n- Tracked kites.\n';
+  const lib = put(path.join(d, 'src', 'lib.md'), text);
+  fs.mkdirSync(data, { recursive: true });
+  const stale = put(path.join(d, 'stale-tmp.mjs'), `import fs from 'node:fs';
+fs.writeFileSync(${JSON.stringify(data)} + '/.article-digest.md.tmp-' + process.pid, 'PARTIAL');
+`);
+  const res = seedWith(stale, ['projects-seed', '--lib', PROJECTS_LIB, '--data', data, '--file', lib]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim().split('\n').at(-1), 'created');
+  assert.equal(fs.readFileSync(path.join(data, 'article-digest.md'), 'utf8'), text);
+  const temps = fs.readdirSync(data).filter((n) => n.includes('.tmp-'));
+  assert.deepEqual(temps.map((n) => fs.readFileSync(path.join(data, n), 'utf8')), ['PARTIAL'], 'only the crashed run\'s temp file is left');
+});
+
+test('given a config/local-paths.txt the user cannot write, when local-paths runs, then it fails naming the file and leaves it as it was (R28-scripts-b-L1-01 review 3)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.chmodSync(f, 0o444);
+  try {
+    const res = seed(['local-paths', '--dir', d]);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /local-paths\.txt/);
+    assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\n');
+    assert.equal(fs.statSync(f).mode & 0o777, 0o444);
+  } finally {
+    fs.chmodSync(f, 0o644);
+  }
+});
+
+test('given config/ the user cannot add files to, when local-paths adds custom/ to its writable local-paths.txt, then the line is added in the same file (R28-scripts-b-L1-01 review 4)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const ino = fs.statSync(f).ino;
+  fs.chmodSync(path.dirname(f), 0o555);
+  try {
+    const res = seed(['local-paths', '--dir', d]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), 'added');
+    assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+    assert.equal(fs.statSync(f).ino, ino);
+  } finally {
+    fs.chmodSync(path.dirname(f), 0o755);
+  }
+});
+
+test('given config/local-paths.txt is hard-linked elsewhere, when local-paths adds custom/, then both names still show the same file (R28-scripts-b-L1-01 review 3)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  const other = path.join(d, 'shared-paths.txt');
+  fs.linkSync(f, other);
+  assert.equal(seed(['local-paths', '--dir', d]).stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(other, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.statSync(f).ino, fs.statSync(other).ino);
+});
+
+test('given config/ is a directory symlink and local-paths.txt links upward from it, when local-paths adds custom/, then the file the kernel resolves gets the line (R28-scripts-b-L1-01 review 3)', () => {
+  const d = tmp();
+  const checkout = path.join(d, 'checkout');
+  const real = path.join(d, 'elsewhere', 'config');
+  const shared = put(path.join(d, 'elsewhere', 'shared', 'paths.txt'), 'notes/\n');
+  fs.mkdirSync(real, { recursive: true });
+  fs.mkdirSync(checkout);
+  fs.symlinkSync(real, path.join(checkout, 'config'));
+  fs.symlinkSync('../shared/paths.txt', path.join(real, 'local-paths.txt'));
+  assert.equal(seed(['local-paths', '--dir', checkout]).stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(shared, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.existsSync(path.join(checkout, 'shared')), false);
+  assert.ok(fs.lstatSync(path.join(real, 'local-paths.txt')).isSymbolicLink());
+});
+
+test('given a private config/local-paths.txt, when local-paths writes the merged text, then its temp file is never readable by others (R28-scripts-b-L1-01 review 2)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.chmodSync(f, 0o600);
+  const seen = path.join(d, 'temp-mode.txt');
+  const preload = put(path.join(d, 'temp-mode.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+fs.writeFileSync = (...args) => {
+  const r = realWrite(...args);
+  if (String(args[0]).includes('.tmp-')) realWrite(${JSON.stringify(seen)}, (fs.statSync(args[0]).mode & 0o777).toString(8));
+  return r;
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.equal(res.status, 0, res.stderr);
+  // The line is appended in place, so no temp file is ever written to be read by others.
+  assert.equal(fs.existsSync(seen), false);
+  assert.equal(fs.statSync(f).mode & 0o777, 0o600);
+});
+
+test('given a private config/local-paths.txt, when local-paths adds custom/, then the file keeps its permissions (R28-scripts-b-L1-01 review)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
+  fs.chmodSync(f, 0o600);
+  assert.equal(seed(['local-paths', '--dir', d]).stdout.trim(), 'added');
+  assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
+  assert.equal(fs.statSync(f).mode & 0o777, 0o600);
 });

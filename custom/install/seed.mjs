@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { insertHouseRule, mergeLocalPaths, normalizeMarkdown, parseFlags, summarizeUnifiedDiff, uniqueDestName, validateProjectsInput } from './lib.mjs';
 
@@ -22,23 +23,174 @@ const exists = (f) => fs.existsSync(f);
 
 function localPaths(dir) {
   const file = path.join(dir, 'config', 'local-paths.txt');
-  const merged = mergeLocalPaths(exists(file) ? fs.readFileSync(file, 'utf8') : '');
-  if (merged === null) return out('present');
+  const text = exists(file) ? fs.readFileSync(file, 'utf8') : null;
+  if (mergeLocalPaths(text ?? '') === null) return out('present');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, merged);
-  out('added');
+  const target = linkTarget(file);
+  out(withLock(`${target}.lock`, () => updateLocalPaths(target)));
+}
+
+// Runs under the lock, so two installers never both add custom/; a writer that skips the lock still never has its
+// file replaced.
+function updateLocalPaths(target) {
+  for (let tries = 0; tries < 3; tries++) {
+    let fd;
+    try {
+      fd = fs.openSync(target, fs.constants.O_RDWR | fs.constants.O_APPEND);
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      if (createNew(target, mergeLocalPaths(''))) return 'added';
+      continue;
+    }
+    try {
+      // The merge only appends, so the user's file is extended where it is (through its links, keeping its inode,
+      // owner, mode, ACLs and hard links); a failed append is cut back to the user's own lines.
+      const current = fs.readFileSync(fd, 'utf8');
+      const update = mergeLocalPaths(current);
+      if (update === null) return 'present';
+      appendOrRestore(fd, update.slice(current.length));
+      return 'added';
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  throw new Error(`${target} is neither a file to add custom/ to nor a free name to create it at; check what is there`);
+}
+
+const LOCK_STALE_MS = 30_000;
+const LOCK_WAIT_MS = 10_000;
+// The break guard lives for a stat and an rm, so one older than this was left by a run killed while breaking.
+const GUARD_STALE_MS = 5_000;
+
+// Holds a mkdir lock, marked with an empty file named by this run's token, while fn runs. A lock older than
+// LOCK_STALE_MS was left by a killed run and is broken.
+function withLock(lock, fn) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  const token = randomBytes(8).toString('hex');
+  for (;;) {
+    try {
+      fs.mkdirSync(lock);
+      try {
+        fs.closeSync(fs.openSync(path.join(lock, token), 'wx'));
+      } catch (err) {
+        fs.rmSync(lock, { recursive: true, force: true });
+        throw err;
+      }
+      break;
+    } catch (err) {
+      // A folder that takes no new entries cannot hold anyone's lock, and the file in it may still be writable.
+      if (['EACCES', 'EPERM', 'EROFS'].includes(err.code)) return fn();
+      if (err.code !== 'EEXIST') throw err;
+    }
+    let age;
+    try {
+      age = Date.now() - fs.statSync(lock).mtimeMs;
+    } catch (err) {
+      if (err.code === 'ENOENT') continue;
+      throw err;
+    }
+    if (age > LOCK_STALE_MS) breakStale(lock);
+    if (Date.now() > deadline) throw new Error(`${lock} is held by another install; if none is running, remove it and re-run`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  try {
+    return fn();
+  } finally {
+    // A run held up past LOCK_STALE_MS may have had its lock broken and retaken; that lock is not this run's to remove.
+    if (exists(path.join(lock, token))) fs.rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+// Removes a stale lock under a guard, judging its age again there: two runs that both saw it stale must not have the
+// second remove the fresh lock the first took after breaking it.
+function breakStale(lock) {
+  const guard = `${lock}.break`;
+  try {
+    fs.mkdirSync(guard);
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    try {
+      if (Date.now() - fs.statSync(guard).mtimeMs > GUARD_STALE_MS) fs.rmSync(guard, { recursive: true, force: true });
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    return;
+  }
+  try {
+    if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.rmSync(lock, { recursive: true, force: true });
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  } finally {
+    fs.rmSync(guard, { recursive: true, force: true });
+  }
+}
+
+function appendOrRestore(fd, suffix) {
+  const bytes = Buffer.from(suffix);
+  let written = 0;
+  try {
+    while (written < bytes.length) written += fs.writeSync(fd, bytes, written);
+  } catch (err) {
+    // Cut back only this run's own bytes, and only while they are still the file's tail: another installer may have
+    // appended its lines meanwhile, and those stay.
+    try {
+      const size = fs.fstatSync(fd).size;
+      const tail = Buffer.alloc(written);
+      if (written > 0 && size >= written && fs.readSync(fd, tail, 0, written, size - written) === written && tail.equals(bytes.subarray(0, written))) {
+        fs.ftruncateSync(fd, size - written);
+      }
+    } catch {
+      // The append error is the one to report.
+    }
+    throw err;
+  }
+}
+
+// The file a chain of symlinks at `file` ends at, so a rename into place creates a dangling link's file instead of replacing the link.
+function linkTarget(file) {
+  let target = file;
+  for (let hops = 0; hops < 40; hops++) {
+    let link;
+    try {
+      link = fs.readlinkSync(target);
+    } catch (err) {
+      if (err.code === 'EINVAL' || err.code === 'ENOENT') return target;
+      throw err;
+    }
+    // The kernel resolves a relative link from the real folder holding it, which differs when that folder is reached
+    // through a symlink and the link climbs with `..`.
+    target = path.resolve(realDir(path.dirname(target)), link);
+  }
+  throw new Error(`${file} is a symlink loop`);
+}
+
+function realDir(dir) {
+  try {
+    return fs.realpathSync(dir);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return dir;
+    throw err;
+  }
 }
 
 function customTemplate(data, template) {
   const target = path.join(data, 'modes', '_custom.md');
   fs.mkdirSync(path.dirname(target), { recursive: true });
+  if (!createNew(target, fs.readFileSync(template))) return out('exists');
+  out('created');
+}
+
+// Writes a file that must not exist yet through a temp file, so a failed write leaves nothing a re-run would keep.
+// False when the file already exists.
+function createNew(file, data) {
+  if (exists(file)) return false;
   try {
-    fs.copyFileSync(template, target, fs.constants.COPYFILE_EXCL);
+    writeAtomic(file, data, () => {}, linkNew);
   } catch (err) {
-    if (err.code === 'EEXIST') return out('exists');
+    if (err.code === 'EEXIST') return false;
     throw err;
   }
-  out('created');
+  return true;
 }
 
 // Puts `bytes` into destDir as `base`: an identical file of that name family is reused, a different one
@@ -106,8 +258,11 @@ function cvStatus(data, resume) {
   }
 }
 
+// Local time, the clock the install log and the draft move-aside are dated by.
 function stamp() {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '');
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
 function cvWrite(data, resume, replace) {
@@ -193,10 +348,11 @@ function copyNew(tmp, file) {
 
 // beforeRename runs once the new copy is fully written, so a failed write leaves nothing behind.
 function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync) {
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}`);
+  // Random as well as per process: a temp file a crashed run left under a reused pid must not block this write.
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
   try {
     fs.writeFileSync(tmp, text, { flag: 'wx' });
-    beforeRename();
+    beforeRename(tmp);
     publish(tmp, file);
   } catch (err) {
     // The original failure is the one to report; a temp file that cannot be removed must not replace it.
@@ -271,13 +427,7 @@ async function projectsSeed(lib, data, file) {
     const projects = await import(pathToFileURL(path.resolve(lib)).href);
     text = projects.serializeLibrary(projects.parseLibrary(r.text).entries.map((e) => ({ ...e, source })));
   }
-  const target = path.join(data, 'article-digest.md');
-  try {
-    fs.writeFileSync(target, text, { flag: 'wx' });
-  } catch (err) {
-    if (err.code === 'EEXIST') return out('exists');
-    throw err;
-  }
+  if (!createNew(path.join(data, 'article-digest.md'), text)) return out('exists');
   out('created');
 }
 

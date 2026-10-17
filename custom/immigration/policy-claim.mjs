@@ -3,11 +3,14 @@
 // acknowledged only when a pass ends done, and both append the same rows to policy-changes.tsv and company-alerts.tsv
 // and a digest section. A pass takes the queue by holding data/immigration/.policy-pass.claim:
 //   { owner, batch, at }  owner is session:<id>, daily:<pid>, or starting:<nonce> while a session is being created;
-//   a starting claim also names the process creating it: { pid, pidStart } (its pid and ps start time).
+//   a starting claim also names the process creating it: { pid, pidStart } (its pid and start time in seconds since the
+//   epoch, read under a pinned TZ and locale: ps text depends on the caller's zone, and the Control Center and the
+//   launchd daily job run in different ones; an earlier claim's string pidStart holds when it is that start in some zone).
 // A claim whose owner is gone is stale and taken over: a session that no longer exists or has a final status
 // (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead, no longer the one
 // .run-daily.pid names or no longer bash running run-daily.sh, or a start whose process has exited (a start can wait on a Keychain prompt
-// for as long as it is left open, so no time limit applies while that process runs). Every read-decide-write of the
+// for as long as it is left open, so no time limit applies while that process runs; an earlier-format claim, whose
+// zone-ambiguous start can match a reused pid by chance, holds for at most a day). Every read-decide-write of the
 // claim runs under a short mkdir lock, so two claimants never both win.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -17,6 +20,7 @@ import path from 'node:path';
 const IMM = path.join('data', 'immigration');
 const LIVE_SESSION = new Set(['queued', 'running', 'awaiting_user']);
 const STARTING_MS = 2 * 60_000;
+const LEGACY_START_MS = 24 * 60 * 60_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_WAIT_MS = 10_000;
 // The recover guard lives for a stat and an rm, so one older than this was left by a claimant killed while breaking.
@@ -84,8 +88,23 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
     }
     if (!Number.isSafeInteger(claim.pid) || claim.pid <= 0 || !pidAlive(claim.pid)) return false;
     const started = processStart(claim.pid);
+    if (typeof claim.pidStart === 'string') {
+      // A claim written before start times were epoch seconds holds ps text in its writer's zone, which cannot be
+      // pinned now: it names this process when it is the same start in some zone (a whole quarter-hour offset of at
+      // most 14 hours). Text that does not parse proves nothing while the claim is recent.
+      if (started === undefined || started === null) return started === undefined;
+      const wall = lstartSeconds(claim.pidStart);
+      if (wall === undefined) {
+        const at = Date.parse(claim.at);
+        return Number.isFinite(at) && now - at < STARTING_MS;
+      }
+      // A reused pid started a whole quarter-hour away matches by chance, so the match holds for a day, not for good.
+      const offset = wall - started;
+      const at = Date.parse(claim.at);
+      return Math.abs(offset) <= 14 * 3600 && offset % 900 === 0 && Number.isFinite(at) && now - at < LEGACY_START_MS;
+    }
     // Only ps naming another start time is proof the pid was reused; a ps that cannot run says nothing.
-    return started === undefined || typeof claim.pidStart !== 'string' || started === claim.pidStart;
+    return started === undefined || typeof claim.pidStart !== 'number' || started === claim.pidStart;
   }
   return false;
 }
@@ -108,14 +127,29 @@ function isDailyJob(pid) {
   return DAILY_JOB_RE.test(out.trim());
 }
 
-/** pid's start time as ps prints it; null when no process has the pid, undefined when ps cannot tell. */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+
+/**
+ * pid's start time in seconds since the epoch, from ps run with LC_ALL=C and TZ=UTC whatever this process's environment
+ * is (as supervisor/instance-lock.ts reads it); null when no process has the pid, undefined when ps cannot tell.
+ */
 function processStart(pid) {
+  let out;
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { ...process.env, LC_ALL: 'C' } }).trim();
-    return out || undefined;
+    out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).trim();
   } catch (err) {
     return err.status === 1 && !String(err.stdout ?? '').trim() ? null : undefined;
   }
+  return lstartSeconds(out);
+}
+
+/** ps lstart text read as a UTC wall clock, in seconds since the epoch; undefined when it does not parse. */
+function lstartSeconds(text) {
+  const m = LSTART.exec(text);
+  const month = m ? MONTHS.indexOf(m[1]) : -1;
+  if (!m || month === -1) return undefined;
+  return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
 }
 
 let ownStart;
@@ -239,7 +273,12 @@ function write(dataRoot, claim) {
     fs.writeFileSync(tmp, JSON.stringify(claim));
     fs.renameSync(tmp, file);
   } finally {
-    fs.rmSync(tmp, { force: true });
+    // The write or rename error is the one to report; a temp file that cannot be removed too is only noted.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch (err) {
+      process.stderr.write(`note: could not remove the temp file ${tmp}: ${err.message}\n`);
+    }
   }
 }
 

@@ -1219,6 +1219,13 @@ else
       headless_ready=0
       if [ -z "$CLAUDE_BIN" ]; then
         pending "Install Claude Code, then re-run with --onboard headless (or run the interactive command)."
+      elif [ "$MAC_FEATURES" = 0 ] && [ "$OS" != Darwin ]; then
+        say "  Headless onboarding reads the Claude token from the macOS Keychain, so it runs only on macOS."
+        pending "Run the interactive onboarding instead: cd $QDIR && claude $(shell_quote "$prompt")"
+      elif [ "$MAC_FEATURES" = 0 ]; then
+        # Step 7 skipped the Keychain, so KEYCHAIN_OK=0 says nothing about whether the token is stored.
+        say "  Headless onboarding reads the Claude token from the macOS Keychain, which --core-only skips."
+        pending "To use --onboard headless, re-run without --core-only. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       elif [ "$KEYCHAIN_UNREADABLE" = 1 ]; then
         say "  Headless onboarding needs to read the Keychain item $KEYCHAIN_SERVICE, which could not be read (see step 7)."
         pending "Make the Keychain item readable (see step 7), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"

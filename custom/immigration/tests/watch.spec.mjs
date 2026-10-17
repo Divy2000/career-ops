@@ -287,3 +287,32 @@ syncBuiltinESMExports();
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(w.imm).filter((f) => f.includes('.tmp-')), []);
 });
+
+test('given an --ack whose pending.json rename fails and whose temp cleanup also fails, when it fails, then the rename error is reported and the cleanup failure is only noted (R28-scripts-a-L1-01)', () => {
+  const w = watchWorld();
+  w.setFeeds({ fr: [w.doc('2026-1', 'Modernizing H-1B Requirements')] });
+  const batch = w.watch();
+  const file = path.join(w.root, 'batch.json');
+  fs.writeFileSync(file, JSON.stringify(batch));
+  const failing = path.join(w.root, 'eio-eacces.mjs');
+  fs.writeFileSync(failing, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRename = fs.promises.rename;
+const realRm = fs.promises.rm;
+fs.promises.rename = async (from, to) => {
+  if (String(from).includes('pending.json.tmp-')) { const err = new Error('i/o error'); err.code = 'EIO'; throw err; }
+  return realRename(from, to);
+};
+fs.promises.rm = async (target, opts) => {
+  if (String(target).includes('pending.json.tmp-')) { const err = new Error('permission denied'); err.code = 'EACCES'; throw err; }
+  return realRm(target, opts);
+};
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', failing, WATCH, '--ack', file], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /immigration-watch failed: i\/o error/);
+  assert.doesNotMatch(r.stderr, /immigration-watch failed: permission denied/);
+  assert.match(r.stderr, /could not remove .*pending\.json\.tmp-\d+: permission denied/);
+  assert.deepEqual(w.pendingIds(), ['fr:2026-1']);
+});

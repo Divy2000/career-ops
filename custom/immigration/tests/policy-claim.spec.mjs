@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { claimFile, readClaim, releaseClaim, retagClaim, tryClaim } from '../policy-claim.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
@@ -203,8 +203,80 @@ test('a start whose process has exited, or whose pid now names another process, 
   assert.equal(readClaim(r).pid, child.pid);
   assert.deepEqual(tryClaim(r, { owner: 'starting:next', batch: null }), { ok: true });
   // This process's pid, but a process that started at another time: the pid was reused.
-  plant(r, { owner: 'starting:reused', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  plant(r, { owner: 'starting:reused', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 0 });
   assert.deepEqual(tryClaim(r, { owner: 'starting:next', batch: null }), { ok: true });
+});
+
+test('a start taken in one time zone holds against a claimant in another (R28-tests-custom-L1-01)', async () => {
+  const r = root();
+  // The Control Center server runs in the user's shell TZ, the launchd daily job in the system zone.
+  const holderCode = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:cc', batch: null }).ok)); process.stdin.resume();`;
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', holderCode], { env: { ...process.env, TZ: 'Pacific/Kiritimati' } });
+  try {
+    const out = await new Promise((resolve, reject) => {
+      holder.stdout.once('data', (d) => resolve(String(d)));
+      holder.on('error', reject);
+      holder.on('close', () => resolve(''));
+    });
+    assert.equal(out, 'true');
+    const contendCode = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(JSON.stringify(tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null })));`;
+    const contender = spawnSync(process.execPath, ['--input-type=module', '-e', contendCode], { env: { ...process.env, TZ: 'Pacific/Pago_Pago' }, encoding: 'utf8' });
+    assert.equal(contender.status, 0, contender.stderr);
+    const answer = JSON.parse(contender.stdout);
+    assert.equal(answer.ok, false);
+    assert.equal(answer.holder.owner, 'starting:cc');
+    assert.equal(typeof readClaim(r).pidStart, 'number');
+  } finally {
+    holder.stdin.end();
+  }
+});
+
+test('a start claim in the earlier format whose text does not parse holds on its live pid only while recent (R28-tests-custom-L1-01)', () => {
+  const r = root();
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'gestern' });
+  assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'gestern' });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
+});
+
+test('a start claim in the earlier format on a reused pid is taken over, recent or not (R28-tests-custom-L1-01 review)', () => {
+  const r = root();
+  const old = new Date(Date.now() - 60 * 60_000).toISOString();
+  plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
+  // The same format naming this process's start as ps prints it here still holds past the recent window.
+  const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim();
+  plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: lstart });
+  assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
+});
+
+test('a start claim in the earlier format written in another zone holds while its process runs, past the recent window (R28-tests-custom-L1-01 review 2)', () => {
+  const r = root();
+  const old = new Date(Date.now() - 60 * 60_000).toISOString();
+  for (const zone of ['Pacific/Kiritimati', 'Pacific/Pago_Pago', 'Asia/Kolkata']) {
+    const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: zone } }).trim();
+    plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: lstart });
+    assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false, zone);
+  }
+});
+
+test('a start claim in the earlier format holds when ps cannot run, however old (R28-tests-custom-L1-01 review 2)', () => {
+  const r = root();
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, PATH: tempDir('no-ps-') }, encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, 'false');
+});
+
+test('a start claim in the earlier format is taken over once a day old, even when its text names this process (R28-tests-custom-L1-01 review 3)', () => {
+  const r = root();
+  // A zone offset that matches by chance (a reused pid started a whole quarter-hour away) must not hold for good.
+  const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'Pacific/Kiritimati' } }).trim();
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(), pid: process.pid, pidStart: lstart });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
 });
 
 test('many processes claiming at once: exactly one gets it', async () => {
@@ -332,5 +404,20 @@ test('given the claim cannot be renamed into place (ENOSPC), when a claim is tak
   fs.renameSync = rename;
   const dir = path.dirname(claimFile(r));
   assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes('.tmp-')), []);
+  assert.equal(readClaim(r), null);
+});
+
+test('given a claim whose rename into place fails and whose temp cleanup also fails, when tryClaim runs, then the rename error is thrown and the cleanup failure is only noted (R28-scripts-a-L1-01)', () => {
+  const r = root();
+  const code = `const fs = (await import('node:fs')).default;
+const realRename = fs.renameSync, realRm = fs.rmSync;
+fs.renameSync = (from, to) => { if (String(from).includes('.policy-pass.claim.tmp-')) { const err = new Error('i/o error'); err.code = 'EIO'; throw err; } return realRename(from, to); };
+fs.rmSync = (target, opts) => { if (String(target).includes('.policy-pass.claim.tmp-')) { const err = new Error('permission denied'); err.code = 'EACCES'; throw err; } return realRm(target, opts); };
+const { tryClaim } = await import(${JSON.stringify(MODULE)});
+try { tryClaim(${JSON.stringify(r)}, { owner: 'session:s-1', batch: null }); process.stdout.write('no error'); } catch (err) { process.stdout.write(err.message); }`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, 'i/o error');
+  assert.match(child.stderr, /could not remove the temp file .*\.policy-pass\.claim\.tmp-\d+: permission denied/);
   assert.equal(readClaim(r), null);
 });

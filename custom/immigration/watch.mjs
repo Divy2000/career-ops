@@ -25,7 +25,12 @@ async function writeAtomic(file, text) {
     await writeFile(tmp, text);
     await rename(tmp, file);
   } finally {
-    await rm(tmp, { force: true });
+    // The write or rename error is the one to report; a temp file that cannot be removed too is only noted.
+    try {
+      await rm(tmp, { force: true });
+    } catch (err) {
+      process.stderr.write(`note: could not remove the temp file ${tmp}: ${err.message}\n`);
+    }
   }
 }
 // Exclusive create: the policy pass appends to these files without the pending lock, so a file that appeared since
