@@ -13,7 +13,7 @@ import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
 import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
-import { claimHolderText, PendingUnreadableError, policyClaim, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
+import { claimHolderText, PendingUnreadableError, policyClaim, PolicyQueueBusyError, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
 import crypto from 'node:crypto';
 import { replyWatchSessionRefused } from '../domains/replyCandidates.js';
 import { BATCH_MAX_URLS } from '../../shared/fanout.js';
@@ -293,10 +293,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const claimed = policyClaim.take(opts.cfg.dataRoot, starting);
       if (!claimed.ok) return reply.code(409).send({ error: `Not started: ${claimHolderText(claimed.holder.owner)}. Try again once it finishes.` });
       try {
-        pass = preparePolicyPass(opts.cfg.codeRoot, opts.cfg.dataRoot);
+        pass = await preparePolicyPass(opts.cfg.codeRoot, opts.cfg.dataRoot);
       } catch (err) {
         policyClaim.release(opts.cfg.dataRoot, starting);
         if (err instanceof PendingUnreadableError) return reply.code(422).send({ error: err.message });
+        if (err instanceof PolicyQueueBusyError) return reply.code(409).send({ error: `Not started: ${err.message}.` });
         throw err;
       }
       userPrompt = pass.prompt;
