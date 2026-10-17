@@ -82,9 +82,13 @@ export function pipelineRef(raw: unknown): string | null {
   return postingUrl(raw) ?? (localJdPath(raw) !== null ? raw.trim() : null);
 }
 
+// An expired entry is struck out whole (`~~URL | Company | Role~~ <dash> posting expired`), as parsePipeline reads it.
+const STRUCK = /^\s*~~([\s\S]*?)(?:~~|$)/;
+
 function jobUrlFromRest(rest: string): string | null {
+  const struck = rest.match(STRUCK);
   // The URL is the cell's first word: a `[!]` row notes its error after it (`URL <dash> Error: login required`).
-  return pipelineRef(unescapeMarkdownUrl(rest.split('|')[0]?.trim().split(/\s+/)[0] ?? ''));
+  return pipelineRef(unescapeMarkdownUrl((struck ? struck[1]! : rest).split('|')[0]?.trim().split(/\s+/)[0] ?? ''));
 }
 
 // Every modes/*/pipeline.md writes a URL it could not fetch as `- [!] URL <em dash or --> <note>` (Error: login
@@ -92,9 +96,12 @@ function jobUrlFromRest(rest: string): string | null {
 // A hand note after a plain hyphen (`URL - asked to wait`) is not one.
 const FLAGGED_NOTE = /^\s*\S+\s+(?:--|\u2014)\s*\S/;
 
-/** The open mark a restored row gets back: `!` for a skipped needs-JD row, so it still waits for its JD text. */
+/**
+ * The open mark a restored row gets back: `!` for a skipped needs-JD row, so it still waits for its JD text. A struck-out
+ * row keeps its strike, which marks it expired; the note after it is the expiry, not a fetch error.
+ */
 function restoredMark(rest: string): '!' | ' ' {
-  return FLAGGED_NOTE.test(rest.split('|')[0] ?? '') ? '!' : ' ';
+  return !STRUCK.test(rest) && FLAGGED_NOTE.test(rest.split('|')[0] ?? '') ? '!' : ' ';
 }
 
 export type SkipResult = { ok: true; text: string; matched: number; changed: number } | { ok: false; error: 'invalid-url' | 'unmatched' };
