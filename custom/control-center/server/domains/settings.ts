@@ -88,7 +88,12 @@ export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): Ap
     fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
     fs.renameSync(tmp, abs);
   } catch (err) {
-    fs.rmSync(tmp, { force: true });
+    // A failed cleanup must not hide why the write failed.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* the write error below is the one to report */
+    }
     throw err;
   }
   return next;

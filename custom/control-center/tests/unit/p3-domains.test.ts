@@ -483,6 +483,22 @@ describe('app settings', () => {
     }
     expect(fs.readdirSync(path.join(root, 'data', 'control-center'))).toEqual([]);
   });
+  it('given the rename and the temp-file cleanup both fail, when settings are written, then the rename error is thrown', () => {
+    const root = tempDir('cc-settings-');
+    fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('EIO: injected rename failure'), { code: 'EIO' });
+    });
+    const rm = vi.spyOn(fs, 'rmSync').mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: injected cleanup failure'), { code: 'EACCES' });
+    });
+    try {
+      expect(() => writeSettings(root, { logos: true })).toThrow(/injected rename failure/);
+    } finally {
+      rename.mockRestore();
+      rm.mockRestore();
+    }
+  });
   it('one bad usage budget keeps its valid sibling budget (R17-srv-dom-b-L1-01)', () => {
     const root = tempDir('cc-settings-');
     fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
