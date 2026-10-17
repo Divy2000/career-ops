@@ -1054,7 +1054,8 @@ export class SessionManager {
         // stopped run has ended, so it may still write its report: the session keeps its number.
         fail(err);
         clearInterval(timer);
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.active.delete(id));
+        // Still tracked until the runner stops following its process: the duplicate checks count it live until then.
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.untilRunStops(id, runId));
         return;
       }
       // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
@@ -1124,6 +1125,29 @@ export class SessionManager {
       if (Date.now() > deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+  }
+
+  /** Keeps the session in `active` while the runner still follows the run's process, then drops it. */
+  private untilRunStops(id: string, runId: string): void {
+    const following = () => {
+      try {
+        return this.runner.ending(runId);
+      } catch {
+        // Its record is unreadable and the runner does not follow it: nothing here can tell it is still alive.
+        return false;
+      }
+    };
+    if (!following()) {
+      this.active.delete(id);
+      return;
+    }
+    const timer = setInterval(() => {
+      if (following()) return;
+      clearInterval(timer);
+      this.active.delete(id);
+    }, this.deps.pollMs ?? 250);
+    timer.unref();
+    this.active.set(id, { timer });
   }
 
   private turnEnded(id: string, n: number): boolean {

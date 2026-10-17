@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp } from '../helpers/app.js';
@@ -66,4 +66,40 @@ describe('a cancelled evaluation whose run is still stopping (R27-claude-L1-01)'
       await app.close();
     }
   }, 30_000);
+
+  it('given an evaluation whose run record became unreadable while its process may still run, when the posting is started again, then the start is refused with 409', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const url = 'https://jobs.example.com/synthetic/r27-l101-unreadable-run';
+      const file = path.join(tempDir('cc-r27-scenario-'), 'scenario.json');
+      fs.writeFileSync(file, JSON.stringify(STUBBORN));
+      process.env.FAKE_CLAUDE_SCENARIO = file;
+      let started: { id: string; turns: { runId: string }[] };
+      try {
+        started = (await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: url }, prompt: 'Evaluate it' })).json();
+      } finally {
+        delete process.env.FAKE_CLAUDE_SCENARIO;
+      }
+      const runId = started.turns[0]!.runId;
+      await until(() => app.runner.store.read(runId)?.childPid != null);
+      const read = app.runner.store.read.bind(app.runner.store);
+      const spy = vi.spyOn(app.runner.store, 'read').mockImplementation((rid: string) => {
+        if (rid === runId) throw new Error('EIO: i/o error, read');
+        return read(rid);
+      });
+      await until(() => app.sessions.read(started.id)?.status === 'error');
+      spy.mockRestore();
+      expect(app.runner.ending(runId)).toBe(true);
+
+      const res = await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: url }, prompt: 'Evaluate it' });
+      expect(res.statusCode, res.body).toBe(409);
+      app.runner.cancel(runId);
+      await until(() => app.runner.store.read(runId)?.endedAt != null, 20_000);
+    } finally {
+      await app.close();
+      error.mockRestore();
+    }
+  }, 40_000);
 });
+
