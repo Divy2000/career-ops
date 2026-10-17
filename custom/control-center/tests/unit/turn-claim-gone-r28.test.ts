@@ -9,4 +9,12 @@ describe('turnClaimGone', () => {
     const file = path.join(tempDir('cc-claim-gone-'), 'turn.claim');
     for (const text of ['{"pid":', JSON.stringify({ start: 1 })]) expect(turnClaimGone(file, text), text).toBe(true);
   });
+
+  it('given a claim whose holder still runs but whose start ps cannot tell, however old, when checked, then it is held', () => {
+    const file = path.join(tempDir('cc-claim-unknown-'), 'turn.claim');
+    const text = JSON.stringify({ pid: process.pid, start: 1, at: Date.now() - 60 * 60_000 });
+    expect(turnClaimGone(file, text, () => 'unknown')).toBe(false);
+    expect(turnClaimGone(file, text, () => null)).toBe(true);
+    expect(turnClaimGone(file, text, () => 2)).toBe(true);
+  });
 });

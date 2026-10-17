@@ -283,7 +283,7 @@ export function printedReservation(output: string): number[] {
  * marks it running): two server processes on one data root (blue/green) would otherwise both start a paid turn on it.
  */
 const TURN_CLAIM_FILE = 'turn.claim';
-/** A claim whose holder cannot be told apart from a later process under its PID (ps cannot answer) is freed this old. */
+/** A claim whose holder recorded no start (ps could not date it) is freed this old, its PID maybe since reused. */
 const TURN_CLAIM_STALE_MS = 15 * 60_000;
 let ownStart: ProcessStart | undefined;
 /** Held while a process replaces a stale turn claim; it takes milliseconds, so one left this old is a crashed holder's. */
@@ -311,10 +311,11 @@ function lockTurnClaimReplace(dir: string, text: string): (() => void) | null {
 
 /**
  * Whether the process a turn claim names is gone: dead or a reused PID. A live holder keeps its claim however long it
- * prepares (a slow token read), since a peer starting the turn beside it would run two turns. One whose start cannot be
- * compared counts as gone once the claim is stale, and a claim cut short once the unreadable grace has passed.
+ * prepares (a slow token read), since a peer starting the turn beside it would run two turns, and so does one ps
+ * cannot date. One whose holder recorded no start counts as gone once the claim is stale, and a claim cut short once
+ * the unreadable grace has passed.
  */
-export function turnClaimGone(file: string, text: string): boolean {
+export function turnClaimGone(file: string, text: string, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
   let holder: { pid?: unknown; start?: unknown; at?: unknown };
   try {
     holder = JSON.parse(text) as typeof holder;
@@ -322,9 +323,11 @@ export function turnClaimGone(file: string, text: string): boolean {
     return unreadableClaimGone(file);
   }
   if (!Number.isInteger(holder.pid) || typeof holder.at !== 'number') return unreadableClaimGone(file);
-  const start = processStartTime(holder.pid as number);
+  const start = startOf(holder.pid as number);
   if (start === null) return true;
-  if (typeof start === 'number' && typeof holder.start === 'number') return start !== holder.start;
+  // A holder that runs but whose start ps cannot tell is held: freeing a live one would start a second paid turn.
+  if (start === 'unknown') return false;
+  if (typeof holder.start === 'number') return start !== holder.start;
   return Date.now() - holder.at >= TURN_CLAIM_STALE_MS;
 }
 
