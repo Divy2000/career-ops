@@ -103,6 +103,15 @@ describe('Network scan run stream', () => {
     expect(host.textContent).not.toContain('No postings matched these filters.');
   });
 
+  it('a zero-match scan that skipped undated postings still says "No postings matched", with the undated note (R27-feat-a-L2-01 review)', async () => {
+    const stream = await runScan();
+    await act(async () => stream.emit('line', summaryLine({ companiesAvailable: 900, companiesScanned: 900, capHit: false, stoppedByOutage: false, datasetStatus: { greenhouse: 'ok', lever: 'ok' }, unreachableBoards: 0, postingsDroppedNoDate: 1, offers: [] })));
+    await act(async () => stream.emit('run.done', { status: 'done' }));
+    await until(() => host.textContent?.includes('scan done'), 'the end of the scan');
+    expect(host.textContent).toContain('1 undated posting was skipped');
+    expect(host.textContent).toContain('No postings matched these filters.');
+  });
+
   it('leaving the tab while a scan runs and coming back follows the same run again (R13-feat-a-L1-06)', async () => {
     const first = await runScan();
     await act(async () => root.unmount());

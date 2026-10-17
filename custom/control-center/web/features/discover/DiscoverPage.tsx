@@ -218,12 +218,12 @@ export function scanDegradations(summary: ScanSummary): { notes: string[]; noDat
   if (stale.length) notes.push(`Degraded: the scan used an expired cached company list for ${stale.join(', ')}, since the download failed.`);
   const unreachable = summary.unreachableBoards ?? 0;
   if (unreachable > 0) notes.push(`${unreachable} ${unreachable === 1 ? 'board' : 'boards'} could not be reached.`);
-  // Counted before the title filter, so these are skipped postings, not skipped matches.
+  // Counted before the title filter, so these are skipped postings, not skipped matches: the note sits beside the empty
+  // state rather than withholding it, since nearly every real scan has some.
   const undated = summary.postingsDroppedNoDate ?? 0;
   if (undated > 0) notes.push(`${undated} undated ${undated === 1 ? 'posting was' : 'postings were'} skipped: ${undated === 1 ? 'its board gives' : 'their boards give'} no posting date, so the date filter cannot place ${undated === 1 ? 'it' : 'them'}.`);
-  // A scan stopped before it finished (a DNS outage) found no reliable "no matches", so the empty state is withheld; so
-  // does one that skipped undated postings, since a match may be among them.
-  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 || summary.stoppedEarly === true || undated > 0 };
+  // A scan stopped before it finished (a DNS outage) found no reliable "no matches", so the empty state is withheld.
+  return { notes, noData: empty.length > 0 || summary.companiesAvailable === 0 || summary.stoppedEarly === true };
 }
 
 // The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.

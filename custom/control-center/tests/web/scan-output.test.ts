@@ -20,11 +20,13 @@ describe('network scan undated postings (R27-feat-a-L2-01)', () => {
     expect(parseScanOutput([stdout({ offers: [], postingsKept: 0, postingsDroppedNoDate: 7 })])?.postingsDroppedNoDate).toBe(7);
   });
 
-  it('a scan that skipped undated postings says so and withholds the "no postings matched" empty state', () => {
+  // The count is taken before the title filter, so nearly every real scan has some: withholding the empty state on it
+  // would hide "No postings matched" from almost every zero-match scan (R27-feat-a-L2-01 review).
+  it('a scan that skipped undated postings says so beside the "no postings matched" empty state, without withholding it', () => {
     const summary = parseScanOutput([stdout({ offers: [], postingsKept: 0, postingsDroppedNoDate: 3 })]);
     const degraded = scanDegradations(summary!);
     expect(degraded.notes.join(' ')).toMatch(/3 undated postings were skipped/);
-    expect(degraded.noData).toBe(true);
+    expect(degraded.noData).toBe(false);
   });
 
   it('a scan that skipped no undated postings adds no note', () => {
