@@ -1261,6 +1261,13 @@ export class SessionManager {
     // A send holds the claim already; a new session's (or fork's) is taken here, so another server process refuses to
     // delete it while it prepares.
     const unclaimTurn = claimed ? this.claimTurn(meta.id) : () => {};
+    try {
+      // Read again under the claim, as send does: another server process may have deleted the session before it.
+      if (claimed) this.must(meta.id);
+    } catch (err) {
+      unclaimTurn();
+      throw err;
+    }
     if (claimed) this.sending.add(meta.id);
     this.preparing.add(meta.id);
     try {

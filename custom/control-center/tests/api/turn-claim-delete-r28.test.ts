@@ -80,6 +80,29 @@ describe('deleting a session another server process is starting a turn on (R28-c
     }
   });
 
+  it('given a new session another process deletes before its first turn is claimed, when the turn starts, then nothing is spawned', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    try {
+      const manager = app.sessions as unknown as { claimTurn(id: string): () => void };
+      const claim = manager.claimTurn.bind(manager);
+      let guard = '';
+      // R28-cl2-rev-04: the other process deletes the queued session after start() recorded it, before its claim.
+      vi.spyOn(manager, 'claimTurn').mockImplementation((id) => {
+        guard = app.sessions.store.guardDirOf(id);
+        app.sessions.store.delete(id);
+        return claim(id);
+      });
+      const before = app.runner.store.list().length;
+      await expect(app.sessions.start({ mode: 'advisor', target: { type: 'none', value: null }, prompt: 'What is overdue?' })).rejects.toThrow(/no session/);
+      expect(manager.claimTurn).toHaveBeenCalled();
+      expect(app.runner.store.list().length).toBe(before);
+      expect(fs.existsSync(guard)).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+    }
+  });
+
   it('given a session whose turn runs in another server process, when it is deleted here, then it is refused as busy', async () => {
     const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
     try {
