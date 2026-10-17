@@ -468,6 +468,11 @@ async function main(): Promise<void> {
   });
 
   proxy.listen(PORT, '127.0.0.1', () => {
+    // Stopped while the bind was under way: exitAfterChildren saw no listener to close, so close it here.
+    if (stopping) {
+      proxy.close();
+      return;
+    }
     // Only the instance whose lock is still the one on disk may reconcile; one displaced while starting stops here.
     if (!lock.verify()) {
       console.error(`Another Control Center took this data root's lock while this one was starting: ${dataRoot}. This one stops.`);

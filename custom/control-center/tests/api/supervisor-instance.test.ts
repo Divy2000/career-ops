@@ -885,11 +885,25 @@ describe('stopping the supervisor holds the data-root lock until every server ch
         fs.writeFileSync(path.join(pkg, 'server', `touch-${i}.ts`), 'export {};\n');
         await until(() => /reload ok/.test(s.output()), 'the reload', 3000).catch(() => undefined);
       }
+      const before = new Set(childrenOfPackage(pkg));
+      // Every server child seen while the supervisor stops: a late one would be SIGKILLed with the stuck one, so only
+      // watching for it shows whether it was started at all.
+      const late = new Set<number>();
+      let exited = false;
+      void s.exited.then(() => (exited = true));
+      const watch = (async () => {
+        while (!exited) {
+          for (const pid of childrenOfPackage(pkg)) if (!before.has(pid)) late.add(pid);
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      })();
       process.kill(supervisorPid(s), 'SIGTERM');
       await new Promise((r) => setTimeout(r, 300));
       fs.writeFileSync(path.join(pkg, 'server', 'touch-after-stop.ts'), 'export {};\n');
       const code = await s.exited;
+      await watch;
       expect(code, s.output()).toBe(0);
+      expect([...late], s.output()).toEqual([]);
       // A child spawned late would still be starting: give it the time a start takes before looking.
       await new Promise((r) => setTimeout(r, 3000));
       expect(childrenOfPackage(pkg), s.output()).toEqual([]);
