@@ -46,4 +46,31 @@ describe('the reason a later turn gives for its report number (R27-claude-L2-02)
       await app.close();
     }
   }, 30_000);
+
+  it('given a waiting Batch evaluate session whose credited report the user deleted and whose number another reservation claimed, when the reply turn ends, then the other reservation is left alone', async () => {
+    const app = await makeTestApp();
+    const file = path.join(tempDir('cc-r27-scenario-'), 'scenario.json');
+    fs.writeFileSync(file, JSON.stringify({
+      events: [INIT, { __write: { path: '{{DATA_ROOT}}/reports/{{REPORT_NUM}}-acme-2026-10-17.md', content: REPORT } }, result('')],
+      resume: [INIT, result('The report is written.')],
+    }));
+    process.env.FAKE_CLAUDE_SCENARIO = file;
+    try {
+      const fan = (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r27-l202-deleted'] })).json();
+      const id = fan.sessions[0].id as string;
+      const n = fan.reserved[0] as number;
+      expect((await settleOn(app, id, 1)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+      const reports = path.join(app.cfg.dataRoot, 'reports');
+      const pad = String(n).padStart(3, '0');
+      fs.rmSync(path.join(reports, `${pad}-acme-2026-10-17.md`));
+      fs.writeFileSync(path.join(reports, `${pad}-RESERVED.md`), JSON.stringify({ pid: process.pid, token: 'someone-else', created_at: new Date(Date.now() + 1000).toISOString() }));
+
+      expect((await call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Go on.' })).statusCode).toBe(202);
+      await settleOn(app, id, 2);
+      expect(fs.existsSync(path.join(reports, `${pad}-RESERVED.md`))).toBe(true);
+    } finally {
+      delete process.env.FAKE_CLAUDE_SCENARIO;
+      await app.close();
+    }
+  }, 30_000);
 });
