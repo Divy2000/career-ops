@@ -22,9 +22,10 @@ describe('the PDF extraction deadline', () => {
   });
 });
 
-describe('the PDF extraction worker (R17-srv-dom-a-X-02)', () => {
-  it('runs the extractor without the server internals or Claude credentials, as childEnv would', async () => {
-    // A stand-in intake.mjs whose extractor runs a child the way intake's pdftotext call does (execFileSync, no env).
+describe('the PDF extraction worker (R17-srv-dom-a-X-02, R28-srv-dom-a-X-01)', () => {
+  /** Runs the worker with `env` against a stand-in intake.mjs whose extractor lists the environment its child sees. */
+  async function childEnvKeys(env: Record<string, string>): Promise<Set<string>> {
+    // The stand-in runs a child the way intake's pdftotext call does (execFileSync, no env).
     const dir = tempDir('cc-extract-env-');
     const intakePath = path.join(dir, 'intake.mjs');
     fs.writeFileSync(
@@ -33,7 +34,6 @@ describe('the PDF extraction worker (R17-srv-dom-a-X-02)', () => {
 export const detectPdfExtractor = () => ({ name: 'fake', extract: () => execFileSync(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env)))'], { encoding: 'utf8' }) });
 `,
     );
-    const env: Record<string, string> = { ...(process.env as Record<string, string>), CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', ANTHROPIC_API_KEY: 'sk-leak', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-leak', CLAUDE_CODE_CUSTOM_HEADERS: 'x', ANTHROPIC_BASE_URL: 'https://proxy.example', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000', CLAUDE_CODE_USE_BEDROCK: '1' };
     const workerFile = fileURLToPath(new URL('../../server/domains/extract-worker.mjs', import.meta.url));
     const worker = new Worker(workerFile, { workerData: { intakePath, abs: path.join(dir, 'x.pdf'), probed: true }, env });
     const message = await new Promise<{ ok: boolean; text?: string; error?: string }>((resolve, reject) => {
@@ -42,8 +42,20 @@ export const detectPdfExtractor = () => ({ name: 'fake', extract: () => execFile
     });
     await worker.terminate();
     expect(message).toMatchObject({ ok: true });
-    const seen = new Set(JSON.parse(message.text!) as string[]);
-    expect(Object.keys(env).filter((k) => seen.has(k))).toEqual(Object.keys(env).filter((k) => !k.startsWith('CC_') && !isCredential(k)));
-    expect(seen.has('CLAUDE_CODE_MAX_OUTPUT_TOKENS')).toBe(true);
+    return new Set(JSON.parse(message.text!) as string[]);
+  }
+
+  it('drops the server internals and Claude credentials childEnv drops', async () => {
+    const env: Record<string, string> = { ...(process.env as Record<string, string>), CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', ANTHROPIC_API_KEY: 'sk-leak', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-leak', CLAUDE_CODE_CUSTOM_HEADERS: 'x', ANTHROPIC_BASE_URL: 'https://proxy.example' };
+    const seen = await childEnvKeys(env);
+    expect(Object.keys(env).filter((k) => seen.has(k) && (k.startsWith('CC_') || isCredential(k)))).toEqual([]);
+  });
+
+  it('hands the extractor only the variables a PDF tool needs, so no other credential reaches it', async () => {
+    const needed = { PATH: '/usr/bin:/bin', HOME: '/home/u', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TMPDIR: '/tmp', TZ: 'UTC', CAREER_OPS_ROOT: '/data' };
+    const secrets = { OPENAI_API_KEY: 'sk-openai', GITHUB_TOKEN: 'ghp-leak', AWS_SECRET_ACCESS_KEY: 'aws-leak', GOOGLE_APPLICATION_CREDENTIALS: '/k.json', DATABASE_URL: 'postgres://u:p@h/db', NPM_CONFIG__AUTH: 'npm-leak', CAREER_OPS_API_KEY: 'co-leak', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000' };
+    const seen = await childEnvKeys({ ...needed, ...secrets });
+    expect(Object.keys(secrets).filter((k) => seen.has(k))).toEqual([]);
+    expect(Object.keys(needed).filter((k) => seen.has(k))).toEqual(Object.keys(needed));
   });
 });
