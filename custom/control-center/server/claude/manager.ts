@@ -1368,7 +1368,9 @@ export class SessionManager {
       this.store.addFilesChanged(id, changed);
     }
     // Only this turn's own report counts: the reserved number, or a report in its own files log.
-    const newReports: NewReport[] = ownReports(detectNewReports(this.cfg.dataRoot, new Set(state.beforeReports)), { reportNum: meta.reportNum, turnFiles: changed });
+    // A bare-date digest reads as report #YYYY, as the allocator reads it too: it is never this turn's report.
+    const found = detectNewReports(this.cfg.dataRoot, new Set(state.beforeReports)).filter((x) => !isBareDateFile(x.file));
+    const newReports: NewReport[] = ownReports(found, { reportNum: meta.reportNum, turnFiles: changed });
     if (newReports.length) this.emit(id, { type: 'evaluation', reports: newReports });
     const cancelled = meta.status === 'cancelled' || run.status === 'cancelled';
     if (r.failure) this.emit(id, { type: 'error', message: r.failure });

@@ -152,6 +152,29 @@ describe('a credited report that holds its number (R27-mgr-rev-01)', () => {
   });
 });
 
+describe('a turn that writes a bare-date digest (R27-mgr-rev-01 review follow-up)', () => {
+  it('given a waiting session holding number 2026, when its reply writes a bare-date digest, then the digest is not credited as its report', async () => {
+    const app = await makeTestApp();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const meta = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'url', value: 'https://jobs.example.com/synthetic/r28-digest-2026' }, model: null, reportNum: 2026 });
+      app.sessions.store.setStatus(meta.id, 'awaiting_user');
+      fs.mkdirSync(path.join(app.cfg.dataRoot, 'reports'), { recursive: true });
+      fs.writeFileSync(sentinelPath(app, 2026), JSON.stringify({ pid: process.pid, token: 'fan-out', created_at: new Date(Date.parse(meta.createdAt) - 1000).toISOString() }));
+      const digest = { events: [INIT, { __write: { path: reportPath(app, '2026-10-17.md'), content: '# Scan digest\n' } }, NO_REPORT.events[1]] };
+
+      const reply = await withScenario(digest, async () => call(app, 'POST', `/api/sessions/${meta.id}/turns`, { prompt: 'Try again.' }));
+      expect(reply.statusCode, reply.body).toBe(202);
+      await settleOn(app, meta.id);
+      expect(fs.existsSync(reportPath(app, '2026-10-17.md'))).toBe(true);
+      expect(app.sessions.read(meta.id)!.creditedReport).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  });
+});
+
 describe('a release that checks ownership only before it runs (R27-mgr-rev-03)', () => {
   it('given a waiting session that owns its number, when the GC collects the sentinel and another reservation claims it after the check but before the release runs, then the other reservation is left alone', async () => {
     let app: App | null = null;
