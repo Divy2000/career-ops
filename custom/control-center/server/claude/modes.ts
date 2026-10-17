@@ -36,6 +36,8 @@ export type NetworkTool = 'WebFetch' | 'WebSearch';
 
 export interface PolicyClassDef {
   writeGlobs: string[];
+  /** Paths inside writeGlobs the class may still not write. */
+  denyWrites?: string[];
   network: NetworkTool[];
   /** Scripts (relative to the code root) the class may run with Bash. */
   extraBash: string[];
@@ -56,6 +58,8 @@ export const POLICY_CLASSES: Record<PolicyClass, PolicyClassDef> = {
       'data/immigration/company-alerts.tsv',
       'interview-prep/story-bank.md',
     ],
+    // reports/** covers the allocator's sentinels too: reserve-report-num.mjs writes them itself, a session never does.
+    denyWrites: ['reports/*-RESERVED.md'],
     network: ['WebFetch', 'WebSearch'],
     extraBash: [
       'reserve-report-num.mjs',
@@ -429,12 +433,13 @@ export function getModePolicy(id: string): ModePolicy | null {
   const scripts = [...new Set([...def.extraBash, ...(derived?.scripts ?? [])])].filter(sessionRunnable).sort();
   const explicit = def.bashPrefixes?.filter((p) => p.every(sessionRunnable));
   const bashPrefixes = explicit ?? scripts.map(bashPrefixFor);
+  const denyWrites = [...new Set([...(def.denyWrites ?? []), ...(Object.hasOwn(MODE_EXTRA_DENIES, englishModeOf(id)) ? MODE_EXTRA_DENIES[englishModeOf(id)]! : [])])];
   return {
     id,
     title: derived?.title ?? virtual!.title,
     policyClass,
     writeGlobs: [...def.writeGlobs, ...(Object.hasOwn(MODE_EXTRA_WRITES, englishModeOf(id)) ? MODE_EXTRA_WRITES[englishModeOf(id)]! : [])],
-    ...(Object.hasOwn(MODE_EXTRA_DENIES, englishModeOf(id)) ? { denyWrites: [...MODE_EXTRA_DENIES[englishModeOf(id)]!] } : {}),
+    ...(denyWrites.length ? { denyWrites } : {}),
     network: virtual?.network ?? [...def.network],
     scripts,
     bashRules: explicit ? explicit.map((p) => `Bash(${p.join(' ')}:*)`) : scripts.map(bashRuleFor),

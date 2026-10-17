@@ -444,8 +444,12 @@ describe('guard hook', () => {
       'tracker reports/nested/x.md': 2,
       'tracker reports/008-RESERVED.md': 2,
     });
-    // An evaluation still owns its reservation sentinels (reserve-report-num.mjs writes them).
-    expect(writesFor(['oferta'], ['reports/008-RESERVED.md'])).toEqual({ 'oferta reports/008-RESERVED.md': 0 });
+  });
+
+  it('an evaluation may write its reports but never a reservation sentinel: only reserve-report-num.mjs writes those, outside the hook (R28-claude-L2-02)', () => {
+    const modes = ['oferta', 'auto-pipeline', 'pipeline', 'batch', 'de/angebot', 'regional/eu-swe'];
+    const rels = ['reports/042-acme-platform-2026-10-17.md', 'reports/042-RESERVED.md', 'reports/1001-RESERVED.md'];
+    expect(writesFor(modes, rels)).toEqual(Object.fromEntries(modes.flatMap((m) => rels.map((rel, i) => [`${m} ${rel}`, i === 0 ? 0 : 2]))));
   });
 
   it('an interview session may record a stated salary figure, as debrief mode does (SW6-web-a-05)', () => {
