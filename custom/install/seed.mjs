@@ -115,7 +115,7 @@ function cvWrite(data, resume, replace) {
   const wanted = normalizedResume(resume);
   fs.mkdirSync(data, { recursive: true });
   if (!exists(cv)) {
-    fs.writeFileSync(cv, wanted, { flag: 'wx' });
+    writeAtomic(cv, wanted, () => {}, linkNew);
     return out('created');
   }
   if (fs.readFileSync(cv, 'utf8') === wanted) return out('identical');
@@ -125,17 +125,88 @@ function cvWrite(data, resume, replace) {
   }
   let backup = `${cv}.bak-${stamp()}`;
   for (let n = 1; exists(backup); n++) backup = `${cv}.bak-${stamp()}-${n}`;
-  fs.copyFileSync(cv, backup, fs.constants.COPYFILE_EXCL);
-  const tmp = path.join(data, `.cv.md.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, wanted, { flag: 'wx' });
-  fs.renameSync(tmp, cv);
+  let backedUp = false;
+  try {
+    writeAtomic(cv, wanted, () => {
+      fs.copyFileSync(cv, backup, fs.constants.COPYFILE_EXCL);
+      backedUp = true;
+    });
+  } catch (err) {
+    // cv.md was not replaced, so its backup would only be a stray copy left by every retry.
+    if (backedUp) {
+      try {
+        fs.rmSync(backup, { force: true });
+      } catch {
+        /* a stray backup; the write failure is the one to report */
+      }
+    }
+    throw err;
+  }
   out('replaced', backup);
 }
 
-function writeAtomic(file, text) {
+// Moves a fully written temp file to a name that must not exist yet: a hard link fails with EEXIST rather than
+// replace a file created meanwhile. A volume without hard links gets an exclusive create instead, which fails the
+// same way, and so does a dangling symlink in the name's place.
+function linkNew(tmp, file) {
+  try {
+    fs.linkSync(tmp, file);
+  } catch (err) {
+    if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP'].includes(err.code)) throw err;
+    copyNew(tmp, file);
+  }
+  // The file is in place: a temp name that cannot be removed must not turn the write into a reported failure.
+  try {
+    fs.rmSync(tmp, { force: true });
+  } catch (err) {
+    process.stderr.write(`warning: could not remove ${tmp} (${err.message}), a copy of ${file}; delete it by hand\n`);
+  }
+}
+
+function copyNew(tmp, file) {
+  const data = fs.readFileSync(tmp);
+  let fd;
+  try {
+    fd = fs.openSync(file, 'wx');
+  } catch (err) {
+    if (err.code === 'EEXIST') throw Object.assign(new Error(`${file} appeared while it was being written`), { code: 'EEXIST' });
+    throw err;
+  }
+  // From here the file is the one this call created, so a write that fails part way removes it.
+  try {
+    fs.writeFileSync(fd, data);
+    fs.closeSync(fd);
+  } catch (err) {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      /* the write error is the one to report */
+    }
+    throw err;
+  }
+}
+
+// beforeRename runs once the new copy is fully written, so a failed write leaves nothing behind.
+function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync) {
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, text, { flag: 'wx' });
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, text, { flag: 'wx' });
+    beforeRename();
+    publish(tmp, file);
+  } catch (err) {
+    // The original failure is the one to report; a temp file that cannot be removed must not replace it.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* leftover temp file */
+    }
+    throw err;
+  }
 }
 
 // Unconditional and idempotent: adds the projects-library house rule when its heading is absent.

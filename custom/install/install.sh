@@ -89,6 +89,7 @@ CLAUDE_BIN=""
 PREFLIGHT_FAILED=0
 # Set when the Control Center was running at the dependency step, so its npm ci was skipped.
 CC_DEPS_DEFERRED=0
+CC_DEFER_BLOCKED=0
 TTY_OK=0
 PROMPT_OK=0
 CV_COPY=""
@@ -449,14 +450,18 @@ keychain_problem() {
 # A Control Center from this checkout may run on another data root than this run's: the checkout itself (before
 # --data-root moves the data out) or the root the installed daily job names. It is running if any of them is, where
 # on those other roots only a lock naming a live process counts: the supervisor will not start there.
+# CC_LOCK_BLOCKED names this root's lock when it counts only because it cannot be read: nothing may be running then.
+CC_LOCK_BLOCKED=""
 cc_running() {
-  local root seen=" $DATA "
-  if cc_lock_live "$DATA/data/control-center/supervisor.lock"; then return 0; fi
+  local root seen=" $DATA " rc
+  CC_LOCK_BLOCKED=""
+  if cc_lock_live "$DATA/data/control-center/supervisor.lock"; then return 0; else rc=$?; fi
   while IFS= read -r root; do
     case "$seen" in *" $root "*) continue ;; esac
     seen="$seen$root "
     if cc_lock_live "$root/data/control-center/supervisor.lock" other; then return 0; fi
   done < <(printf '%s\n' "$DIR"; installed_job_root own)
+  if [ "$rc" = 2 ]; then CC_LOCK_BLOCKED="$DATA/data/control-center/supervisor.lock"; return 0; fi
   return 1
 }
 
@@ -472,11 +477,11 @@ let text;
 try { text = fs.readFileSync(process.argv[1], "utf8"); }
 catch (e) {
   if (other) process.exit(1);
-  // No lock is not running. A lock that cannot be read is, since acquireInstanceLock throws on it rather than
-  // replacing it, and so is a dangling symlink in its place, which the supervisor cannot take either.
+  // No lock is not running. A lock that cannot be read counts as running (exit 2), since acquireInstanceLock throws
+  // on it rather than replacing it, and so does a dangling symlink in its place, which the supervisor cannot take either.
   let entry = e.code !== "ENOENT";
   if (!entry) try { fs.lstatSync(process.argv[1]); entry = true; } catch { /* nothing there */ }
-  process.exit(entry ? 0 : 1);
+  process.exit(entry ? 2 : 1);
 }
 let pid = 0, start = null;
 try {
@@ -907,7 +912,12 @@ else
   if [ "$MAC_FEATURES" = 1 ]; then
     if cc_running; then
       CC_DEPS_DEFERRED=1
-      say "  Control Center is running; leaving its dependencies as they are (stop it, run 'npm --prefix custom/control-center ci', then start it again)"
+      if [ -n "$CC_LOCK_BLOCKED" ]; then
+        CC_DEFER_BLOCKED=1
+        say "  Control Center lock $CC_LOCK_BLOCKED cannot be read; leaving its dependencies as they are"
+      else
+        say "  Control Center is running; leaving its dependencies as they are (stop it, run 'npm --prefix custom/control-center ci', then start it again)"
+      fi
     elif ! (cd "$DIR" && run_logged npm --prefix custom/control-center ci); then
       die 1 "npm ci for the Control Center failed. See $LOG_FILE."
     fi
@@ -1414,6 +1424,33 @@ if [ "$DRY_RUN" = 1 ]; then
   say "Dry run finished. Nothing was changed."
   exit 0
 fi
+# A failed preflight means the Control Center would not run as it should: it is not started, so the pending actions
+# below (and exit 3) stay what the run ends with. Whether it is running is asked once, so the pending list and the
+# start below cannot disagree about it.
+CC_START=0
+CC_LIVE=0
+if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ "$PREFLIGHT_FAILED" = 0 ]; then
+  CC_START=1
+fi
+if [ "$CC_START" = 1 ] || [ "$CC_DEPS_DEFERRED" = 1 ]; then
+  if cc_running; then CC_LIVE=1; fi
+fi
+# The skipped npm ci is installed below only when this run starts the Control Center; while it is still running, or
+# when this run will not start it, the new code would run on the old node_modules (bin/cc only checks they exist).
+# It goes first: a failed preflight listed above ran against those old dependencies.
+if [ "$CC_DEPS_DEFERRED" = 1 ] && [ "$CC_LIVE" = 1 ] && [ -n "$CC_LOCK_BLOCKED" ]; then
+  PENDING=("The Control Center lock $(shell_quote "$CC_LOCK_BLOCKED") cannot be read, so its dependencies were not reinstalled: if no Control Center is running, remove that lock, run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")" ${PENDING[@]+"${PENDING[@]}"})
+elif [ "$CC_LIVE" = 1 ] && [ -n "$CC_LOCK_BLOCKED" ]; then
+  PENDING=("The Control Center lock $(shell_quote "$CC_LOCK_BLOCKED") cannot be read, so it was not started: if no Control Center is running, remove that lock, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")" ${PENDING[@]+"${PENDING[@]}"})
+elif [ "$CC_DEPS_DEFERRED" = 1 ] && [ "$CC_LIVE" = 1 ] && [ "$CC_DEFER_BLOCKED" = 1 ]; then
+  PENDING=("The Control Center lock could not be read when its dependencies were due, and a Control Center is running now: stop it, run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it again." ${PENDING[@]+"${PENDING[@]}"})
+elif [ "$CC_DEPS_DEFERRED" = 1 ] && [ "$CC_LIVE" = 1 ]; then
+  PENDING=("The Control Center was running, so its dependencies were not reinstalled: stop it, run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it again." ${PENDING[@]+"${PENDING[@]}"})
+elif [ "$CC_DEPS_DEFERRED" = 1 ] && [ "$CC_START" = 0 ] && [ "$CC_DEFER_BLOCKED" = 1 ]; then
+  PENDING=("The Control Center lock could not be read, so its dependencies were not reinstalled; it is gone now: run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")" ${PENDING[@]+"${PENDING[@]}"})
+elif [ "$CC_DEPS_DEFERRED" = 1 ] && [ "$CC_START" = 0 ]; then
+  PENDING=("The Control Center was running, so its dependencies were not reinstalled; it has stopped since: run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")" ${PENDING[@]+"${PENDING[@]}"})
+fi
 if [ "${#PENDING[@]}" -gt 0 ]; then
   say "Done, with pending actions:"
   n=0
@@ -1422,10 +1459,10 @@ else
   say "Done."
 fi
 
-# A failed preflight means the Control Center would not run as it should: it is not started, so the pending actions
-# above (and exit 3) stay what the run ends with.
-if [ "$NO_START" = 0 ] && [ "$MAC_FEATURES" = 1 ] && [ "$KEYCHAIN_OK" = 1 ] && [ -n "$CLAUDE_BIN" ] && [ "$PREFLIGHT_FAILED" = 0 ]; then
-  if cc_running; then
+if [ "$CC_START" = 1 ]; then
+  if [ "$CC_LIVE" = 1 ] && [ -n "$CC_LOCK_BLOCKED" ]; then
+    say "Control Center not started: its lock $(shell_quote "$CC_LOCK_BLOCKED") cannot be read"
+  elif [ "$CC_LIVE" = 1 ]; then
     say "Control Center is already running; not starting a second instance"
   else
     # It was running when its npm ci was skipped and has stopped since: install what it was left without first, and

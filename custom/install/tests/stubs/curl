@@ -1,0 +1,4 @@
+#!/bin/bash
+# Records the call and fetches nothing: a world never reaches the network.
+echo "curl $*" >> "$STUB_LOG"
+exit 0

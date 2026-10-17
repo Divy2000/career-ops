@@ -10,6 +10,7 @@ import { tempDir } from '../../test-support/tmp.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC = path.join(HERE, '..', 'sync.sh');
 const LIB = path.join(HERE, '..', 'lib.sh');
+const CONFINEMENT = path.join(HERE, '..', '..', 'control-center', 'server', 'claude', 'confinement.mjs');
 
 function stub(dir, name, body) {
   mkdirSync(dir, { recursive: true });
@@ -88,7 +89,11 @@ test('the headless sync Claude starts none of the user\'s or the project\'s MCP 
 // ---- which claude gets the token (R15-scripts-b-L3-01) ----
 
 /** sync_claude_bin 2.1.288 with `claude` stubs printing the given versions, one folder each on PATH in order. */
-function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion, dailyCheckout = 'this' } = {}) {
+// sync_claude_bin prints the real path the gate approved (macOS temp dirs sit behind the /var symlink).
+const real = (p) => fs.realpathSync.native(p);
+// The default approves every version the floor tests below expect through, so they keep testing the floor alone.
+const FLOOR_PASSING = ['2.1.288', '2.1.289', '2.1.290', '2.1.291', '2.1.300', '2.2.0', '3.0.1'];
+function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion, dailyCheckout = 'this', approved = FLOOR_PASSING, gate = true } = {}) {
   const dir = tempDir('sync-claude-bin-');
   const dirs = onPath.map((version, i) => {
     const d = path.join(dir, `bin${i}`);
@@ -98,10 +103,17 @@ function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion, dailyC
   // HOME is the test's own, so the daily job installed on this machine (if any) is never read.
   const home = path.join(dir, 'home');
   mkdirSync(home, { recursive: true });
-  const env = { PATH: [...dirs, '/usr/bin', '/bin'].join(':'), HOME: home };
-  // The sync runs sync_claude_bin from its live checkout.
+  const env = { PATH: [...dirs, path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: home };
+  // The sync runs sync_claude_bin from its live checkout, whose confinement gate and contract it asks.
   const checkout = path.join(dir, 'checkout');
   mkdirSync(checkout);
+  if (gate) {
+    const claudeDir = path.join(checkout, 'custom', 'control-center', 'server', 'claude');
+    mkdirSync(claudeDir, { recursive: true });
+    fs.copyFileSync(CONFINEMENT, path.join(claudeDir, 'confinement.mjs'));
+    mkdirSync(path.join(checkout, 'custom', 'control-center', 'server', 'core'));
+    writeFileSync(path.join(checkout, 'custom', 'control-center', 'server', 'core', 'contract.json'), JSON.stringify({ claude: { approvedVersions: approved } }));
+  }
   mkdirSync(path.join(dir, 'other-checkout'));
   if (dailyPinVersion !== undefined) {
     // The daily job's plist, with the claude launchd/install.sh or the Control Center pinned for it.
@@ -131,7 +143,7 @@ function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion, dailyC
 test('sync_claude_bin picks the first claude on PATH when it keeps the token out of hooks and tools', () => {
   const r = claudeBin({ onPath: ['2.1.289', '2.1.100'] });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.equal(r.stdout, path.join(r.dirs[0], 'claude'));
+  assert.equal(r.stdout, real(path.join(r.dirs[0], 'claude')));
   assert.equal(claudeBin({ onPath: ['2.1.288'] }).status, 0, 'the minimum itself is enough');
   assert.equal(claudeBin({ onPath: ['2.2.0'] }).status, 0);
   assert.equal(claudeBin({ onPath: ['3.0.1'] }).status, 0);
@@ -148,7 +160,7 @@ test('sync_claude_bin refuses an older claude first on PATH, which would hand th
 test('sync_claude_bin takes CC_CLAUDE_BIN over PATH, and refuses a relative one', () => {
   const r = claudeBin({ onPath: ['2.1.100'], pinned: 'pin', pinnedVersion: '2.1.290' });
   assert.equal(r.status, 0, r.stdout);
-  assert.equal(r.stdout, path.join(r.dir, 'pin', 'claude'));
+  assert.equal(r.stdout, real(path.join(r.dir, 'pin', 'claude')));
   const old = claudeBin({ onPath: ['2.1.300'], pinned: 'pin', pinnedVersion: '2.1.100' });
   assert.equal(old.status, 1);
   assert.match(old.stdout, /^Claude Code 2\.1\.100 at .*\/pin\/claude is older than 2\.1\.288/);
@@ -160,15 +172,51 @@ test('sync_claude_bin takes CC_CLAUDE_BIN over PATH, and refuses a relative one'
 test('sync_claude_bin uses the claude pinned for the installed daily job over an older one first on launchd\'s PATH (R20-scripts-b-L2-02)', () => {
   const r = claudeBin({ onPath: ['2.1.100'], dailyPinVersion: '2.1.290' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.equal(r.stdout, path.join(r.dir, 'daily-pin', 'claude'));
+  assert.equal(r.stdout, real(path.join(r.dir, 'daily-pin', 'claude')));
   const env = claudeBin({ onPath: ['2.1.100'], dailyPinVersion: '2.1.290', pinned: 'pin', pinnedVersion: '2.1.291' });
-  assert.equal(env.stdout, path.join(env.dir, 'pin', 'claude'), 'CC_CLAUDE_BIN in the sync\'s own environment still wins');
+  assert.equal(env.stdout, real(path.join(env.dir, 'pin', 'claude')), 'CC_CLAUDE_BIN in the sync\'s own environment still wins');
 });
 
 test('sync_claude_bin ignores the claude pinned for a daily job another checkout installed (R20-scripts-b review)', () => {
   const r = claudeBin({ onPath: ['2.1.289'], dailyPinVersion: '2.1.290', dailyCheckout: 'other' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.equal(r.stdout, path.join(r.dirs[0], 'claude'));
+  assert.equal(r.stdout, real(path.join(r.dirs[0], 'claude')));
+});
+
+test('given an update moved claude to a version the contract has not approved, when the sync picks its claude, then it refuses to give it the token (R27-scripts-b-L2-01)', () => {
+  const r = claudeBin({ onPath: ['2.1.300'], approved: ['2.1.289'] });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^Claude Code 2\.1\.300 is not approved for the confined pass \(approved: 2\.1\.289\)/);
+  const pinned = claudeBin({ onPath: ['2.1.289'], pinned: 'pin', pinnedVersion: '2.1.300', approved: ['2.1.289'] });
+  assert.equal(pinned.status, 1, 'a pinned claude is held to the approved list too');
+  assert.match(pinned.stdout, /^Claude Code 2\.1\.300 is not approved for the confined pass/, 'refused by the approved list, not for another reason');
+  assert.equal(claudeBin({ onPath: ['2.1.289'], approved: ['2.1.289'] }).status, 0);
+});
+
+test('given node writes a warning to stderr, when the sync picks its claude, then the path it prints is still the bare real path and the warning is dropped (R27-scripts-b-L2-01 review)', () => {
+  const r = claudeBin({ onPath: ['2.1.289'] });
+  const noise = path.join(r.dir, 'noise.mjs');
+  writeFileSync(noise, "process.stderr.write('(node) Warning: noise on stderr\\n');\n");
+  const res = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: path.join(r.dir, 'checkout'), env: { PATH: [r.dirs[0], path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: path.join(r.dir, 'home'), NODE_OPTIONS: `--import=${noise}` }, encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(res.stdout, real(path.join(r.dirs[0], 'claude')));
+  assert.doesNotMatch(res.stderr, /noise on stderr/, 'the gate\'s node warnings are dropped, not passed on to the sync log');
+});
+
+test('given the live checkout has no confinement gate, when the sync picks its claude, then it refuses with the reason (R27-scripts-b-L2-01)', () => {
+  const r = claudeBin({ onPath: ['2.1.289'], gate: false });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^cannot check claude .* against the approved Claude Code versions: /);
+});
+
+test('given claude on PATH is a symlink, when the sync picks its claude, then it prints the real path the gate approved, which an update cannot re-point (R27-scripts-b-L2-01)', () => {
+  const r = claudeBin({ onPath: ['2.1.289'] });
+  const link = path.join(r.dir, 'link');
+  mkdirSync(link);
+  fs.symlinkSync(path.join(r.dirs[0], 'claude'), path.join(link, 'claude'));
+  const res = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: path.join(r.dir, 'checkout'), env: { PATH: [link, path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: path.join(r.dir, 'home') }, encoding: 'utf8' });
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.equal(res.stdout, fs.realpathSync.native(path.join(r.dirs[0], 'claude')));
 });
 
 test('sync_claude_bin refuses when no claude is found or its version cannot be read', () => {

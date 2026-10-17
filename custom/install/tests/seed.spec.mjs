@@ -314,3 +314,231 @@ test('cli.mjs same-path treats one folder spelled in two letter cases as the sam
     h.cleanup();
   }
 });
+
+// Preloaded into the seed process so a write, or the rename or link that moves the temp file into place, fails the
+// way a full volume makes it fail.
+const failingFs = (dir, which) => put(path.join(dir, 'fail-fs.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+for (const name of ${JSON.stringify(which === 'renameSync' ? ['renameSync', 'linkSync'] : [which])}) {
+  const real = fs[name];
+  fs[name] = (...args) => {
+    if (String(args[0]).includes('.tmp-')) {
+      if (name === 'writeFileSync') real('' + args[0], String(args[1]).slice(0, 3), args[2]);
+      const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; throw err;
+    }
+    return real(...args);
+  };
+}
+syncBuiltinESMExports();
+`);
+const seedWith = (preload, args) => spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, SEED, ...args], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+
+for (const which of ['writeFileSync', 'renameSync']) {
+  test(`given the volume fills during ${which}, when cv-write --replace runs, then it fails, keeps cv.md, and leaves no temp file or stray backup (R27-scripts-b-L1-02)`, () => {
+    const d = tmp();
+    const data = path.join(d, 'data');
+    const r = put(path.join(d, 'resume.md'), '# New resume with personal data\n');
+    put(path.join(data, 'cv.md'), 'OLD\n');
+    const res = seedWith(failingFs(d, which), ['cv-write', '--data', data, '--resume', r, '--replace']);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /no space left/);
+    assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'OLD\n');
+    assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'neither the temp copy nor a backup of the untouched cv.md is left');
+  });
+
+  test(`given the volume fills during ${which}, when cv-write seeds an absent cv.md, then it fails and leaves no cv.md or temp file, so a re-run seeds it again (R27-scripts-b-L1-02 review)`, () => {
+    const d = tmp();
+    const data = path.join(d, 'data');
+    const r = put(path.join(d, 'resume.md'), '# New resume with personal data\n');
+    const res = seedWith(failingFs(d, which), ['cv-write', '--data', data, '--resume', r]);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /no space left/);
+    assert.deepEqual(fs.readdirSync(data), []);
+    assert.equal(seed(['cv-write', '--data', data, '--resume', r]).stdout.trim(), 'created');
+  });
+
+  test(`given the volume fills during ${which}, when projects-rule runs, then it fails, keeps _custom.md, and leaves no temp file (R27-scripts-b-L1-02)`, () => {
+    const d = tmp();
+    const data = path.join(d, 'data');
+    assert.equal(seed(['custom-template', '--data', data, '--template', CUSTOM_TEMPLATE]).stdout.trim(), 'created');
+    const before = fs.readFileSync(path.join(data, 'modes', '_custom.md'), 'utf8');
+    const res = seedWith(failingFs(d, which), ['projects-rule', '--data', data, '--template', RULE_TEMPLATE]);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /no space left/);
+    assert.equal(fs.readFileSync(path.join(data, 'modes', '_custom.md'), 'utf8'), before);
+    assert.deepEqual(fs.readdirSync(path.join(data, 'modes')), ['_custom.md']);
+  });
+}
+
+// Preloaded into the seed process: linkSync on the temp file fails the way a volume without hard links makes it fail,
+// optionally after another writer creates the target, or the temp file cannot be removed once it is linked.
+const linkFs = (dir, mode) => put(path.join(dir, 'link-fs.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realLink = fs.linkSync, realRm = fs.rmSync;
+const tmpFile = (p) => String(p).includes('.tmp-');
+fs.linkSync = (...args) => {
+  if (${JSON.stringify(mode)} === 'rm-fails' || !tmpFile(args[0])) return realLink(...args);
+  if (${JSON.stringify(mode)} === 'eperm-raced') fs.writeFileSync(args[1], 'THEIRS\\n');
+  const err = new Error('EPERM: operation not permitted, link'); err.code = 'EPERM'; throw err;
+};
+fs.rmSync = (...args) => {
+  if (${JSON.stringify(mode)} === 'rm-fails' && tmpFile(args[0])) { const err = new Error('EBUSY: resource busy'); err.code = 'EBUSY'; throw err; }
+  return realRm(...args);
+};
+syncBuiltinESMExports();
+`);
+
+test('given the volume refuses hard links, when cv-write seeds an absent cv.md, then it renames the temp file into place (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'eperm'), ['cv-write', '--data', data, '--resume', r]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'created');
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), '# New resume\n');
+  assert.deepEqual(fs.readdirSync(data), ['cv.md']);
+});
+
+test('given the volume refuses hard links and cv.md appears meanwhile, when cv-write seeds it, then it fails and keeps the other writer\'s cv.md (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'eperm-raced'), ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /appeared while it was being written/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
+  assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
+});
+
+test('given the temp file cannot be removed once linked, when cv-write seeds an absent cv.md, then it still reports the write that happened (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'rm-fails'), ['cv-write', '--data', data, '--resume', r]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.trim(), 'created');
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), '# New resume\n');
+  const left = fs.readdirSync(data).filter((f) => f.includes('.tmp-'));
+  assert.equal(left.length, 1);
+  assert.match(res.stderr, new RegExp(`warning: could not remove ${path.join(data, left[0]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}.*delete it`), 'the leftover copy of cv.md is named, not left silently');
+});
+
+test('given the volume refuses hard links and cv.md is a dangling symlink, when cv-write seeds it, then it refuses as the link path does and keeps the symlink (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  fs.mkdirSync(data);
+  fs.symlinkSync(path.join(d, 'nowhere.md'), path.join(data, 'cv.md'));
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'eperm'), ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /appeared while it was being written/);
+  assert.equal(fs.readlinkSync(path.join(data, 'cv.md')), path.join(d, 'nowhere.md'));
+  assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
+});
+
+test('given the volume fills and the partial temp file cannot be removed, when cv-write runs, then it reports the full volume, not the cleanup (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const preload = put(path.join(d, 'full-busy.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync, realRm = fs.rmSync;
+fs.writeFileSync = (...args) => {
+  if (!String(args[0]).includes('.tmp-')) return realWrite(...args);
+  realWrite(args[0], String(args[1]).slice(0, 3), args[2]);
+  const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; throw err;
+};
+fs.rmSync = (...args) => {
+  if (String(args[0]).includes('.tmp-')) { const err = new Error('EBUSY: resource busy'); err.code = 'EBUSY'; throw err; }
+  return realRm(...args);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.doesNotMatch(res.stderr, /EBUSY/);
+});
+
+test('given the volume refuses hard links and cv.md appears just before the temp file is published, when cv-write seeds it, then the other writer\'s cv.md is kept (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const preload = put(path.join(d, 'late-race.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realLink = fs.linkSync, realRename = fs.renameSync, realCopy = fs.copyFileSync;
+fs.linkSync = (...args) => {
+  if (!String(args[0]).includes('.tmp-')) return realLink(...args);
+  const err = new Error('EPERM: operation not permitted, link'); err.code = 'EPERM'; throw err;
+};
+// Whatever moves the temp file to cv.md, another writer gets there first, after every check was made.
+const racing = (real) => (...args) => {
+  if (String(args[0]).includes('.tmp-') && String(args[1]).endsWith('cv.md')) fs.writeFileSync(args[1], 'THEIRS\\n');
+  return real(...args);
+};
+fs.renameSync = racing(realRename);
+fs.copyFileSync = racing(realCopy);
+const realOpen = fs.openSync;
+fs.openSync = (...args) => {
+  if (String(args[0]).endsWith('cv.md') && args[1] === 'wx') fs.writeFileSync(args[0], 'THEIRS\\n');
+  return realOpen(...args);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /appeared while it was being written/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
+  assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
+});
+
+test('given the replace fails and the backup it made cannot be removed, when cv-write --replace runs, then it reports the write failure, not the cleanup (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  put(path.join(data, 'cv.md'), 'OLD\n');
+  const preload = put(path.join(d, 'busy-backup.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRename = fs.renameSync, realRm = fs.rmSync;
+fs.renameSync = (...args) => {
+  if (String(args[0]).includes('.tmp-')) { const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; throw err; }
+  return realRename(...args);
+};
+fs.rmSync = (...args) => {
+  if (String(args[0]).includes('.bak-')) { const err = new Error('EBUSY: resource busy'); err.code = 'EBUSY'; throw err; }
+  return realRm(...args);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r, '--replace']);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.doesNotMatch(res.stderr, /EBUSY/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'OLD\n');
+});
+
+test('given the volume refuses hard links and creating cv.md fails while another writer creates it, when cv-write seeds it, then the other writer\'s cv.md is kept (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const preload = put(path.join(d, 'open-race.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realLink = fs.linkSync, realCopy = fs.copyFileSync, realOpen = fs.openSync;
+fs.linkSync = (...args) => {
+  if (!String(args[0]).includes('.tmp-')) return realLink(...args);
+  const err = new Error('EPERM: operation not permitted, link'); err.code = 'EPERM'; throw err;
+};
+// Creating cv.md fails before it is created (EACCES at open), and another writer creates it right then.
+const denied = (target) => {
+  fs.writeFileSync(target, 'THEIRS\\n');
+  const err = new Error('EACCES: permission denied, open'); err.code = 'EACCES'; throw err;
+};
+fs.copyFileSync = (...args) => (String(args[1]).endsWith('cv.md') ? denied(args[1]) : realCopy(...args));
+fs.openSync = (...args) => (String(args[0]).endsWith('cv.md') && args[1] === 'wx' ? denied(args[0]) : realOpen(...args));
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /permission denied/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
+});

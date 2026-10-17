@@ -39,10 +39,13 @@ version_ge() {
 # launchd's PATH can reach an older install first, else the first claude on PATH.
 # A build older than <min> ignores CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and would hand
 # the token to hooks and to the Bash children Claude runs (npm scripts, upstream's
-# suite), so it is refused, as is one whose version cannot be read. The reason
-# goes to stdout, with exit 1.
+# suite), so it is refused, as is one whose version cannot be read. So is any
+# version the checkout's contract does not approve (claude.approvedVersions, the
+# list the daily job and headless onboarding gate on): an unprobed build can change
+# what the scrub does. It prints the real path the gate approved, not a symlink an
+# update could re-point. The reason goes to stdout, with exit 1.
 sync_claude_bin() {
-  local min="$1" bin out version daily
+  local min="$1" bin out version daily gate
   daily="$(installed_daily_value EnvironmentVariables.CC_CLAUDE_BIN)"
   if [ -n "${CC_CLAUDE_BIN:-}" ]; then
     case "$CC_CLAUDE_BIN" in
@@ -63,7 +66,26 @@ sync_claude_bin() {
     echo "Claude Code $version at $bin is older than $min, which keeps the token out of hooks and tools; update it or pin a newer one with CC_CLAUDE_BIN"
     return 1
   fi
-  printf '%s' "$bin"
+  if ! gate="$(CLAUDE_BIN="$bin" node --input-type=module -e '
+import path from "node:path";
+let gate;
+try {
+  const { claudeVersionGate } = await import(path.resolve("custom/control-center/server/claude/confinement.mjs"));
+  gate = claudeVersionGate(process.env.CLAUDE_BIN);
+} catch (err) {
+  process.stdout.write(`cannot check claude ${process.env.CLAUDE_BIN} against the approved Claude Code versions: ${String(err?.message ?? err).split("\n")[0]}`);
+  process.exit(1);
+}
+if (gate.problem) {
+  process.stdout.write(gate.problem);
+  process.exit(1);
+}
+process.stdout.write(gate.identity);
+' 2>/dev/null)"; then
+    echo "${gate:-cannot check claude $bin against the approved Claude Code versions: node could not run the gate}"
+    return 1
+  fi
+  printf '%s' "${gate%@*}"
 }
 
 # install_root_deps <ignore-scripts|run-scripts>: install the checkout's root

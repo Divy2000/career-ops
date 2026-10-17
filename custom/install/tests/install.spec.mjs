@@ -5,6 +5,8 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
+// The real lock writer's start time, so a running-Control-Center lock carries what acquireInstanceLock writes.
+import { processStartTime } from '../../control-center/supervisor/instance-lock.ts';
 import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands, pythonPtyMissing, PTY_PROBE_OK, SYSTEM_DIRS } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
@@ -162,13 +164,15 @@ test('Linux with --core-only installs the core and never touches Keychain, launc
 });
 
 test('claude missing is a pending action with the official install commands; the installer never runs them', () => {
-  const { w, args } = fresh({ tools: ['git', 'node', 'npm', 'security', 'uname', 'launchctl', 'plutil'], keychain: true });
+  // brew and curl are recording stubs, so running either install command shows in the log (R27-tests-custom-L2-02).
+  const { w, args } = fresh({ tools: ['git', 'node', 'npm', 'security', 'uname', 'launchctl', 'plutil', 'brew', 'curl'], keychain: true });
   const r = w.run(args());
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
   assert.match(r.out, /brew install --cask claude-code/);
   assert.equal(w.calls('claude').length, 0);
-  assert.equal(w.calls('brew').length, 0);
+  assert.equal(w.calls('brew').length, 0, 'installer ran brew');
+  assert.equal(w.calls('curl').length, 0, 'installer ran curl');
 });
 
 test('an optional tool that is missing prints a one-line fix and never runs brew without --install-missing, even with a y answer waiting', () => {
@@ -1668,12 +1672,35 @@ test('a re-run with the Control Center already running skips its npm ci and does
   fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
   try {
     const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
-    assert.equal(r.status, 0, r.out);
     assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run under a running Control Center');
     assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
     assert.match(r.out, /already running/);
+    assert.equal(r.status, 3, `the skipped npm ci is unfinished work, so the run ends with pending actions (R27-scripts-b-L1-01)\n${r.out}`);
+    assert.match(r.out, /Done, with pending actions:\n(?:.*\n)*?\s+\d+\. The Control Center was running, so its dependencies were not reinstalled: stop it, run npm --prefix .*custom\/control-center'? ci, then start it again/);
+    assert.doesNotMatch(r.out, /^Done\.$/m);
     assert.match(r.out, /npm --prefix custom\/control-center ci/, 'the skip message names the npm ci command, not a restart');
     assert.doesNotMatch(r.out, /restart it to pick up changes/, 'a restart does not install dependencies');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('given a running Control Center\'s lock carries its real start time, as acquireInstanceLock writes it, a re-run treats it as running: no npm ci, no second instance (R27-tests-custom-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const start = processStartTime(child.pid);
+  assert.equal(typeof start, 'number', `the writer must read a start, or the lock is the legacy null format: ${start}`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.equal(r.status, 3, `the skipped npm ci is a pending action\n${r.out}`);
+    assert.match(r.out, /\d+\. The Control Center was running, so its dependencies were not reinstalled: stop it/);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), `npm ci must not run under a running Control Center\n${r.out}`);
+    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+    assert.match(r.out, /already running/);
   } finally {
     child.kill('SIGKILL');
   }
@@ -1806,9 +1833,57 @@ test('a Control Center lock that cannot be read is treated as running: no npm ci
   const old = new Date(Date.now() - 60000);
   fs.utimesSync(lock, old, old);
   const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
-  assert.equal(r.status, 0, r.out);
+  assert.equal(r.status, 3, `its skipped npm ci is a pending action (R27-scripts-b-L1-01)\n${r.out}`);
   assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run while the lock cannot be read');
   assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+  assert.match(r.out, /\d+\. The Control Center lock .*supervisor\.lock'? cannot be read, so its dependencies were not reinstalled: if no Control Center is running, remove that lock, run npm --prefix .*custom\/control-center'? ci, then start it: .*bin\/cc/, r.out);
+  assert.doesNotMatch(r.out, /was running|already running|stop it/, `nothing may be running, so the run does not say it is (R27 merge review)\n${r.out}`);
+});
+
+test('given the Control Center lock becomes unreadable after its npm ci ran, the run does not start it and leaves removing the lock as a pending action (R27 merge review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_MKDIR: lock } });
+  assert.equal(r.status, 3, r.out);
+  assert.ok(w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'its npm ci ran before the lock appeared');
+  assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+  assert.match(r.out, /\d+\. The Control Center lock .*supervisor\.lock'? cannot be read, so it was not started: if no Control Center is running, remove that lock, then start it: .*bin\/cc/);
+  assert.doesNotMatch(r.out, /dependencies were not reinstalled|already running/);
+});
+
+test('given its npm ci was skipped for an unreadable lock that is gone by the end of a --no-start run, the pending action does not say the Control Center was running (R27 merge review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_REMOVE: lock } });
+  assert.equal(r.status, 3, r.out);
+  assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'a --no-start run does not install it');
+  assert.match(r.out, /\d+\. The Control Center lock could not be read, so its dependencies were not reinstalled; it is gone now: run npm --prefix .*custom\/control-center'? ci, then start it: .*bin\/cc/);
+  assert.doesNotMatch(r.out, /was running/);
+});
+
+test('given its npm ci was skipped for an unreadable lock and a Control Center holds a readable lock by the end, the pending action says it is running now, not that it was (R27 merge review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
+  // The doctor step replaces the dangling link with a live Control Center's lock.
+  const live = path.join(w.T, 'live.lock');
+  fs.writeFileSync(live, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_COPY_FROM: live, FAKE_DOCTOR_COPY_TO: path.join(D, 'data', 'control-center', 'nowhere') } });
+    assert.match(r.out, /Control Center lock .* cannot be read; leaving its dependencies as they are/, 'the npm ci was skipped for the unreadable lock');
+    assert.equal(r.status, 3, r.out);
+    assert.match(r.out, /\d+\. The Control Center lock could not be read when its dependencies were due, and a Control Center is running now: stop it, run npm --prefix .*custom\/control-center'? ci, then start it again/);
+    assert.doesNotMatch(r.out, /was running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
 });
 
 test('a Control Center that stops after its npm ci was skipped gets that npm ci before the installer starts it (R18-scripts-b-review-06)', () => {
@@ -1825,6 +1900,24 @@ test('a Control Center that stops after its npm ci was skipped gets that npm ci 
     const ci = log.findIndex((l) => l.startsWith('npm --prefix custom/control-center ci'));
     assert.ok(ci > log.findIndex((l) => l.startsWith('doctor ')), `npm ci must run after the Control Center stopped: ${log.join('\n')}`);
     assert.equal(log[log.length - 1], 'cc ', log.join('\n'));
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('a Control Center that stops after its npm ci was skipped, on a --no-start run, leaves that npm ci as a pending action (R27-scripts-b-L1-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_REMOVE: lock } });
+    assert.equal(r.status, 3, r.out);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'a --no-start run does not install it either');
+    assert.match(r.out, /\d+\. The Control Center was running, so its dependencies were not reinstalled; it has stopped since: run npm --prefix .*custom\/control-center'? ci, then start it: .*custom\/control-center\/bin\/cc/);
+    assert.doesNotMatch(r.out, /stop it, run npm/, 'there is nothing left to stop (R27 merge review)');
   } finally {
     child.kill('SIGKILL');
   }
@@ -1858,9 +1951,11 @@ test('a Control Center lock that is a dangling symlink is treated as running (R1
   fs.mkdirSync(path.dirname(lock), { recursive: true });
   fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
   const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
-  assert.equal(r.status, 0, r.out);
+  assert.equal(r.status, 3, `its skipped npm ci is a pending action (R27-scripts-b-L1-01)\n${r.out}`);
   assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run');
   assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+  assert.match(r.out, /\d+\. The Control Center lock .*supervisor\.lock'? cannot be read, so its dependencies were not reinstalled: if no Control Center is running, remove that lock, run npm --prefix .*custom\/control-center'? ci, then start it: .*bin\/cc/, r.out);
+  assert.doesNotMatch(r.out, /was running|already running|stop it/, `nothing may be running, so the run does not say it is (R27 merge review)\n${r.out}`);
 });
 
 // Only this run's own root is one the supervisor would start on; on the root the data moved away from, a lock that
@@ -2305,6 +2400,24 @@ test('a failing Control Center preflight is a pending action, and the Control Ce
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /\d+\. The Control Center preflight failed; run: npm --prefix .*custom\/control-center' run preflight/);
   assert.equal(w.calls('cc').length, 0, 'the Control Center is not started after a failed preflight');
+});
+
+test('given the Control Center npm ci was skipped and the preflight then fails, the pending npm ci comes before the preflight, which ran on the old dependencies (R27-scripts-b-L1-01 review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_NPM_FAIL_ON: '--prefix custom/control-center run preflight' } });
+    assert.equal(r.status, 3, r.out);
+    const ci = r.out.indexOf('The Control Center was running, so its dependencies were not reinstalled');
+    const preflight = r.out.indexOf('The Control Center preflight failed; run:');
+    assert.ok(ci !== -1 && preflight !== -1 && ci < preflight, r.out);
+  } finally {
+    child.kill('SIGKILL');
+  }
 });
 
 test('a launchd install that fails (other than a job running) is a pending action with the retry command', () => {
