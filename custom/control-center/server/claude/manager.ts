@@ -1147,7 +1147,8 @@ export class SessionManager {
     let reason = outcome.reason;
     const num = meta.reportNum;
     if (num !== null && outcome.status !== 'awaiting_user') {
-      const used = newReports.some((x) => x.num === num);
+      // An earlier turn's credited report holds the number as well as this turn's own new one.
+      const used = newReports.some((x) => x.num === num) || meta.creditedReport?.num === num;
       // A report holding the number means no other reservation can have claimed it; otherwise the stale GC may have, and
       // the sentinel now there is someone else's. One already gone has nothing to protect: its release is a no-op.
       const own = used ? null : this.reservationOwnership(meta, num);
