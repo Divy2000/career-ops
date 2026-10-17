@@ -117,9 +117,10 @@ export class SessionStore {
   }
 
   create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null; policyBatch?: string | null; forkPending?: boolean }): SessionMeta {
+    const id = this.claimNewDir();
     const now = monotonicIso();
     const meta: SessionMeta = {
-      id: newId(),
+      id,
       claudeSessionId: input.claudeSessionId ?? crypto.randomUUID(),
       mode: input.mode,
       policyClass: input.policyClass,
@@ -140,9 +141,23 @@ export class SessionStore {
       policyVersion: SESSION_POLICY_VERSION,
       conversationStarted: false,
     };
-    fs.mkdirSync(this.dirOf(meta.id), { recursive: true });
     this.write(meta);
     return meta;
+  }
+
+  /** A fresh id whose folder this call created: one drawn twice (same second, same 24 bits) is drawn again, never shared. */
+  private claimNewDir(): string {
+    fs.mkdirSync(sessionsDir(this.dataRoot), { recursive: true });
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const id = newId();
+      try {
+        fs.mkdirSync(this.dirOf(id));
+        return id;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+    }
+    throw new Error(`could not create a new session folder under ${sessionsDir(this.dataRoot)}: every id drawn was taken`);
   }
 
   /** Fork: a new session id that resumes the same Claude uuid (`--resume <uuid> --fork-session`), and what it delivered. */
