@@ -1865,6 +1865,27 @@ test('given its npm ci was skipped for an unreadable lock that is gone by the en
   assert.doesNotMatch(r.out, /was running/);
 });
 
+test('given its npm ci was skipped for an unreadable lock and a Control Center holds a readable lock by the end, the pending action says it is running now, not that it was (R27 merge review)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.symlinkSync(path.join(D, 'data', 'control-center', 'nowhere'), lock);
+  // The doctor step replaces the dangling link with a live Control Center's lock.
+  const live = path.join(w.T, 'live.lock');
+  fs.writeFileSync(live, JSON.stringify({ pid: child.pid, start: null, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_COPY_FROM: live, FAKE_DOCTOR_COPY_TO: path.join(D, 'data', 'control-center', 'nowhere') } });
+    assert.match(r.out, /Control Center lock .* cannot be read; leaving its dependencies as they are/, 'the npm ci was skipped for the unreadable lock');
+    assert.equal(r.status, 3, r.out);
+    assert.match(r.out, /\d+\. The Control Center lock could not be read when its dependencies were due, and a Control Center is running now: stop it, run npm --prefix .*custom\/control-center'? ci, then start it again/);
+    assert.doesNotMatch(r.out, /was running/);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
 test('a Control Center that stops after its npm ci was skipped gets that npm ci before the installer starts it (R18-scripts-b-review-06)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
