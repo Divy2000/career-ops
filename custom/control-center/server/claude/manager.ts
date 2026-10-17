@@ -355,7 +355,7 @@ export function turnClaimGone(file: string, text: string, startOf: (pid: number)
   } catch {
     return unreadableClaimGone(file);
   }
-  if (!Number.isInteger(holder.pid) || typeof holder.at !== 'number') return unreadableClaimGone(file);
+  if (!Number.isInteger(holder.pid) || (holder.pid as number) <= 0 || typeof holder.at !== 'number') return unreadableClaimGone(file);
   const start = startOf(holder.pid as number);
   if (start === null) return true;
   // A holder that runs but whose start ps cannot tell is held: freeing a live one would start a second paid turn.

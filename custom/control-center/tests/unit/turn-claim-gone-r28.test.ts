@@ -23,4 +23,9 @@ describe('turnClaimGone', () => {
     for (const start of [null, 'unknown']) expect(turnClaimGone(file, JSON.stringify({ pid: process.pid, start, at: Date.now() - 60 * 60_000 }), () => 5), String(start)).toBe(false);
     expect(turnClaimGone(file, JSON.stringify({ pid: process.pid, start: null, at: Date.now() }), () => null)).toBe(true);
   });
+
+  it('given a claim naming no real process (pid 0 or below), when checked once it is old, then it reads as gone', () => {
+    const file = path.join(tempDir('cc-claim-badpid-'), 'turn.claim');
+    for (const pid of [0, -1]) expect(turnClaimGone(file, JSON.stringify({ pid, start: null, at: 0 }), () => 'unknown'), String(pid)).toBe(true);
+  });
 });
