@@ -180,6 +180,14 @@ function prepare(name, opts, sessionId) {
 // Production starts the server from a plain shell: no nested-session or provider variables reach the CLI.
 // The CLI calls still running, which a SIGINT or SIGTERM stops before the cleanup.
 const running = new Set();
+// Each call leads its own process group, so its hooks and Bash-tool commands die with it.
+function killCall(child) {
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
+}
 const BASE_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
 
 function runClaude(name, opts) {
@@ -207,7 +215,7 @@ function runClaude(name, opts) {
     ...(opts.configDir ? { CLAUDE_CONFIG_DIR: opts.configDir } : {}),
   };
   return new Promise((resolve) => {
-    const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     running.add(child);
     child.on('close', () => running.delete(child));
     let stdout = '';
@@ -215,7 +223,7 @@ function runClaude(name, opts) {
     // On EMFILE/ENFILE Node reports the spawn failure before it creates the pipes, so they can be null.
     child.stdout?.on('data', (d) => (stdout += d));
     child.stderr?.on('data', (d) => (stderr += d));
-    const timer = setTimeout(() => child.kill('SIGKILL'), 300_000);
+    const timer = setTimeout(() => killCall(child), 300_000);
     let settled = false;
     // A spawn failure (ENOENT, EAGAIN, EMFILE) emits 'error'; unheard it would crash the probe past its cleanup.
     // An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' still settles that case.
@@ -566,13 +574,14 @@ function cleanup() {
 // The calls are killed outright so none writes a transcript after cleanTranscripts has run.
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
   process.on(signal, () => {
-    for (const child of running) child.kill('SIGKILL');
+    for (const child of running) killCall(child);
     console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);
     try {
       cleanup();
-    } finally {
-      process.exit(code);
+    } catch (err) {
+      console.error(redact(`cleanup failed: ${err?.message ?? err}\nremove by hand whichever remain: ${[HOME_DIR, CONFIG_FILE, OTHER_PROJECT, T].join(' ')}`));
     }
+    process.exit(code);
   });
 }
 try {

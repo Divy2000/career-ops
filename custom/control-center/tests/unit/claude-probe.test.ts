@@ -169,8 +169,9 @@ syncBuiltinESMExports();
     it(`on ${signal} mid-run stops the running CLI calls, removes every canary and the temp layout, and exits ${signal === 'SIGINT' ? 130 : 143} (R28-supervisor-L1-01)`, async () => {
       const box = sandbox();
       const claude = path.join(box.bin, 'claude');
-      // Answers --version; every case call records its pid and hangs, as a real call does for minutes.
-      fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\necho $$ > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+      // Answers --version; every case call starts a child of its own (a hook, a Bash-tool command), records both pids
+      // and hangs, as a real call does for minutes.
+      fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nsleep 60 &\n: > "${box.calls}/$!"\n: > "${box.calls}/$$"\nwait\n`, { mode: 0o755 });
       const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
         env: { ...process.env, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -200,4 +201,38 @@ syncBuiltinESMExports();
       expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
     }, 40_000);
   }
+
+  it('says which canaries may remain when the cleanup after a signal fails (R28-supervisor-L1-01 review)', async () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const preload = path.join(box.root, 'rm-fails.mjs');
+    fs.writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRm = fs.rmSync;
+fs.rmSync = (target, ...rest) => {
+  if (String(target).includes('.cc-probe-')) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+  return realRm(target, ...rest);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
+      env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    child.kill('SIGINT');
+    expect(await exited, stderr).toBe(130);
+    expect(stderr).toMatch(/cleanup failed: .*EBUSY/);
+    expect(stderr).toContain(path.join(box.home, '.cc-probe-'));
+    expect(stderr).not.toContain(FAKE_TOKEN);
+    fs.rmSync(box.home, { recursive: true, force: true });
+  }, 40_000);
 });
