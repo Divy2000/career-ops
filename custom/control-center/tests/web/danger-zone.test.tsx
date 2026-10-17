@@ -126,6 +126,16 @@ describe('Danger zone delete', () => {
       await act(async () => qc.setQueryData(['tracker', 'row', '4'], { row: { ...initech } }));
       expect(button('Confirm delete #4')).toBeDefined();
     });
+
+    it('given the page was opened as /tracker/04, when the delete is confirmed, then it still names the row the page shows', async () => {
+      qc.removeQueries({ queryKey: ['tracker', 'row', '4'] });
+      await act(async () => qc.setQueryData(['tracker', 'row', '04'], { row: initech }));
+      await click('Preview delete (dry run)');
+      await click('Confirm delete #4');
+      expect(posts[1]).toEqual({ n: 4, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 });
+      // The page's own row query is dropped too, so it does not refetch into a 404.
+      expect(qc.getQueryState(['tracker', 'row', '04'])).toBeUndefined();
+    });
   });
 
   it('a failed delete stays on the page and says why', async () => {

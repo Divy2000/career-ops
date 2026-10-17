@@ -15,10 +15,12 @@ export function DangerZone({ n }: { n: number }) {
   const router = useRouter();
   // The row the page shows under n. A number a delete frees can be reused by a later merge, so a preview belongs to the
   // row it was taken for and the confirm names that row for the server to check. Read from the page's cache without an
-  // observer of its own, which would rebuild the row query the delete removes.
+  // observer of its own, which would rebuild the row query the delete removes. The page keys it by its URL's spelling
+  // of n (/tracker/04 is row 4), so it is found by the row it holds.
+  const rowQueries = () => qc.getQueriesData<ApplicationDetail>({ queryKey: ['tracker', 'row'] }).filter(([key, data]) => key.length === 3 && (data?.row?.num === n || key[2] === String(n)));
   const shown = useSyncExternalStore(
     (onChange) => qc.getQueryCache().subscribe(onChange),
-    () => qc.getQueryData<ApplicationDetail>(['tracker', 'row', String(n)])?.row,
+    () => rowQueries().find(([, data]) => data?.row?.num === n)?.[1]?.row,
   );
   const identity: RowIdentity | null = shown ? { company: shown.company, role: shown.role, report: shown.report } : null;
   const [taken, setPreview] = useState<{ text: string; of: RowIdentity | null } | null>(null);
@@ -43,7 +45,7 @@ export function DangerZone({ n }: { n: number }) {
       else {
         // The row is gone: its own queries would refetch into a 404 and hold the page on their retries. Drop them,
         // leave, then refresh the tracker lists.
-        qc.removeQueries({ queryKey: ['tracker', 'row', String(n)] });
+        for (const [key] of rowQueries()) qc.removeQueries({ queryKey: key, exact: true });
         qc.removeQueries({ queryKey: ['tracker', 'documents', n] });
         if (router.state.location.pathname === page) await navigate({ to: '/tracker' });
         await qc.invalidateQueries({ queryKey: ['tracker'] });

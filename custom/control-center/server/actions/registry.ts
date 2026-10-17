@@ -263,6 +263,8 @@ export const ACTIONS: ActionDef[] = [
       // tracker.mjs deletes every row numbered n, so each of them must be the previewed one.
       const other = rows.find((r) => !matches(r));
       if (!other) return null;
+      // The page previews one row, so a number shared with a matching row stays refused however often it is previewed.
+      if (rows.some(matches)) return { status: 409, error: `Row #${p.n} numbers more than one row (also ${other.company}, ${other.role}), and deleting it would remove them all. Renumber the duplicate in applications.md (or run Deduplicate tracker) first.` };
       return { status: 409, error: `Row #${p.n} now holds ${other.company} (${other.role}), not only the row you previewed. Preview the delete again.` };
     },
     build: (p, ctx) => node(ctx, 'tracker', ['delete', '--num', String(p.n), ...flag(p.dryRun, '--dry-run')]),

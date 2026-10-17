@@ -448,6 +448,9 @@ describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
   it('refuses when the number holds another row besides the previewed one', async () => {
     const r = await confirmDelete({ n: 20, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 });
     expect(r.statusCode, r.body).toBe(409);
+    // A fresh preview names the same one row and is refused again, so the refusal does not send the user back to it.
+    expect(r.json().error).toMatch(/#20 numbers more than one row/);
+    expect(r.json().error).not.toMatch(/Preview the delete again/);
     expect(tracker()).toContain('| 20 | 2026-10-01 | Hooli |');
   });
 
