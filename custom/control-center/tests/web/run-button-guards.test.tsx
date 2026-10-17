@@ -27,6 +27,8 @@ function json(body: unknown) {
 
 beforeEach(() => {
   posts = [];
+  // Each test is a fresh tab: a start left in flight by an earlier test (its POST never answers) is still marked.
+  sessionStorage.clear();
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
   vi.stubGlobal(
     'fetch',

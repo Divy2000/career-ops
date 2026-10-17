@@ -34,6 +34,8 @@ const meta = { id: 'scan.network', label: 'Network scan', cost: 'network', confi
 let host: HTMLElement;
 let root: Root;
 let n = 0;
+/** While set, POST /api/actions/scan.network waits for it, so a test can leave the tab while the start is in flight. */
+let startGate: Promise<void> | null = null;
 
 async function mount() {
   const { NetworkScan } = await import('@web/features/discover/DiscoverPage');
@@ -45,12 +47,14 @@ beforeEach(async () => {
   FakeEventSource.all = [];
   sessionStorage.clear();
   n = 0;
+  startGate = null;
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/actions/scan.network' && init?.method === 'POST') {
         n += 1;
+        if (startGate) await startGate;
         return new Response(JSON.stringify({ runId: `r${n}` }), { status: 202, headers: { 'content-type': 'application/json' } });
       }
       return new Response(JSON.stringify(url === '/api/actions' ? [meta] : {}), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -110,5 +114,29 @@ describe('Network scan: a running scan blocks a second one', () => {
     const stream = await startScan();
     await act(async () => stream.emit('run.done', { status: 'done' }));
     await until(() => (runButton()!.disabled ? undefined : true), 'Run network scan to be enabled after run.done');
+  });
+
+  it('Given a sweep still starting, When the tab is left and comes back, Then Run network scan stays off and the results follow the run once it starts (R30-feat-a-L1-01)', async () => {
+    let release!: () => void;
+    startGate = new Promise((r) => (release = r));
+    const b = await until(() => { const found = runButton(); return found && !found.disabled ? found : undefined; }, 'Run network scan to be ready');
+    const roles = host.querySelector<HTMLInputElement>('[aria-label="Roles (comma separated)"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(roles, 'Robotics engineer');
+      roles.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => b.click());
+    await act(async () => root.unmount());
+    await mount();
+    await until(() => ((fetch as unknown as { mock: { calls: Array<[string]> } }).mock.calls.filter(([u]) => u === '/api/actions').length >= 2 ? true : undefined), 'the actions list after coming back');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(runButton()!.disabled).toBe(true);
+    await submitForm();
+    expect(posts()).toBe(1);
+    await act(async () => release());
+    await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && !s.closed), 'the run stream of the start that answered');
+    expect(runButton()!.disabled).toBe(true);
+    expect(posts()).toBe(1);
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Roles (comma separated)"]')!.value).toBe('Robotics engineer');
   });
 });

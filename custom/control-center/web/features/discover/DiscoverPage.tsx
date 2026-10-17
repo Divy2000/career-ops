@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWhatsNew } from '../../lib/queries';
@@ -10,7 +10,7 @@ import { AiSearchTab } from './AiSearchTab';
 import { addNote } from './addNote';
 import { PostingLink } from './PostingLink';
 import { ModeLauncher } from '../../components/ModeLauncher';
-import { lastSession } from '../../lib/lastSession';
+import { lastSession, START_REPORT_WINDOW_MS, subscribeSession } from '../../lib/lastSession';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
 import { postingUrl } from '@shared/posting-url';
@@ -106,36 +106,70 @@ export function DiscoverPage() {
   );
 }
 
+/**
+ * The run a scan button started, remembered under `key` (this browser tab), so switching tabs and coming back follows the
+ * same run. A start is marked while its POST is in flight and every mount hears the store, so a tab mounted mid-start
+ * keeps its button off and picks up the run once the start answers, instead of offering a second scan.
+ */
+function useRememberedRun(key: string) {
+  const store = useMemo(() => lastSession(key), [key]);
+  const [runId, setRunIdState] = useState<string | null>(store.read);
+  const [starting, setStarting] = useState(store.starting);
+  useEffect(() => {
+    const sync = () => {
+      setRunIdState(store.read());
+      setStarting(store.starting());
+    };
+    // A start that answered between the first render and this subscription is picked up here.
+    sync();
+    return subscribeSession(key, sync);
+  }, [key, store]);
+  // A mark left by a page that reloaded mid-start has no answer to clear it: it is cleared after the window, so the
+  // button comes back.
+  useEffect(() => {
+    if (!starting) return;
+    const t = setTimeout(() => store.setStarting(false), START_REPORT_WINDOW_MS);
+    return () => clearTimeout(t);
+  }, [starting, store]);
+  /** Sends the start through `send`, which answers the new run id or null when no run started. */
+  const start = (send: () => Promise<string | null>): Promise<string | null> => {
+    store.setStarting(true);
+    return send().then(
+      (rid) => {
+        if (rid) store.write(rid);
+        store.setStarting(false);
+        return rid;
+      },
+      (err: unknown) => {
+        store.setStarting(false);
+        throw err;
+      },
+    );
+  };
+  const forget = useCallback(() => store.write(null), [store]);
+  return { runId, starting, start, forget };
+}
+
 export function ScriptTab({ id, intro, params }: { id: string; intro: string; params: Record<string, unknown> }) {
   const actions = useActions();
   const { run, busy, message } = useRunAction();
-  // The running run's id is remembered per action id (this browser tab), so switching tabs and coming back follows the
-  // same run instead of showing an idle button and letting a second scan be queued behind the first.
-  const store = useMemo(() => lastSession(`cc.discover.script.${id}`), [id]);
-  const [runId, setRunIdState] = useState<string | null>(store.read);
-  const setRunId = (rid: string) => {
-    store.write(rid);
-    setRunIdState(rid);
-  };
+  // The running run's id is remembered per action id, so a second scan cannot be queued behind the first.
+  const { runId, starting, start, forget } = useRememberedRun(`cc.discover.script.${id}`);
   const { lines, status } = useRunLines(runId);
   // Nothing to follow: the log goes, and the run is not re-attached next time.
   const gone = status === RUN_GONE;
   useEffect(() => {
-    if (gone) store.write(null);
-  }, [gone, store]);
+    if (gone) forget();
+  }, [gone, forget]);
   return (
     <div className="card stack">
       <p className="muted">{intro}</p>
       <div className="row gap">
         <ActionButton
           meta={actions.data?.find((a) => a.id === id)}
-          disabled={busy !== null || (runId !== null && status === null)}
+          disabled={busy !== null || starting || (runId !== null && status === null)}
           params={params}
-          onRun={(p) =>
-            run(id, p).then((out) => {
-              if (out && 'runId' in out) setRunId(out.runId);
-            })
-          }
+          onRun={(p) => start(() => run(id, p).then((out) => (out && 'runId' in out ? out.runId : null)))}
         />
       </div>
       <Message message={message} />
@@ -227,7 +261,8 @@ export function scanDegradations(summary: ScanSummary): { notes: string[]; noDat
 }
 
 // The last network scan this browser tab ran: leaving the tab or the page and coming back follows it again.
-const networkRun = lastSession('cc.discover.networkScan');
+const NETWORK_RUN_KEY = 'cc.discover.networkScan';
+const networkRun = lastSession(NETWORK_RUN_KEY);
 
 const SINCE_DAYS = [1, 3, 7, 14, 30] as const;
 const DEPTHS = [50, 100, 200, 500] as const;
@@ -294,15 +329,18 @@ export function NetworkScan() {
   const [sinceDays, setSinceDays] = useState(initial.sinceDays);
   const [ats, setAts] = useState(initial.ats);
   const [limit, setLimit] = useState(initial.limit);
-  const [runId, setRunIdState] = useState<string | null>(networkRun.read);
-  const setRunId = (id: string, filters: NetworkFilters) => {
-    writeRunFilters(filters);
-    networkRun.write(id);
-    setRunIdState(id);
-  };
+  const { runId, starting, start: startRun } = useRememberedRun(NETWORK_RUN_KEY);
   // A run remembered without its filters (an older page started it) takes them from the run itself, unless the form
   // was edited or submitted first.
   const edited = useRef(false);
+  const showFilters = (f: NetworkFilters) => {
+    setRoles(f.roles);
+    setExclude(f.exclude);
+    setLocations(f.locations);
+    setSinceDays(f.sinceDays);
+    setAts(f.ats);
+    setLimit(f.limit);
+  };
   const [initialRunId] = useState(runId);
   useEffect(() => {
     if (stored || !initialRunId) return;
@@ -312,12 +350,7 @@ export function NetworkScan() {
         const f = filtersFromRunParams(r.meta?.params);
         if (disposed || edited.current || !f) return;
         writeRunFilters(f);
-        setRoles(f.roles);
-        setExclude(f.exclude);
-        setLocations(f.locations);
-        setSinceDays(f.sinceDays);
-        setAts(f.ats);
-        setLimit(f.limit);
+        showFilters(f);
       },
       () => {
         // the run's own stream reports a run the server no longer has; the form keeps its defaults
@@ -327,6 +360,14 @@ export function NetworkScan() {
       disposed = true;
     };
   }, [stored, initialRunId]);
+  // A run another mount started (its start answered after this tab came back) shows the filters it was started with.
+  const shownRun = useRef(runId);
+  useEffect(() => {
+    if (runId === shownRun.current) return;
+    shownRun.current = runId;
+    const f = runId && !edited.current ? readRunFilters() : null;
+    if (f) showFilters(f);
+  }, [runId]);
   const [filter, setFilter] = useState('');
   const { lines, status } = useRunLines(runId);
   // Nothing to follow: the results card goes, and the run is not re-attached next time.
@@ -338,16 +379,20 @@ export function NetworkScan() {
   }, [gone]);
   const summary = useMemo(() => parseScanOutput(lines), [lines]);
   // The remembered run is still going: a second sweep would replace it on the page while it keeps running.
-  const running = runId !== null && status === null;
+  const running = starting || (runId !== null && status === null);
   const split = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
   const start = () => {
     if (running) return;
     // The form now belongs to this run: a late answer about the older run must not overwrite it.
     edited.current = true;
     const filters: NetworkFilters = { roles, exclude, locations, sinceDays, ats, limit };
-    void run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
-      if (out && 'runId' in out) setRunId(out.runId, filters);
-    });
+    void startRun(() =>
+      run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
+        if (!out || !('runId' in out)) return null;
+        writeRunFilters(filters);
+        return out.runId;
+      }),
+    );
   };
   // One add at a time: a second click before the first answers would send the same postings and relabel them.
   const [adding, setAdding] = useState(false);
