@@ -33,6 +33,8 @@ let startGate: Promise<void> | null;
 let turnGate: Promise<void> | null;
 /** Set to refuse the Fill turn as the server does when the draft runs a turn started elsewhere. */
 let turnRefused: boolean;
+/** The tracker.setStatus actions the page sent. */
+let statusPosts: Array<Record<string, unknown>>;
 let root: Root;
 let router: AnyRouter;
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -40,11 +42,11 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
 const DOCS: ApplyDocuments = { pdfs: ['output/cv-acme.pdf'], covers: [], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: null };
 const ANSWERS = { fields: [{ id: 'name', label: 'Full name', type: 'text', required: true, value: 'Jane Smith', needsConfirmation: false }, { id: 'why', label: 'Why Acme', type: 'textarea', required: false, value: 'Robots.', needsConfirmation: true }] };
 
-async function openApply(n: string | null = '12') {
+async function openApply(n: string | null = '12', status?: string) {
   const { ApplyBody } = await import('@web/features/apply/ApplyPage');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
-  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: 'Acme Robotics', postingUrl: 'https://jobs.example.com/acme/1' } : { n: null, company: null, postingUrl: '' }) });
+  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: 'Acme Robotics', postingUrl: 'https://jobs.example.com/acme/1', status } : { n: null, company: null, postingUrl: '' }) });
   const elsewhere = createRoute({ getParentRoute: () => rootRoute, path: '/elsewhere', component: () => createElement('p', null, 'Elsewhere page') });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => createElement('p', null, 'Session page') });
   router = createRouter({ routeTree: rootRoute.addChildren([apply, elsewhere, session]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
@@ -81,6 +83,7 @@ beforeEach(() => {
   startGate = null;
   turnGate = null;
   turnRefused = false;
+  statusPosts = [];
   sessionStorage.clear();
   vi.stubGlobal(
     'fetch',
@@ -99,6 +102,10 @@ beforeEach(() => {
       }
       if (url === '/api/sessions/s-pdf-12') return json({ meta: { ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: pdfStatus, target: { type: 'app', value: '12' } }, events: [{ seq: 1, event: { type: 'status', status: pdfStatus, reason: null } }] });
       if (url === '/api/sessions/s-apply-url') return json({ meta: URL_SESSION, events: [] });
+      if (url === '/api/actions/tracker.setStatus' && init?.method === 'POST') {
+        statusPosts.push((JSON.parse(String(init.body)) as { params: Record<string, unknown> }).params);
+        return json({ result: 'updated' });
+      }
       return new Response(JSON.stringify({ error: 'not stubbed' }), { status: 404, headers: { 'content-type': 'application/json' } });
     }),
   );
@@ -335,6 +342,18 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(JSON.parse(sessionStorage.getItem('cc.apply.docs.s-apply-fork')!)).toEqual({ pdf: 'output/cv-acme-short.pdf', cover: '' });
     expect(host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')!.value).toBe('output/cv-acme-short.pdf');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('');
+  });
+
+  it('Given a re-attached draft started from a typed apply link, When a reply forks it, Then the fork keeps that link and prefill uses it (R30-feat-a-X-01)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.typedUrl.s-apply-12', 'https://boards.greenhouse.io/acme/jobs/123');
+    await openApply();
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!.value).toBe('https://boards.greenhouse.io/acme/jobs/123');
+    await act(async () => applyPanel()!.onSessionId!('s-apply-fork'));
+
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-fork' });
+    expect(sessionStorage.getItem('cc.apply.typedUrl.s-apply-fork')).toBe('https://boards.greenhouse.io/acme/jobs/123');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!.value).toBe('https://boards.greenhouse.io/acme/jobs/123');
   });
 
   it('Given a CV PDF picked while the draft is still starting, When the page comes back, Then that pick is kept (R29-feat-a-L1-02)', async () => {
@@ -727,5 +746,42 @@ describe('Apply starts over and follows the sessions it started', () => {
     sessionStorage.setItem('cc.pdf.12', 's-pdf-12');
     await openApply();
     await until(() => generate() && !generate()!.disabled, 'Generate CV PDF enabled');
+  });
+});
+
+describe('Mark applied does not roll back a row that is further along (R30-feat-a-L2-01)', () => {
+  const markApplied = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Mark applied');
+
+  it('Given an Evaluated row, When Mark applied is clicked, Then the row is set to Applied without asking', async () => {
+    await openApply('12', 'Evaluated');
+    await act(async () => markApplied()!.click());
+    await until(() => statusPosts.length > 0, 'the status action');
+    expect(dialog()).toBeNull();
+    expect(statusPosts).toEqual([{ row: 12, state: 'Applied' }]);
+  });
+
+  it('Given a row already Applied, When the page opens, Then Mark applied is not offered', async () => {
+    await openApply('12', 'Applied');
+    expect(markApplied()).toBeUndefined();
+  });
+
+  it('Given an Interview row, When Mark applied is clicked and the confirm naming Interview is cancelled, Then the status is left alone', async () => {
+    await openApply('12', 'Interview');
+    await act(async () => markApplied()!.click());
+    await until(() => dialog(), 'the confirm');
+    expect(dialog()!.textContent).toContain('Interview');
+    await act(async () => [...dialog()!.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Cancel')!.click());
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(statusPosts).toEqual([]);
+  });
+
+  it('Given an Offer row, When Mark applied is clicked and the confirm is accepted, Then the row is set to Applied', async () => {
+    await openApply('12', 'Offer');
+    await act(async () => markApplied()!.click());
+    await until(() => dialog(), 'the confirm');
+    expect(dialog()!.textContent).toContain('Offer');
+    await act(async () => [...dialog()!.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent !== 'Cancel')!.click());
+    await until(() => statusPosts.length > 0, 'the status action');
+    expect(statusPosts).toEqual([{ row: 12, state: 'Applied' }]);
   });
 });

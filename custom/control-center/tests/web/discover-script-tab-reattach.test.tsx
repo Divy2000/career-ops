@@ -35,6 +35,10 @@ class FakeEventSource {
 const STORE_KEY = 'cc.discover.script.scan.portals';
 /** Whether the server still has run r1: GET /api/runs/r1 answers 404 once it does not. */
 let runGone = false;
+/** While set, POST /api/actions/scan.portals waits for it, so a test can leave the tab while the start is in flight. */
+let startGate: Promise<void> | null = null;
+/** Set to refuse POST /api/actions/scan.portals. */
+let failStart = false;
 
 let host: HTMLElement;
 let root: Root;
@@ -56,10 +60,14 @@ beforeEach(async () => {
   FakeEventSource.all = [];
   sessionStorage.clear();
   runGone = false;
+  startGate = null;
+  failStart = false;
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
+      if (url === '/api/actions/scan.portals' && startGate) await startGate;
+      if (url === '/api/actions/scan.portals' && failStart) return new Response(JSON.stringify({ error: 'server restarting' }), { status: 503, headers: { 'content-type': 'application/json' } });
       if (url === '/api/runs/r1' && runGone) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
       const body = url === '/api/actions/scan.portals' ? { runId: 'r1' } : url === '/api/actions' ? ACTIONS : {};
       return new Response(JSON.stringify(body), { status: url === '/api/actions/scan.portals' ? 202 : 200, headers: { 'content-type': 'application/json' } });
@@ -134,5 +142,35 @@ describe('Discover > Portal scan re-attaches its run', () => {
     const again = await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && s !== stream && !s.closed), 'the run stream after coming back');
     await act(async () => again!.emit('run.done', { status: 'done' }));
     await until(() => (scanButton()!.disabled ? undefined : true), 'Scan portals to be enabled after the replayed run.done');
+  });
+
+  it('Given a scan still starting, When the tab is left and comes back, Then Scan portals stays off and the log follows the run once it starts (R30-feat-a-L1-01)', async () => {
+    let release!: () => void;
+    startGate = new Promise((r) => (release = r));
+    const b = await until(() => scanButton() ?? undefined, 'the Scan portals button');
+    await act(async () => b!.click());
+    await act(async () => root.unmount());
+    await mount();
+    const again = await until(() => scanButton() ?? undefined, 'the Scan portals button after coming back');
+    expect(again!.disabled).toBe(true);
+    await act(async () => again!.click());
+    await act(async () => release());
+    await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events' && !s.closed), 'the run stream of the start that answered');
+    expect(scanButton()!.disabled).toBe(true);
+    const posts = (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/actions/scan.portals' && i?.method === 'POST').length;
+    expect(posts).toBe(1);
+  });
+
+  it('Given a scan start that fails after the tab was left, When the tab is back, Then Scan portals is offered again (R30-feat-a-L1-01)', async () => {
+    let release!: () => void;
+    startGate = new Promise((r) => (release = r));
+    failStart = true;
+    const b = await until(() => scanButton() ?? undefined, 'the Scan portals button');
+    await act(async () => b!.click());
+    await act(async () => root.unmount());
+    await mount();
+    expect((await until(() => scanButton() ?? undefined, 'the Scan portals button after coming back'))!.disabled).toBe(true);
+    await act(async () => release());
+    await until(() => (scanButton()!.disabled ? undefined : true), 'Scan portals to be offered again');
   });
 });
