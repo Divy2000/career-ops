@@ -87,12 +87,12 @@ export function daysBetween(fromIso: string, toIso: string): number {
 }
 
 export function parseCompanyFile(md: string, slug: string, filePath: string, readCheckedAt: (md: string) => string | null): CompanyFile {
-  const field = (key: string) => md.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1]?.trim() ?? null;
+  const field = (key: string) => md.match(new RegExp(`^${key}:[ \\t]*(\\S.*)$`, 'm'))?.[1]?.trim() ?? null;
   const seen = field('policy_changes_seen');
   return {
     slug,
     // The check's title is "# <Company> sponsorship check" (custom/install/templates/_custom-sponsorship.md).
-    name: md.match(/^#\s+(.+)$/m)?.[1]?.trim().replace(/\s+sponsorship check$/i, '') || slug,
+    name: md.match(/^#[ \t]+(\S.*)$/m)?.[1]?.trim().replace(/\s+sponsorship check$/i, '') || slug,
     checkedAt: readCheckedAt(md),
     verdict: field('verdict') ?? field('decision'),
     dolTier: field('dol_tier'),
