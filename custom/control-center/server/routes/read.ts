@@ -108,7 +108,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const companyFile = (slug ? overview.companies.find((c) => c.slug === slug) : undefined) ?? overview.companies.find((c) => sameCompany(c.name)) ?? null;
     // An alert's slug column is the same companySlug; a session may write the legal name in its company column.
     const alert = (slug ? overview.alerts.latest.find((a) => a.slug === slug) : undefined) ?? overview.alerts.latest.find((a) => sameCompany(String(a.company ?? ''))) ?? null;
-    return { row, report, timeline: { statusLog, followups, pin }, companyHistory, sponsorship: { companyFile, alert, error: overview.alertsError } };
+    return { row, report, timeline: { statusLog, followups, pin }, companyHistory, sponsorship: { companyFile, alert, error: overview.alertsError, companiesError: overview.companiesError } };
   });
 
   app.get('/api/pipeline', async () => readPipeline(cfg.dataRoot));
@@ -129,7 +129,7 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     if (!/^[a-z0-9][a-z0-9-]*$/.test(req.params.slug)) return reply.code(400).send({ error: 'bad slug' });
     const overview = await readImmigrationOverview(cfg.codeRoot, cfg.dataRoot);
     const company = overview.companies.find((c) => c.slug === req.params.slug);
-    if (!company) return reply.code(404).send({ error: 'no company file' });
+    if (!company) return reply.code(404).send({ error: 'no company file', companiesError: overview.companiesError });
     const text = readText(company.path);
     // freshness.mjs finds the file by companySlug of the name it is given. The heading may carry a legal name whose slug
     // names another file ("Meta Platforms, Inc." in meta.md), so it gets the heading only when that names this file,

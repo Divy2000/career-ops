@@ -66,6 +66,25 @@ describe('read endpoints', () => {
     }
   });
 
+  it('an unreadable company file reaches the Application page and the company route as companiesError, not as a missing company (R28-doma-rev-01)', async () => {
+    const own = await makeTestApp();
+    try {
+      const companies = path.join(own.cfg.dataRoot, 'data', 'immigration', 'companies');
+      // A folder named like a company file cannot be read as one, so this company's check is unknown rather than absent.
+      fs.rmSync(path.join(companies, 'acme-robotics.md'));
+      fs.mkdirSync(path.join(companies, 'acme-robotics.md'));
+      const call = (url: string) => own.app.inject({ method: 'GET', url, headers: own.authed });
+      const app = await call('/api/tracker/1');
+      expect(app.statusCode, app.body).toBe(200);
+      expect(app.json().sponsorship).toMatchObject({ companyFile: null, error: null, companiesError: expect.stringMatching(/acme-robotics\.md/) });
+      const company = await call('/api/immigration/companies/acme-robotics');
+      expect(company.statusCode).toBe(404);
+      expect(company.json()).toMatchObject({ error: 'no company file', companiesError: expect.stringMatching(/acme-robotics\.md/) });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n finds the company alert by its slug when the alert names the DOL legal name (SW2-tests-07 review)', async () => {
     const own = await makeTestApp();
     try {
@@ -115,7 +134,7 @@ describe('read endpoints', () => {
       const body = res.json();
       expect(body.row.company).toBe('?');
       expect(body.companyHistory).toEqual([]);
-      expect(body.sponsorship).toEqual({ companyFile: null, alert: null, error: null });
+      expect(body.sponsorship).toEqual({ companyFile: null, alert: null, error: null, companiesError: null });
     } finally {
       await own.close();
     }
