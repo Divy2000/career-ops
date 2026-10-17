@@ -117,9 +117,10 @@ export class SessionStore {
   }
 
   create(input: { mode: string; policyClass: PolicyClass; target: SessionMeta['target']; model: string | null; claudeSessionId?: string; forkedFrom?: string; reportNum?: number | null; policyBatch?: string | null; forkPending?: boolean }): SessionMeta {
+    const id = this.claimNewDir();
     const now = monotonicIso();
     const meta: SessionMeta = {
-      id: newId(),
+      id,
       claudeSessionId: input.claudeSessionId ?? crypto.randomUUID(),
       mode: input.mode,
       policyClass: input.policyClass,
@@ -140,9 +141,23 @@ export class SessionStore {
       policyVersion: SESSION_POLICY_VERSION,
       conversationStarted: false,
     };
-    fs.mkdirSync(this.dirOf(meta.id), { recursive: true });
     this.write(meta);
     return meta;
+  }
+
+  /** A fresh id whose folder this call created: one drawn twice (same second, same 24 bits) is drawn again, never shared. */
+  private claimNewDir(): string {
+    fs.mkdirSync(sessionsDir(this.dataRoot), { recursive: true });
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const id = newId();
+      try {
+        fs.mkdirSync(this.dirOf(id));
+        return id;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+    }
+    throw new Error(`could not create a new session folder under ${sessionsDir(this.dataRoot)}: every id drawn was taken`);
   }
 
   /** Fork: a new session id that resumes the same Claude uuid (`--resume <uuid> --fork-session`), and what it delivered. */
@@ -308,12 +323,14 @@ export class SessionStore {
     const file = path.join(this.dirOf(id), 'events.ndjson');
     // Another server (blue/green overlap) may append to the same file: reading the tail and appending the next seq is
     // one step under a lock both hold, or both would read seq N and write N + 1.
-    return withAppendLock(`${file}.lock`, () => {
+    return withAppendLock(`${file}.lock`, (owned) => {
       const tail = this.tailOf(file);
       const seq = tail.seq + 1;
       const line = JSON.stringify({ seq, ts: new Date().toISOString(), event } satisfies StoredEvent) + '\n';
       // A line a crash tore has no newline: the event starts a line of its own instead of joining it.
       const text = tail.torn ? `\n${line}` : line;
+      // A peer that broke this lock while it stalled may have appended seq already: the tail is read again first.
+      owned();
       fs.appendFileSync(file, text);
       this.tails.set(file, { size: tail.size + Buffer.byteLength(text), seq, torn: false });
       return seq;
@@ -377,20 +394,41 @@ const APPEND_LOCK_TIMEOUT_MS = 10_000;
 /** A lock this old is left by a holder that stopped (its pid may since belong to another process). */
 const APPEND_LOCK_STALE_MS = 30_000;
 
+/** Thrown by an append that found its lock taken by another holder: the tail it read may be stale, so it is read again. */
+class AppendLockLost extends Error {}
+
 /**
  * Runs fn holding an interprocess lock file (`pid token`). The lock is created complete or not at all (a hard link of
  * a written temp file), so a reader never sees it empty; one whose holder is gone or that outlived any append is broken.
+ * A holder stalled past that age may find its lock broken: fn calls `owned` right before it writes, and one that throws
+ * AppendLockLost runs again under a fresh lock.
  */
-function withAppendLock<T>(lock: string, fn: () => T): T {
+function withAppendLock<T>(lock: string, fn: (owned: () => void) => T): T {
+  const deadline = Date.now() + APPEND_LOCK_TIMEOUT_MS;
+  for (;;) {
+    const token = acquireAppendLock(lock, deadline);
+    try {
+      return fn(() => {
+        if (readLock(lock)?.text !== token) throw new AppendLockLost();
+      });
+    } catch (err) {
+      if (!(err instanceof AppendLockLost)) throw err;
+      if (Date.now() > deadline) throw new Error(`the session events lock ${lock} was taken over by another holder while this append waited; try again`, { cause: err });
+    } finally {
+      if (readLock(lock)?.text === token) fs.rmSync(lock, { force: true });
+    }
+  }
+}
+
+function acquireAppendLock(lock: string, deadline: number): string {
   const token = `${process.pid} ${crypto.randomUUID()}`;
   const tmp = `${lock}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   fs.writeFileSync(tmp, token, { flag: 'wx' });
   try {
-    const deadline = Date.now() + APPEND_LOCK_TIMEOUT_MS;
     for (;;) {
       try {
         fs.linkSync(tmp, lock);
-        break;
+        return token;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       }
@@ -400,11 +438,6 @@ function withAppendLock<T>(lock: string, fn: () => T): T {
     }
   } finally {
     fs.rmSync(tmp, { force: true });
-  }
-  try {
-    return fn();
-  } finally {
-    if (readLock(lock)?.text === token) fs.rmSync(lock, { force: true });
   }
 }
 
