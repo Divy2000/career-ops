@@ -226,9 +226,14 @@ export class SessionManager {
     if (key === null) return null;
     const cls = evaluationClass(mode);
     for (const m of this.store.list()) {
-      if (m.id !== exceptId && evaluationClass(m.mode) === cls && LIVE_STATUSES.has(m.status) && postingKey(m.mode, m.target) === key) return m.id;
+      if (m.id !== exceptId && evaluationClass(m.mode) === cls && this.isLive(m) && postingKey(m.mode, m.target) === key) return m.id;
     }
     return null;
+  }
+
+  /** Live, or a cancelled turn still stopping (its process lives until SIGKILL) or finalizing: it may yet write its report. */
+  private isLive(m: SessionMeta): boolean {
+    return LIVE_STATUSES.has(m.status) || this.active.has(m.id);
   }
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
@@ -338,7 +343,7 @@ export class SessionManager {
     const cls = evaluationClass(input.mode);
     const key = (url: string) => `${cls}\0${postingKey(input.mode, { type: 'url', value: url })}`;
     const live = new Map<string, string>();
-    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && LIVE_STATUSES.has(m.status)) live.set(key(m.target.value), m.id);
+    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && this.isLive(m)) live.set(key(m.target.value), m.id);
     const refused: SessionMeta[] = [];
     const urls: string[] = [];
     // Two spellings of one posting in this batch (a tracking param, a trailing slash) are one evaluation: the first starts.
