@@ -18,6 +18,7 @@ const SECTION_RE = /^##\s+/;
 // An open row as parsePipeline reads one (indented or loosely spaced): `[ ]`, or `[!]` for a URL that waits for its JD
 // text, which a completed evaluation also moves (modes/pipeline.md, Workflow 2f).
 const OPEN_ITEM_RE = /^\s*-\s*\[[ !]\]\s*/;
+const STRUCK = /^~~([\s\S]*?)(?:~~|$)/;
 
 export interface EvaluatedPosting {
   /** The report number as its file name writes it ("042"). */
@@ -113,7 +114,9 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     }
     if (section === 'done') continue;
     if (!OPEN_ITEM_RE.test(lines[i]!)) continue;
-    const body = lines[i]!.replace(OPEN_ITEM_RE, '');
+    // A restored expired row keeps its strike (`~~URL | Company | Role~~ <dash> posting expired`): read inside it.
+    const rest = lines[i]!.replace(OPEN_ITEM_RE, '');
+    const body = rest.match(STRUCK)?.[1] ?? rest;
     const cell = lineUrl(body);
     if (unescapeMarkdownUrl(cell) !== target) continue;
     remove.add(i);

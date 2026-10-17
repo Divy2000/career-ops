@@ -169,6 +169,11 @@ describe('moving an evaluated posting to Processed', () => {
     }
   });
 
+  it('moves a struck-out expired row restored to Pending, with the cells inside the strike (R28-srv-dom-b-L1-01 review)', () => {
+    const r = moveToProcessed(`## Pending\n- [ ] ~~${URL} | Acme | Eng~~ \u2014 posting expired\n## Processed\n`, URL, POSTING);
+    expect(r).toEqual({ text: `## Pending\n## Processed\n\n- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌\n`, moved: true });
+  });
+
   it('keeps CRLF line endings', () => {
     const r = moveToProcessed(`## Pending\r\n- [ ] ${URL} | Acme | Eng\r\n## Processed\r\n`, URL, POSTING);
     expect(r.text).toBe(`## Pending\r\n## Processed\r\n\r\n- [x] #042 | ${URL} | Acme | Eng | 4.2/5 | PDF ❌\r\n`);
