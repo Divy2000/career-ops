@@ -40,7 +40,7 @@ const UNREADABLE_RUN_WAIT_MS = 10 * 60_000;
 /** A running turn's reservation sentinel older than this is refreshed: well inside the stale GC's four hours. */
 const RESERVATION_REFRESH_AGE_MS = 60 * 60_000;
 /** Releases or refreshes a sentinel only while it is still the session's, under the tracker lock (run as a child, never loaded here). */
-const RESERVATION_SENTINEL_SCRIPT = fileURLToPath(new URL('./reservation-sentinel.mjs', import.meta.url));
+const RESERVATION_SENTINEL_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'reservation-sentinel.mjs');
 /** A done pass whose ack failed is acknowledged again after this delay, doubling up to the cap while it keeps failing. */
 const POLICY_ACK_RETRY_MS = 60_000;
 const POLICY_ACK_RETRY_CAP_MS = 30 * 60_000;
