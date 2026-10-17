@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, narrowGrepInput, PLAYWRIGHT_TOOL_PREFIX, readUrlList, findSnapshot, snapshotKey, urlListFilesIn, writeTarget } from './guard-policy.mjs';
+import { checkBash, checkFetchUrl, checkFetchUrls, checkPlaywright, checkRead, checkSearch, httpUrlsIn, locate, narrowGrepInput, PLAYWRIGHT_TOOL_PREFIX, readUrlList, findSnapshot, snapshotKey, tokenize, urlListFilesIn, writeTarget } from './guard-policy.mjs';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -44,6 +44,46 @@ function endsTorn(file) {
   } finally {
     fs.closeSync(fd);
   }
+}
+
+// The report numbers the session holds, written by the app into the session folder (manager.ts HELD_REPORT_NUMS_FILE).
+const HELD_REPORT_NUMS_FILE = 'held-report-nums.json';
+// The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
+const RELEASE_ARG = /^(\d+)(?:-(\d+))?$/;
+const RELEASE_MAX = 50;
+// The app records a number the session reserved once the run's result reaches it (it polls the output): a release
+// right after the reservation waits for that record this long before it is refused.
+const HELD_WAIT_MS = 3000;
+
+function heldReportNums(sessionDir) {
+  try {
+    const nums = JSON.parse(fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8')).nums;
+    return new Set(Array.isArray(nums) ? nums.filter(Number.isSafeInteger) : []);
+  } catch (err) {
+    if (err.code === 'ENOENT') return new Set();
+    throw err;
+  }
+}
+
+/**
+ * reserve-report-num.mjs --release deletes the sentinels it names whoever reserved them, so a session releases only
+ * the numbers it holds: the one the app reserved for it, and the ones its own reservations printed.
+ */
+async function releaseReason(command, sessionDir) {
+  const tokens = tokenize(command);
+  if (!tokens || tokens[0] !== 'node' || tokens[1] !== 'reserve-report-num.mjs' || tokens[2] !== '--release') return null;
+  const m = (tokens[3] ?? '').match(RELEASE_ARG);
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = m[2] === undefined ? start : Number(m[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start + 1 > RELEASE_MAX) return null;
+  const nums = Array.from({ length: end - start + 1 }, (_, i) => start + i);
+  for (const deadline = Date.now() + HELD_WAIT_MS; ; await new Promise((r) => setTimeout(r, 100))) {
+    const held = heldReportNums(sessionDir);
+    if (nums.every((n) => held.has(n))) return null;
+    if (Date.now() > deadline) break;
+  }
+  return 'Bash: a session releases only the report numbers it holds (the one reserved for it, or one its own reserve-report-num.mjs run printed); every other sentinel is another evaluation\'s reservation';
 }
 
 async function main() {
@@ -119,7 +159,7 @@ async function main() {
 
   if (tool === 'Bash') {
     const command = String(input.command ?? '');
-    const reason = checkBash(command, policy, cwd);
+    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, sessionDir));
     if (reason) deny(reason);
     // URLs a script reads from a list file it was given get the same checks as its URL arguments.
     const listed = [];

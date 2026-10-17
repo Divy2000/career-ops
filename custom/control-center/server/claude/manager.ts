@@ -20,6 +20,7 @@ import type { EnvelopeKind } from './envelopes.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
+import { tokenize } from './guard-policy.mjs';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
 import { reportNumberOf } from '../domains/reports.js';
 import { markPipelineEvaluated } from '../domains/pipelineProcessed.js';
@@ -172,6 +173,54 @@ export function writeProgress(file: string, p: TurnProgress): void {
     }
     throw err;
   }
+}
+
+/**
+ * The report numbers a session holds, in its guard folder (outside every write scope): the one the app reserved for it
+ * and the ones its own reserve-report-num.mjs runs printed. reserve-report-num.mjs --release deletes whichever sentinels
+ * it names, so guard-hook.mjs lets a session release only these (the hook reads the file under the same name).
+ */
+export const HELD_REPORT_NUMS_FILE = 'held-report-nums.json';
+
+export function readHeldReportNums(sessionDir: string): number[] {
+  try {
+    const nums = (JSON.parse(fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8')) as { nums?: unknown }).nums;
+    return Array.isArray(nums) ? nums.filter((n): n is number => Number.isSafeInteger(n)) : [];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+export function recordHeldReportNums(sessionDir: string, nums: readonly number[]): void {
+  const held = readHeldReportNums(sessionDir);
+  if (nums.every((n) => held.includes(n))) return;
+  const file = path.join(sessionDir, HELD_REPORT_NUMS_FILE);
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+  try {
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify({ nums: [...new Set([...held, ...nums])].sort((a, b) => a - b) }));
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+/** Whether a Bash command is a reserve-report-num.mjs run that reserves (the script reserves unless told to help, release or gc). */
+function reservesReportNums(command: string): boolean {
+  const tokens = tokenize(command);
+  return tokens !== null && tokens[0] === 'node' && tokens[1] === 'reserve-report-num.mjs' && !['--help', '-h', '--release', '--gc'].includes(tokens[2] ?? '');
+}
+
+/** The numbers a reserve run printed: its last output line, `042` or `042-049`. */
+function printedReservation(output: string): number[] {
+  const m = output.trim().split('\n').at(-1)?.trim().match(/^(\d+)(?:-(\d+))?$/);
+  if (!m) return [];
+  const start = Number(m[1]);
+  const end = m[2] === undefined ? start : Number(m[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start >= 50) return [];
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
 }
 
 export interface ManagerDeps {
@@ -1018,6 +1067,7 @@ export class SessionManager {
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
       if (n > 1) meta = await this.reassertReservation(meta);
+      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum]);
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
@@ -1119,6 +1169,8 @@ export class SessionManager {
     let seq = 0;
     let offset = 0;
     let envelopes = 0;
+    // Bash calls of this turn that reserve report numbers, until their result shows which.
+    const reserveRuns = new Set<string>();
     const envelopeKinds: Partial<Record<EnvelopeKind, number>> = {};
     let denials = 0;
     let sawResult = false;
@@ -1152,6 +1204,11 @@ export class SessionManager {
           envelopeKinds[kind] = (envelopeKinds[kind] ?? 0) + 1;
         }
         if (ev.type === 'permission.denied') denials++;
+        if (ev.type === 'tool.use' && ev.name === 'Bash' && reservesReportNums(ev.summary)) reserveRuns.add(ev.id);
+        if (ev.type === 'tool.result' && reserveRuns.delete(ev.id) && ev.ok) {
+          const nums = printedReservation(ev.summary);
+          if (nums.length) recordHeldReportNums(this.store.guardDirOf(id), nums);
+        }
         if (ev.type === 'turn.done') {
           turnDone = ev;
           sawResult = true;
