@@ -11,10 +11,12 @@ export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
 /**
  * Button for a registry action: shows the cost badge and asks (Radix dialog) when the action declares a confirm text.
  * onRun gets `confirmed: true` once the user confirmed, which the request must carry (the server refuses otherwise).
+ * An onRun that returns its run's promise keeps the button from starting the run again until it settles.
  */
-export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>, opts: { confirmed: boolean }) => void; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
+export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>, opts: { confirmed: boolean }) => void | Promise<unknown>; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
   const confirm = useConfirm();
-  // Confirms queue, so a second click while one is asking would ask twice: it is ignored.
+  // Confirms queue, so a second click while one is asking would ask twice, and one while the run is in flight would run
+  // it twice: both are ignored.
   const asking = useRef(false);
   if (!meta) return null;
   return (
@@ -28,7 +30,9 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
         void (async () => {
           try {
             if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
-            onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
+            await onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
+          } catch (err) {
+            console.error(`${meta.id} failed:`, err);
           } finally {
             asking.current = false;
           }

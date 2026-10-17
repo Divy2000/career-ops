@@ -64,3 +64,39 @@ describe('ActionButton with a confirm text', () => {
     expect(onRun).toHaveBeenCalledWith({ dryRun: false }, { confirmed: false });
   });
 });
+
+describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () => {
+  async function renderPending() {
+    const releases: Array<(ok: boolean) => void> = [];
+    const onRun = vi.fn(() => new Promise<void>((resolve, reject) => releases.push((ok) => (ok ? resolve() : reject(new Error('refused'))))));
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun }))));
+    return { onRun, releases, button: host.querySelector('button')! };
+  }
+
+  it('given the run has not settled, then a second click does not start it again', async () => {
+    const { onRun, button } = await renderPending();
+    await press(button);
+    await press(button);
+    expect(onRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('given the run settled, then the next click starts it again', async () => {
+    const { onRun, releases, button } = await renderPending();
+    await press(button);
+    await act(async () => releases[0]!(true));
+    await press(button);
+    expect(onRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('given the run failed, then the failure is logged and the next click starts it again', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { onRun, releases, button } = await renderPending();
+    await press(button);
+    await act(async () => releases[0]!(false));
+    await settle();
+    expect(logged).toHaveBeenCalledWith('daily.runNow failed:', expect.objectContaining({ message: 'refused' }));
+    logged.mockRestore();
+    await press(button);
+    expect(onRun).toHaveBeenCalledTimes(2);
+  });
+});
