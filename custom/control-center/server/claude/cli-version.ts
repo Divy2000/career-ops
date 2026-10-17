@@ -34,13 +34,19 @@ export function unapprovedWarning(found: string, approved: string[]): string {
 /**
  * The process environment minus what no probed program needs: the CC_* internals (CC_TOKEN and CC_SESSION_SECRET
  * drive the local API) and Claude/Anthropic credentials, the same names server/system/child-env.ts drops for every child
- * the server starts. A copy, not an import: Dev Chat may edit server/system/, and a file the supervisor loads must not
+ * the server starts, with CLAUDE_CONFIG_DIR trimmed and a blank one dropped as it does there. A copy, not an import: Dev Chat may edit server/system/, and a file the supervisor loads must not
  * be one it can break (tests/unit/claude-engine.test.ts SW2-claude-05); tests/unit/preflight.test.ts keeps them equal.
  */
 export function probeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const secret = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?)(_|$)/;
   const drop = (k: string) => k.startsWith('CC_') || k.startsWith('ANTHROPIC_') || (k.startsWith('CLAUDE_CODE_') && secret.test(k.slice('CLAUDE_CODE_'.length)));
-  return Object.fromEntries(Object.entries(base).filter(([k]) => !drop(k)));
+  const env = Object.fromEntries(Object.entries(base).filter(([k]) => !drop(k)));
+  // As childEnv: CLAUDE_CONFIG_DIR is read trimmed, blank meaning unset.
+  if (env.CLAUDE_CONFIG_DIR === undefined) return env;
+  const dir = env.CLAUDE_CONFIG_DIR.trim();
+  if (dir) env.CLAUDE_CONFIG_DIR = dir;
+  else delete env.CLAUDE_CONFIG_DIR;
+  return env;
 }
 
 export type VersionRunner = (bin: string) => Promise<{ code: number; stdout: string; stderr: string }>;

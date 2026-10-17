@@ -147,6 +147,14 @@ describe('preflight claude probe', () => {
     expect(Object.keys(probeEnv(base)).sort()).toEqual(server.sort());
   });
 
+  it('reads CLAUDE_CONFIG_DIR as the server children do: a blank one dropped, a padded one trimmed (R28-sync2-rev-01)', () => {
+    for (const given of ['', '   ', '  /tmp/claude-config  ']) {
+      const base = { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: given };
+      const pick = (env: NodeJS.ProcessEnv) => Object.entries(env).filter(([k]) => k in base).sort();
+      expect(pick(probeEnv(base))).toEqual(pick(childEnv({}, base)));
+    }
+  });
+
   it('passes when the first attempt fails and the retry succeeds', async () => {
     const marker = path.join(tempDir('cc-preflight-'), 'seen');
     const bin = fakeClaude(`const fs = require('node:fs'); if (!fs.existsSync(${JSON.stringify(marker)})) { fs.writeFileSync(${JSON.stringify(marker)}, '1'); console.error('updating'); process.exit(3); } console.log('0.0.0-fake');`);
