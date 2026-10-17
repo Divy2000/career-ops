@@ -206,7 +206,12 @@ export function ApplicationPage() {
                     <dd className="mono">{q.data.sponsorship.companyFile.checkedAt ?? 'never'}</dd>
                   </dl>
                 ) : (
-                  <Empty>No company sponsorship file yet. Run the check below to create one.</Empty>
+                  !q.data.sponsorship.companiesError && <Empty>No company sponsorship file yet. Run the check below to create one.</Empty>
+                )}
+                {q.data.sponsorship.companiesError && (
+                  <p role="alert" className="danger-text">
+                    Company sponsorship files could not be read: {q.data.sponsorship.companiesError}
+                  </p>
                 )}
                 {q.data.sponsorship.error && (
                   <p role="alert" className="danger-text">
