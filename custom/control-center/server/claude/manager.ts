@@ -189,6 +189,31 @@ export function recordHeldReportNums(turnDir: string, nums: readonly number[]): 
   fs.appendFileSync(path.join(turnDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n};`).join(''));
 }
 
+/**
+ * Gives back the holds a release took (guard-hook.mjs logs each as `-N@<tool id>;`) when that release failed, so the
+ * turn may retry it: the hook honours `+N@<tool id>;` only right after that same call's `-N@<tool id>;`.
+ */
+export function restoreHeldReportNums(turnDir: string, nums: readonly number[], toolUseId: string): void {
+  if (!TOOL_USE_ID.test(toolUseId)) return;
+  fs.mkdirSync(turnDir, { recursive: true });
+  fs.appendFileSync(path.join(turnDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n}@${toolUseId};`).join(''));
+}
+
+/** The tool ids the CLI hands out (toolu_...); anything else is never written into a hold record. */
+const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** The numbers a reserve-report-num.mjs --release command names, as the script reads them; empty for any other command. */
+function releasedReportNums(command: string): number[] {
+  const tokens = tokenize(command);
+  if (tokens === null || tokens[0] !== 'node' || tokens[1] !== 'reserve-report-num.mjs' || tokens[2] !== '--release') return [];
+  const m = (tokens[3] ?? '').match(/^(\d+)(?:-(\d+))?$/);
+  if (!m) return [];
+  const start = Number(m[1]);
+  const end = m[2] === undefined ? start : Number(m[2]);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start >= 50) return [];
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+}
+
 /** The Bash commands of a stream-json assistant line by tool id, whole: a tool.use event keeps only their first 200 characters. */
 export function bashCommandsIn(line: string): Map<string, string> {
   const out = new Map<string, string>();
@@ -1231,6 +1256,8 @@ export class SessionManager {
     let envelopes = 0;
     // Bash calls of this turn that reserve report numbers, until their result shows which.
     const reserveRuns = new Set<string>();
+    // Bash calls of this turn that release report numbers, by tool id: a failed one gives its holds back.
+    const releaseRuns = new Map<string, number[]>();
     const envelopeKinds: Partial<Record<EnvelopeKind, number>> = {};
     let denials = 0;
     let sawResult = false;
@@ -1265,10 +1292,19 @@ export class SessionManager {
           envelopeKinds[kind] = (envelopeKinds[kind] ?? 0) + 1;
         }
         if (ev.type === 'permission.denied') denials++;
-        if (ev.type === 'tool.use' && ev.name === 'Bash' && reservesReportNums(commands?.get(ev.id) ?? ev.summary)) reserveRuns.add(ev.id);
-        if (ev.type === 'tool.result' && reserveRuns.delete(ev.id) && ev.ok) {
-          const nums = printedReservation(ev.summary);
-          if (nums.length) recordHeldReportNums(path.join(this.store.guardDirOf(id), 'turns', String(n)), nums);
+        if (ev.type === 'tool.use' && ev.name === 'Bash') {
+          const command = commands?.get(ev.id) ?? ev.summary;
+          if (reservesReportNums(command)) reserveRuns.add(ev.id);
+          const released = releasedReportNums(command);
+          if (released.length) releaseRuns.set(ev.id, released);
+        }
+        if (ev.type === 'tool.result') {
+          const turnDir = path.join(this.store.guardDirOf(id), 'turns', String(n));
+          const nums = reserveRuns.delete(ev.id) && ev.ok ? printedReservation(ev.summary) : [];
+          if (nums.length) recordHeldReportNums(turnDir, nums);
+          const released = releaseRuns.get(ev.id);
+          releaseRuns.delete(ev.id);
+          if (released && !ev.ok) restoreHeldReportNums(turnDir, released, ev.id);
         }
         if (ev.type === 'turn.done') {
           turnDone = ev;

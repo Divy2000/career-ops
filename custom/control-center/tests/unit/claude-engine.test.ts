@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
+import { recordHeldReportNums, restoreHeldReportNums } from '../../server/claude/manager.js';
 import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, grepSecretExcludes, locateRead, narrowGrepInput, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { trackerDenyGlobs, writeGuardPolicy } from '../../server/claude/confinement.mjs';
 import { playwrightMcpArgs } from '../../server/claude/playwright-mcp-launcher.mjs';
@@ -466,6 +467,19 @@ describe('guard hook', () => {
       expect(r.stderr).toMatch(/releases only the report numbers it holds/);
     }
   }, 30_000);
+
+  it('given a release the hook let through that then failed, when the app restores its hold, then the retry may run, and only that call\'s hold comes back (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-restore-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 070' }, tool_use_id: id, cwd: realRoot, session_id: 's' }).status;
+    recordHeldReportNums(dir, [70]);
+    expect(release('toolu_a')).toBe(0);
+    // Another call's failure (one the hook refused) restores nothing.
+    restoreHeldReportNums(dir, [70], 'toolu_b');
+    expect(release('toolu_c')).toBe(2);
+    restoreHeldReportNums(dir, [70], 'toolu_a');
+    expect(release('toolu_d')).toBe(0);
+  }, 20_000);
 
   it('given any session whose scope grants reports/**, when it writes a reservation sentinel, then it is refused, Dev Chat included (R28-cl2-rev-02)', () => {
     const modes = ['devchat', 'oferta', 'apply', 'tracker', 'patterns'];

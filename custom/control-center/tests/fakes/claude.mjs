@@ -130,13 +130,13 @@ function refuseUnexpectedlyAllowed(id, tool, input) {
   emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: 'fake claude: the guard allowed a step the scenario marks expectDenied; it was not run' }] } });
 }
 
-function runHook(kind, toolName, toolInput) {
+function runHook(kind, toolName, toolInput, toolUseId) {
   const hooks = settings?.hooks?.[kind] ?? [];
   for (const group of hooks) {
     if (group.matcher && !new RegExp(group.matcher).test(toolName)) continue;
     for (const h of group.hooks ?? []) {
       // Like the real CLI, command hooks run through a shell.
-      const payload = JSON.stringify({ session_id: sessionId, cwd: process.cwd(), hook_event_name: kind, tool_name: toolName, tool_input: toolInput });
+      const payload = JSON.stringify({ session_id: sessionId, cwd: process.cwd(), hook_event_name: kind, tool_name: toolName, tool_input: toolInput, ...(toolUseId ? { tool_use_id: toolUseId } : {}) });
       const r = spawnSync('/bin/sh', ['-c', String(h.command)], { input: payload, encoding: 'utf8', env: subprocessEnv });
       if (r.status === 2) return { blocked: true, reason: r.stderr.trim() };
     }
@@ -177,7 +177,7 @@ for (const ev of events) {
     const input = { command: ev.__bash };
     const id = toolId();
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input }] } });
-    const verdict = runHook('PreToolUse', 'Bash', input);
+    const verdict = runHook('PreToolUse', 'Bash', input, id);
     if (verdict.blocked) {
       denials.push({ tool_name: 'Bash', tool_use_id: id, tool_input: input });
       emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: `PreToolUse:Bash hook error: ${verdict.reason}` }] } });

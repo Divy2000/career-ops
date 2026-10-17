@@ -50,7 +50,9 @@ function endsTorn(file) {
 // `-N;` from here once a release lets one go, each on a line of its own. A record cut short (no `;`) holds nothing, and
 // the next one starts its own line rather than joining it.
 const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
-const HELD_RECORD = /^([+-])(\d+);$/;
+// A release's `-N@<tool id>;` can be undone by the app's `+N@<tool id>;` once that call failed, and only right after it.
+const HELD_RECORD = /^([+-])(\d+)(?:@([A-Za-z0-9_-]{1,100}))?;$/;
+const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
 const RELEASE_ARG = /^(\d+)(?:-(\d+))?$/;
 const RELEASE_MAX = 50;
@@ -67,10 +69,19 @@ function heldReportNums(file) {
     throw err;
   }
   const held = new Set();
+  // The tool id of the release that last let each number go.
+  const letGoBy = new Map();
   for (const line of text.split('\n')) {
     const m = line.match(HELD_RECORD);
-    if (m?.[1] === '+') held.add(Number(m[2]));
-    else if (m) held.delete(Number(m[2]));
+    if (!m) continue;
+    const num = Number(m[2]);
+    if (m[1] === '-') {
+      held.delete(num);
+      letGoBy.set(num, m[3] ?? null);
+    } else if (m[3] === undefined || (letGoBy.get(num) === m[3] && !held.has(num))) {
+      held.add(num);
+      letGoBy.delete(num);
+    }
   }
   return held;
 }
@@ -80,7 +91,7 @@ function heldReportNums(file) {
  * numbers it holds: the one the app reserved for the session, and the ones its own reservations printed. A number let
  * go is no longer held: another evaluation may reserve it next.
  */
-async function releaseReason(command, turnDir) {
+async function releaseReason(command, turnDir, toolUseId) {
   const tokens = tokenize(command);
   if (!tokens || tokens[0] !== 'node' || tokens[1] !== 'reserve-report-num.mjs' || tokens[2] !== '--release') return null;
   const m = (tokens[3] ?? '').match(RELEASE_ARG);
@@ -93,7 +104,8 @@ async function releaseReason(command, turnDir) {
   for (const deadline = Date.now() + HELD_WAIT_MS; ; await new Promise((r) => setTimeout(r, 100))) {
     const held = heldReportNums(file);
     if (nums.every((n) => held.has(n))) {
-      fs.appendFileSync(file, nums.map((n) => `\n-${n};`).join(''));
+      const tag = typeof toolUseId === 'string' && TOOL_USE_ID.test(toolUseId) ? `@${toolUseId}` : '';
+      fs.appendFileSync(file, nums.map((n) => `\n-${n}${tag};`).join(''));
       return null;
     }
     if (Date.now() > deadline) break;
@@ -174,7 +186,7 @@ async function main() {
 
   if (tool === 'Bash') {
     const command = String(input.command ?? '');
-    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, snapDir));
+    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, snapDir, payload.tool_use_id));
     if (reason) deny(reason);
     // URLs a script reads from a list file it was given get the same checks as its URL arguments.
     const listed = [];
