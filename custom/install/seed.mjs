@@ -25,7 +25,7 @@ function localPaths(dir) {
   const merged = mergeLocalPaths(exists(file) ? fs.readFileSync(file, 'utf8') : '');
   if (merged === null) return out('present');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, merged);
+  writeAtomic(file, merged);
   out('added');
 }
 

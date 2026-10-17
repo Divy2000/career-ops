@@ -542,3 +542,34 @@ syncBuiltinESMExports();
   assert.match(res.stderr, /permission denied/);
   assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'THEIRS\n');
 });
+
+// Preloaded into the seed process: every write or copy to a file whose name contains `name` (the target or its temp
+// file) puts part of its bytes there, then fails the way a full volume makes it fail.
+const partialWrites = (dir, name) => put(path.join(dir, 'partial-writes.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+const full = () => { const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; return err; };
+const hit = (file) => typeof file === 'string' && file.includes(${JSON.stringify(name)});
+fs.writeFileSync = (file, data, ...rest) => {
+  if (!hit(file)) return realWrite(file, data, ...rest);
+  realWrite(file, String(data).slice(0, 3), ...rest);
+  throw full();
+};
+const realCopy = fs.copyFileSync;
+fs.copyFileSync = (src, dest, ...rest) => {
+  if (!hit(dest)) return realCopy(src, dest, ...rest);
+  realWrite(dest, fs.readFileSync(src, 'utf8').slice(0, 3), { flag: 'wx' });
+  throw full();
+};
+syncBuiltinESMExports();
+`);
+
+test('given a local-paths.txt with user lines, when the volume fills while local-paths adds custom/, then the user lines are kept and no temp file is left (R28-scripts-b-L1-01)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'my-notes/\nmy-drafts/\n');
+  const res = seedWith(partialWrites(d, 'local-paths.txt'), ['local-paths', '--dir', d]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'my-notes/\nmy-drafts/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
