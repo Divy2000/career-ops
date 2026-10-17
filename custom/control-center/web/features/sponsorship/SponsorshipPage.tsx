@@ -257,9 +257,14 @@ export function SponsorshipPage() {
                   </table>
                 </TableScroll>
               )}
+              {tab === 'companies' && d.companiesError && (
+                <p role="alert" className="danger-text">
+                  Some company checks could not be read: {d.companiesError}
+                </p>
+              )}
               {tab === 'companies' &&
                 (d.companies.length === 0 ? (
-                  <Empty>No company checks yet.</Empty>
+                  !d.companiesError && <Empty>No company checks yet.</Empty>
                 ) : (
                   <TableScroll label="Company checks">
                     <table className="table">

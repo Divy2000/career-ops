@@ -19,7 +19,8 @@ const OVERVIEW = {
   alerts: { latest: [], history: [{ date: '2026-10-05', company: 'Acme Robotics', slug: 'acme-robotics', status: 'pause', headline: 'Acme pauses H-1B', url: 'https://news.example/acme' }] },
   alertsError: 'company-alerts.tsv line 4: status must be one of paused/stopped/restricted/resumed/expanded, got "pause"',
   officialFeed: [],
-  companies: [],
+  companies: [{ slug: 'globex-payments', name: 'Globex Payments', path: '/data/immigration/companies/globex-payments.md', verdict: 'sponsoring', dolTier: null, checkedAt: '2026-10-01', policyChangesSeen: null }],
+  companiesError: 'could not read acme-robotics.md: EISDIR: illegal operation on a directory, read',
   tiers: null,
   seen: null,
   pendingCount: null,
@@ -31,8 +32,8 @@ const OVERVIEW = {
 let host: HTMLElement;
 let root: Root;
 
-async function mount(tab: string) {
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith('/api/immigration/overview') ? OVERVIEW : []), { status: 200, headers: { 'content-type': 'application/json' } })));
+async function mount(tab: string, overview: object = OVERVIEW) {
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(url.startsWith('/api/immigration/overview') ? overview : []), { status: 200, headers: { 'content-type': 'application/json' } })));
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -62,5 +63,19 @@ describe('Sponsorship page, a file the parser rejects', () => {
     const alert = await until(() => host.querySelector('[role="alert"]'), 'the alerts error');
     expect(alert.textContent).toContain('company-alerts.tsv line 4: status must be one of');
     expect(host.querySelector('table')?.textContent).toContain('Acme pauses H-1B');
+  });
+
+  it('the companies tab says which company file could not be read, above the companies that could (R28-doma-rev-01)', async () => {
+    await mount('companies');
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the companies error');
+    expect(alert.textContent).toContain('could not read acme-robotics.md: EISDIR');
+    expect(host.querySelector('table')?.textContent).toContain('Globex Payments');
+  });
+
+  it('the companies tab does not claim there are no company checks when the only one could not be read (R28-doma-rev-01)', async () => {
+    await mount('companies', { ...OVERVIEW, companies: [] });
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the companies error');
+    expect(alert.textContent).toContain('could not read acme-robotics.md');
+    expect(host.textContent).not.toContain('No company checks yet');
   });
 });
