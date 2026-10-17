@@ -272,3 +272,43 @@ syncBuiltinESMExports();
     fs.rmSync(box.home, { recursive: true, force: true });
   }, 40_000);
 });
+
+describe('the probes run the claude binary the supervisor preflight picks (R29-supervisor-L2-01)', () => {
+  /** A fake claude that answers --version and records the first argument of every call. */
+  const fakeClaude = (file: string, calls: string) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `#!/bin/sh\nf=$(mktemp "${calls}/call-XXXXXX")\necho "ARG1=$1" > "$f"\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nexit 1\n`, { mode: 0o755 });
+  };
+  /** Runs a probe from `cwd` with only the sandbox and the system folders on PATH, so no real claude is found. */
+  const probeIn = (script: string, box: ReturnType<typeof sandbox>, cwd: string, env: Record<string, string>) =>
+    spawnSync(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', script)], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, ...env },
+    });
+  const firstArgs = (calls: string) => fs.readdirSync(calls).map((n) => fs.readFileSync(path.join(calls, n), 'utf8').trim());
+
+  for (const script of ['claude-probe.mjs', 'claude-probe-reads.mjs']) {
+    it(`given CC_CLAUDE_BIN is a relative path, when ${script} runs under npm, then every call runs it from the folder npm was started in`, () => {
+      const box = sandbox();
+      fakeClaude(path.join(box.root, 'tools', 'claude'), box.calls);
+      // npm runs the script with its cwd at the package and INIT_CWD at the folder the user typed the command in.
+      const r = probeIn(script, box, PACKAGE_ROOT, { CC_CLAUDE_BIN: 'tools/claude', INIT_CWD: box.root });
+      const summary = JSON.parse(r.stdout || '{}');
+      expect(summary.version ?? summary.claudeVersion, r.stderr).toMatch(/9\.9\.9/);
+      const args = firstArgs(box.calls);
+      expect(args).toContain('ARG1=--version');
+      expect(args.some((a) => a === 'ARG1=-p'), r.stdout + r.stderr).toBe(true);
+    }, 60_000);
+
+    it(`given claude is installed only in ~/.local/bin, when ${script} runs, then it finds it as the preflight does`, () => {
+      const box = sandbox();
+      fakeClaude(path.join(box.home, '.local', 'bin', 'claude'), box.calls);
+      const r = probeIn(script, box, box.root, {});
+      const summary = JSON.parse(r.stdout || '{}');
+      expect(summary.version ?? summary.claudeVersion, r.stderr).toMatch(/9\.9\.9/);
+      expect(firstArgs(box.calls).some((a) => a === 'ARG1=-p'), r.stdout + r.stderr).toBe(true);
+    }, 60_000);
+  }
+});

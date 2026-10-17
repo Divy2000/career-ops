@@ -51,6 +51,18 @@ describe('supervisor instance lock (one Control Center per data root)', () => {
       });
       expect(() => acquireInstanceLock(tempDir('cc-lock-'), { pid: 100, port: 4400 }, procs({ 100: 1791194400 }))).toThrow(/^EPERM: operation not permitted, open$/);
     });
+
+    it('given the volume fills while the lock is written, when startup fails, then no temp file is left beside the lock (R29-supervisor-L1-02)', () => {
+      const write = fs.writeFileSync;
+      vi.spyOn(fs, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, _data: unknown, opts?: fs.WriteFileOptions) => {
+        // open(2) with wx created the file before write(2) ran out of space.
+        write(file, '', opts);
+        throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC', syscall: 'write' });
+      }) as typeof fs.writeFileSync);
+      const root = tempDir('cc-lock-');
+      expect(() => acquireInstanceLock(root, { pid: 100, port: 4400 }, procs({ 100: 1791194400 }))).toThrow(/ENOSPC/);
+      expect(fs.readdirSync(path.dirname(instanceLockPath(root)))).toEqual([]);
+    });
   });
 
   it('a lock left by an instance that is gone is replaced: its PID is not running, or now belongs to a process started later', () => {

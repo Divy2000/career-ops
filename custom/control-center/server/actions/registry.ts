@@ -226,7 +226,7 @@ const PLUGIN_AUDIT_ALL = 'custom/control-center/server/actions/plugin-audit-all.
 interface DeleteParse {
   resolveColumns: (lines: string[]) => Record<string, number>;
   parseTrackerRow: (line: string, colmap: Record<string, number>) => (Record<string, string> & { num: number }) | null;
-  extractTrackerReportNumbers: (reportCell: string, notesCell?: string) => number[];
+  extractTrackerReportLinks: (reportCell: string, notesCell?: string) => Array<{ target: number; label: number | null }>;
 }
 
 /**
@@ -249,7 +249,7 @@ async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<{ rows: 
     .filter((l) => numCell(l) === String(n))
     .map((l) => {
       const raw = tp.parseTrackerRow(l, colmap);
-      return raw ? { company: raw.company ?? '', role: raw.role ?? '', report: tp.extractTrackerReportNumbers(raw.report ?? '', raw.notes ?? '')[0] ?? null } : null;
+      return raw ? { company: raw.company ?? '', role: raw.role ?? '', report: tp.extractTrackerReportLinks(raw.report ?? '', raw.notes ?? '')[0]?.target ?? null } : null;
     });
   // The page reads a number cell as parseInt does, so it can show a row written "024" as #24, which this delete skips.
   const respelled = lines.map(numCell).find((c) => c !== String(n) && parseInt(c, 10) === n) ?? null;

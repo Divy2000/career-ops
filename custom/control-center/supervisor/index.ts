@@ -459,6 +459,11 @@ async function main(): Promise<void> {
 
   proxyServer = proxy;
   proxy.on('error', (err: NodeJS.ErrnoException) => {
+    // Once bound, an error here is one connection failing to be accepted (accept EMFILE): the app and recovery stay up.
+    if (proxy.listening) {
+      console.error(`[supervisor] listener error: ${err.message}`);
+      return;
+    }
     if (err.code === 'EADDRINUSE') {
       console.error(`Port ${PORT} is already in use. Stop the other process or set CC_PORT to a free port.`);
     } else {

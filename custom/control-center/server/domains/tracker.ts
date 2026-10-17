@@ -40,7 +40,7 @@ export type TrackerRead =
 interface TrackerParse {
   resolveColumns: (lines: string[]) => Record<string, number>;
   parseTrackerRow: (line: string, colmap: Record<string, number>) => Record<string, string> & { num: number } | null;
-  extractTrackerReportNumbers: (reportCell: string, notesCell?: string) => number[];
+  extractTrackerReportLinks: (reportCell: string, notesCell?: string) => Array<{ target: number; label: number | null }>;
   isSeparatorRow: (line: string) => boolean;
   isHeaderRow: (line: string) => boolean;
 }
@@ -69,8 +69,8 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
   for (const line of dataLines) {
     const raw = tp.parseTrackerRow(line, colmap);
     if (!raw) continue;
-    const reportNums = tp.extractTrackerReportNumbers(raw.report ?? '', raw.notes ?? '');
-    const reportNum = reportNums[0] ?? null;
+    // The report a row joins is the file its link points at, not the number the link says (tracker-parse.mjs).
+    const reportNum = tp.extractTrackerReportLinks(raw.report ?? '', raw.notes ?? '')[0]?.target ?? null;
     let summary: ReportSummary | null = null;
     let reportState: TrackerRow['reportState'] = 'none';
     if (reportNum !== null) {

@@ -9,7 +9,32 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
-const claudeBin = process.env.CC_CLAUDE_BIN?.trim() || 'claude';
+/**
+ * The claude binary, resolved as supervisor/preflight.ts resolveClaudeBin does so the probe tests the one the app runs:
+ * an absolute path as given, a relative one with a slash joined textually to the folder npm was started in (INIT_CWD,
+ * else the cwd), a bare name looked up on PATH, then ~/.local/bin, then (for `claude` only) Homebrew and /usr/local.
+ * A bare name found nowhere stays as it is, so the spawn reports ENOENT.
+ */
+function resolveClaudeBin(bin) {
+  if (path.isAbsolute(bin)) return bin;
+  if (bin.includes('/')) {
+    const from = process.env.INIT_CWD;
+    const base = from && path.isAbsolute(from) ? from : process.cwd();
+    return [base.replace(/\/+$/, ''), ...bin.split('/').filter((seg) => seg !== '.' && seg !== '')].join('/');
+  }
+  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  const fallbacks = bin === 'claude' ? ['/opt/homebrew/bin/claude', '/usr/local/bin/claude'] : [];
+  const executable = (file) => {
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  return [...dirs.map((d) => path.join(d, bin)), path.join(os.homedir(), '.local', 'bin', bin), ...fallbacks].find((c) => path.isAbsolute(c) && executable(c)) ?? bin;
+}
+const claudeBin = resolveClaudeBin(process.env.CC_CLAUDE_BIN?.trim() || 'claude');
 const token = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8' });
 if (token.status !== 0 || !token.stdout.trim()) {
   console.error('Keychain item career-ops-claude-token not found');

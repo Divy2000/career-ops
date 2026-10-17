@@ -386,3 +386,19 @@ describe('insights dashboard', () => {
     expect(workModeOf(null)).toBe('unknown');
   });
 });
+
+describe('tracker row report identity (R29-srv-dom-b-L2-01)', () => {
+  it('given a link whose label names another report, when the tracker is read, then the row joins the report the link points at', async () => {
+    const dir = copyFixtureRoot();
+    const file = path.join(dir, 'data', 'applications.md');
+    fs.appendFileSync(file, '| 40 | 2026-10-01 | Initech Cloud | - | Platform Eng |  | Evaluated | ❌ | [3](../reports/004-initech-cloud.md) | |\n');
+    const t = await readTracker(DEFAULT_CODE_ROOT, dir);
+    if (t.kind !== 'ok') throw new Error('fixture tracker unreadable');
+    const row = t.rows.find((r) => r.num === 40);
+    expect(row?.report).toBe(4);
+    expect(row?.reportState).toBe('ok');
+    expect(row?.summary?.company).toMatch(/Initech/);
+    // hired-share.mjs keys a hire by the first number in the cell, so the label it is asked with stays that number.
+    expect(row?.reportLabel).toBe('3');
+  });
+});
