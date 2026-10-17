@@ -128,6 +128,16 @@ describe('the insights cache is best-effort (R27-srv-dom-a-L1-01)', () => {
     }
     expect(fs.existsSync(dir) ? fs.readdirSync(dir) : []).toEqual([]);
   });
+
+  it('given a file where the cache folder goes, when a script runs cleanly, then its result is still returned', async () => {
+    const exec: Exec = async () => ({ code: 0, stdout: '{"ok":true}', stderr: '' });
+    const cfg = testConfig();
+    // mkdir fails with ENOTDIR, and so does removing the temp file under it.
+    fs.mkdirSync(path.join(cfg.dataRoot, 'data'), { recursive: true });
+    fs.writeFileSync(path.join(cfg.dataRoot, 'data', 'control-center'), 'not a folder\n');
+    const read = await readInsight(cfg, exec, 'funnelVelocity', { recompute: true });
+    expect(read).toMatchObject({ kind: 'ok', json: { ok: true }, fromCache: false });
+  });
 });
 
 describe('the insights cache across days (R8-09)', () => {

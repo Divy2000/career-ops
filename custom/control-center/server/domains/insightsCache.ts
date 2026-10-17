@@ -162,8 +162,12 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
       fs.writeFileSync(tmp, JSON.stringify(read));
       fs.renameSync(tmp, file);
     } catch {
-      // Not cached; the next load reruns the script.
-      fs.rmSync(tmp, { force: true });
+      // Not cached; the next load reruns the script. Removing the temp file fails too when a folder above it is a file.
+      try {
+        fs.rmSync(tmp, { force: true });
+      } catch {
+        /* nothing was written */
+      }
     }
   }
   return read;
