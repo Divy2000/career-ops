@@ -60,9 +60,20 @@ function withLocalFileGuard(nodeOptions: string | undefined): string {
   return given ? `${given} ${LOCAL_FILE_GUARD_FLAG}` : LOCAL_FILE_GUARD_FLAG;
 }
 
+/**
+ * The server looks up a session's tool-results under CLAUDE_CONFIG_DIR read trimmed, blank meaning unset
+ * (server/config.ts), so the claude child gets that same value: a blank one would send it to another config folder.
+ */
+function withClaudeConfigDir(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (env.CLAUDE_CONFIG_DIR === undefined) return env;
+  const { CLAUDE_CONFIG_DIR: given, ...rest } = env;
+  const dir = given.trim();
+  return dir ? { ...rest, CLAUDE_CONFIG_DIR: dir } : rest;
+}
+
 export function childEnv(extra: NodeJS.ProcessEnv = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(base)) if (!k.startsWith('CC_') && !isCredential(k)) out[k] = v;
-  const env: NodeJS.ProcessEnv = { ...out, ...PINNED_TO_DATA_ROOT, ...extra };
+  const env = withClaudeConfigDir({ ...out, ...PINNED_TO_DATA_ROOT, ...extra });
   return { ...env, NODE_OPTIONS: withLocalFileGuard(env.NODE_OPTIONS) };
 }

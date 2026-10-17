@@ -273,7 +273,7 @@ if [ -z "$PR_URL" ]; then
   PR_URL="$(gh pr create --repo "$FORK" --base main --head "$BRANCH" \
     --title "chore(sync): merge upstream main $TODAY" --body-file "$BODY")" || fail "gh pr create failed"
 else
-  gh pr edit "$PR_URL" --body-file "$BODY" >/dev/null || true
+  gh pr edit "$PR_URL" --body-file "$BODY" >/dev/null || fail "gh pr edit failed; $PR_URL still shows an earlier run's report"
 fi
 echo "PR: $PR_URL"
 

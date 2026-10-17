@@ -1675,6 +1675,42 @@ test('a PR merged in the moment between the check and the merge leaves the fork 
   assert.doesNotMatch(r.stdout, /^deployed/m);
 });
 
+// ---- an existing PR whose body could not be updated (R28-scripts-b-X-01) ----
+
+/**
+ * Runs sync.sh's own lines from the open-PR lookup through printing the PR, with gh a stub that finds an open PR and
+ * exits `editExit` on `gh pr edit`, followed by a marker that stands for the merge decision.
+ */
+function existingPrBodyUpdate(editExit) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'sync-pr-edit-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    stub(bin, 'gh', `if [ "$2" = list ]; then echo https://example.invalid/pr/7; exit 0; fi\nif [ "$2" = edit ]; then echo "HTTP 502" >&2; exit ${editExit}; fi\nexit 0`);
+    const lines = readFileSync(SYNC, 'utf8').split('\n');
+    const from = lines.findIndex((l) => l.startsWith('PR_URL="$(gh pr list'));
+    const to = lines.findIndex((l, i) => i > from && l.startsWith('echo "PR: $PR_URL"'));
+    assert.ok(from > -1 && to > from, 'no gh pr list .. echo "PR: $PR_URL" block in sync.sh');
+    const body = path.join(dir, 'body.md');
+    writeFileSync(body, 'report\n');
+    const script = `fail() { echo "!!! $1"; exit 1; }\nFORK=o/r\nBRANCH=sync/x\nTODAY=2026-10-17\nBODY="${body}"\n${lines.slice(from, to + 1).join('\n')}\necho "merge decision reached"`;
+    return spawnSync('bash', ['-c', script], { cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('an existing PR whose body update fails stops the run before the merge decision, so it cannot merge under a stale report (R28-scripts-b-X-01)', () => {
+  const r = existingPrBodyUpdate(1);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^!!! gh pr edit failed; https:\/\/example\.invalid\/pr\/7 still shows an earlier run's report$/m, r.stdout);
+  assert.doesNotMatch(r.stdout, /merge decision reached/);
+});
+
+test('an existing PR whose body update succeeds goes on to the merge decision (R28-scripts-b-X-01)', () => {
+  const r = existingPrBodyUpdate(0);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /^PR: https:\/\/example\.invalid\/pr\/7$/m);
+  assert.match(r.stdout, /^merge decision reached$/m);
+});
+
 // ---- Playwright's browser after an install without lifecycle scripts (SW3-scripts-04) ----
 
 /** A worktree with an npx stub that logs its calls (or fails), and optionally an installed playwright package. */
