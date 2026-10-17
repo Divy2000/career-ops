@@ -67,3 +67,41 @@ describe('Run on the Plugins tab', () => {
     expect(buttons(rowOf('notion')).some((b) => b.startsWith('Run provider'))).toBe(false);
   });
 });
+
+describe('Enable on the Plugins tab after config/plugins.yml changed on disk', () => {
+  it('given the file was edited outside the app, when a toggle gets a 409, then the config reloads and the retry carries the new ETag and succeeds', async () => {
+    // The file's current ETag: the server refuses a PUT whose If-Match is any other.
+    let etag = 'e1';
+    const puts: Array<string | undefined> = [];
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === '/api/actions') return json([RUN_META]);
+        if (url === '/api/runs') return json([]);
+        if (init?.method === 'PUT') {
+          const ifMatch = new Headers(init.headers).get('If-Match') ?? undefined;
+          puts.push(ifMatch);
+          if (ifMatch !== etag) return json({ error: 'If-Match does not match the current version' }, 409);
+          etag = 'e3';
+          return json({ ok: true });
+        }
+        return json({ plugins: [{ ...plugin('notion', ['export']), enabled: false }], config: { kind: 'ok', path: 'config/plugins.yml', raw: '', etag } });
+      }),
+    );
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(PluginsTab)))));
+    const box = () => host.querySelector<HTMLInputElement>('input[aria-label="Enable notion"]');
+    await until(() => box(), 'the Enable notion checkbox');
+    etag = 'e2';
+    await act(async () => box()!.click());
+    await until(() => (puts.length === 1 && !box()!.disabled) || undefined, 'the first toggle settled');
+    expect(host.textContent).toMatch(/config\/plugins\.yml changed on disk; the current settings were reloaded/);
+    await act(async () => box()!.click());
+    await until(() => (puts.length === 2 && !box()!.disabled) || undefined, 'the retry settled');
+    expect(puts).toEqual(['e1', 'e2']);
+  });
+});
