@@ -141,7 +141,8 @@ export class SessionManager {
   private active = new Map<string, Tracked>();
   /** Sessions whose next turn is being prepared (before beginTurn marks them running). */
   private sending = new Set<string>();
-  private lostReservationsWarned = new Set<string>();
+  /** Reservation warnings already given (a session and number, or a session's refresh failure): the tracker ticks every poll. */
+  private reservationWarned = new Set<string>();
   /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
@@ -762,16 +763,19 @@ export class SessionManager {
       if (!this.refreshReservation(meta, num)) this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' && num !== null) this.warnReservationLost(id, num, 'was collected while its turn runs; the number may be handed out again');
-      else console.warn(`[sessions] session ${id}: could not refresh the reservation for report number ${num ?? '(unknown)'}: ${(err as Error).message}`);
+      else this.warnOnce(`${id}\0refresh`, `[sessions] session ${id}: could not refresh the reservation for report number ${num ?? '(unknown)'}: ${(err as Error).message}`);
     }
   }
 
   /** Said once per session and number: the tracker ticks again every poll. Finalize then leaves the number alone. */
   private warnReservationLost(id: string, num: number, why: string): void {
-    const key = `${id}\0${num}`;
-    if (this.lostReservationsWarned.has(key)) return;
-    this.lostReservationsWarned.add(key);
-    console.warn(`[sessions] session ${id}: its reservation of report number ${num} ${why}`);
+    this.warnOnce(`${id}\0${num}`, `[sessions] session ${id}: its reservation of report number ${num} ${why}`);
+  }
+
+  private warnOnce(key: string, message: string): void {
+    if (this.reservationWarned.has(key)) return;
+    this.reservationWarned.add(key);
+    console.warn(message);
   }
 
   private sentinelPath(num: number): string {

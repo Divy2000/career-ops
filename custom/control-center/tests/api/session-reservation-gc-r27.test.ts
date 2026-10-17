@@ -110,8 +110,12 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
         refused++;
         throw new Error('EIO: i/o error, read');
       });
-      await until(() => refused >= 3);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await until(() => refused >= 8);
       spy.mockRestore();
+      // Said once, not on every tick while the record stays unreadable.
+      expect(warn.mock.calls.flat().filter((m) => String(m).includes('could not refresh the reservation')).length).toBe(1);
+      warn.mockRestore();
       go();
 
       expect((await settleOn(app, id)).meta.status).toBe('error');
