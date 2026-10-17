@@ -237,6 +237,27 @@ export function bashCommandsIn(line: string): Map<string, string> {
   return out;
 }
 
+/**
+ * The text of each tool result in a user stream line, by tool id: the tool.result event keeps only a result's first 400
+ * characters, and lines a reserve run printed before its reservation may push that out of it.
+ */
+export function toolResultsIn(line: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let obj: { type?: unknown; message?: { content?: unknown } };
+  try {
+    obj = JSON.parse(line) as typeof obj;
+  } catch {
+    return out;
+  }
+  if (obj?.type !== 'user' || !Array.isArray(obj.message?.content)) return out;
+  for (const b of obj.message.content as Array<{ type?: unknown; tool_use_id?: unknown; content?: unknown }>) {
+    if (b?.type !== 'tool_result') continue;
+    const text = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? (b.content as Array<{ type?: unknown; text?: unknown }>).flatMap((c) => (c?.type === 'text' && typeof c.text === 'string' ? [c.text] : [])).join('\n') : null;
+    if (text !== null) out.set(String(b.tool_use_id), text);
+  }
+  return out;
+}
+
 /** Whether a Bash command is a reserve-report-num.mjs run that reserves (the script reserves unless told to help, release or gc). */
 function reservesReportNums(command: string): boolean {
   const tokens = tokenize(command);
@@ -1367,6 +1388,7 @@ export class SessionManager {
     const handleLine = (l: RawLine, emit: boolean) => {
       const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
       const commands = l.stream === 'stdout' && l.line.includes('"tool_use"') ? bashCommandsIn(l.line) : null;
+      const results = l.stream === 'stdout' && l.line.includes('"tool_result"') ? toolResultsIn(l.line) : null;
       for (const ev of events) {
         if (ev.type === 'envelope') {
           envelopes++;
@@ -1382,7 +1404,7 @@ export class SessionManager {
         }
         if (ev.type === 'tool.result') {
           const sessionDir = this.store.guardDirOf(id);
-          const nums = reserveRuns.delete(ev.id) && ev.ok ? printedReservation(ev.summary) : [];
+          const nums = reserveRuns.delete(ev.id) && ev.ok ? printedReservation(results?.get(ev.id) ?? ev.summary) : [];
           const released = releaseRuns.get(ev.id);
           releaseRuns.delete(ev.id);
           // A replayed result's holds were settled by the server that handled it: the sentinel under a number now may be

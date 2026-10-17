@@ -523,6 +523,34 @@ describe('guard hook', () => {
     expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 074' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
   }, 20_000);
 
+  it('given a hold lock left by a dead hook younger than the old 30s bound, when a release runs, then it waits the lock out instead of failing (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-young-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(73, '2026-10-17T10:01:13.000Z');
+    recordHeldReportNums(dir, [73], realRoot);
+    const lock = path.join(dir, 'held-report-nums.lock');
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, nonce: 'dead-hook' }));
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(lock, old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 073' }, cwd: realRoot, session_id: 's' }).status).toBe(0);
+  }, 30_000);
+
+  it('given a range release that failed after deleting part of the range, when the session retries, then the refusal names the numbers it no longer holds and the rest may go (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-partial-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (arg: string, id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: `node reserve-report-num.mjs --release ${arg}` }, tool_use_id: id, cwd: realRoot, session_id: 's' });
+    for (const n of [71, 72]) reserveAs(n, `2026-10-17T10:02:${n - 60}.000Z`);
+    recordHeldReportNums(dir, [71, 72], realRoot);
+    expect(release('071-072', 'toolu_p').status).toBe(0);
+    fs.rmSync(path.join(realRoot, 'reports', '071-RESERVED.md'));
+    restoreHeldReportNums(dir, [71, 72], 'toolu_p');
+    const again = release('071-072', 'toolu_q');
+    expect(again.status).toBe(2);
+    expect(again.stderr).toMatch(/not held: 071\b/);
+    expect(again.stderr).not.toMatch(/072/);
+    expect(release('072', 'toolu_r').status).toBe(0);
+  }, 30_000);
+
   it('given a held number whose sentinel is gone, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-gone-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });

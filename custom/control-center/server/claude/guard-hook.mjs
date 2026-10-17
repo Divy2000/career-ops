@@ -57,9 +57,11 @@ const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 // Held while one release checks and consumes holds, so two releases of one number at once never both pass.
 const HELD_LOCK_FILE = 'held-report-nums.lock';
 // A lock whose content never got written (its hook died between creating and writing it) is replaced this old.
-const HELD_LOCK_UNREADABLE_MS = 10_000;
+const HELD_LOCK_UNREADABLE_MS = 2_000;
 // A hook holds the lock for milliseconds: one this old is a dead hook's, even if its pid now names another process.
-const HELD_LOCK_MAX_MS = 30_000;
+const HELD_LOCK_MAX_MS = 5_000;
+// Waited out for the lock: past the age a dead hook's lock is replaced at, and well inside the hook's own timeout.
+const HELD_LOCK_WAIT_MS = HELD_LOCK_MAX_MS + 2_000;
 // Held while one waiter replaces a dead hook's lock, so two never replace it at once; stale as an unreadable lock is.
 const HELD_TAKEOVER_FILE = 'held-report-nums.lock.takeover';
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
@@ -173,7 +175,7 @@ function takeOverLock(dir, lock, seen) {
 async function withHeldLock(dir, fn) {
   const lock = path.join(dir, HELD_LOCK_FILE);
   const text = JSON.stringify({ pid: process.pid, nonce: crypto.randomUUID() });
-  for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(20)) {
+  for (const deadline = Date.now() + HELD_LOCK_WAIT_MS; ; await sleepMs(20)) {
     try {
       fs.writeFileSync(lock, text, { flag: 'wx' });
       break;
@@ -219,17 +221,20 @@ async function releaseReason(command, policy, sessionDir, toolUseId) {
     // A sentinel gone holds nothing to release: the app dropped it, or another evaluation may reserve it next.
     return sentinelCreatedAt(dataRoot, n) === held.get(n);
   };
+  let unheld;
   for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(100)) {
-    const taken = await withHeldLock(sessionDir, () => {
+    unheld = await withHeldLock(sessionDir, () => {
       const held = heldReportNums(file);
-      if (!nums.every((n) => holds(held, n))) return false;
-      fs.appendFileSync(file, nums.map((n) => `\n-${n}${tag};`).join(''));
-      return true;
+      const missing = nums.filter((n) => !holds(held, n));
+      if (missing.length === 0) fs.appendFileSync(file, nums.map((n) => `\n-${n}${tag};`).join(''));
+      return missing;
     });
-    if (taken) return null;
+    if (unheld.length === 0) return null;
     if (Date.now() > deadline) break;
   }
-  return 'Bash: a session releases only the report numbers it holds (the one reserved for it, or one its own reserve-report-num.mjs run printed); every other sentinel is another evaluation\'s reservation';
+  // Named, so a range a failed release left partly deleted can be retried with the numbers still held.
+  const named = unheld.map((n) => String(n).padStart(3, '0')).join(', ');
+  return `Bash: a session releases only the report numbers it holds (the one reserved for it, or one its own reserve-report-num.mjs run printed); every other sentinel is another evaluation's reservation (not held: ${named})`;
 }
 
 async function main() {

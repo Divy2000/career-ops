@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bashCommandsIn, printedReservation } from '../../server/claude/manager.js';
+import { bashCommandsIn, printedReservation, toolResultsIn } from '../../server/claude/manager.js';
 
 // R28-cl2-rev-01 review: the tool.use event keeps only a command's first 200 characters, so the manager reads which
 // reserve-report-num.mjs runs a session made from the whole command in the stream line.
@@ -27,5 +27,21 @@ describe('printedReservation', () => {
 
   it('given output with no reservation line, when read, then nothing comes back', () => {
     for (const out of ['', 'exit 1\nreserve-report-num: lock busy', '061 reserved']) expect(printedReservation(out), out).toEqual([]);
+  });
+});
+
+// R28-cl2-rev-01 review: the tool.result event keeps only a result's first 400 characters, so stderr printed before the
+// allocator's line can push the reservation out of it; the manager reads the whole result from the stream line.
+describe('toolResultsIn', () => {
+  const line = (content: unknown) => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', is_error: false, content }] } });
+
+  it('given a user line with a tool result longer than the event summary, when read, then the whole text comes back by tool id', () => {
+    const text = `${'GC stale sentinel 001\n'.repeat(40)}061`;
+    expect(toolResultsIn(line(text))).toEqual(new Map([['toolu_1', text]]));
+    expect(toolResultsIn(line([{ type: 'text', text: 'a' }, { type: 'text', text: '061' }]))).toEqual(new Map([['toolu_1', 'a\n061']]));
+  });
+
+  it('given lines that hold no tool result, when read, then nothing comes back', () => {
+    for (const l of ['not json', JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: '061' }] } })]) expect(toolResultsIn(l), l).toEqual(new Map());
   });
 });
