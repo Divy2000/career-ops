@@ -13,7 +13,6 @@ import crypto from 'node:crypto';
 import { createTwoFilesPatch } from 'diff';
 import { findSnapshot, locate, matches, relativeToRoot, resolveReal, snapshotKey as turnSnapshotKey } from '../server/claude/guard-policy.mjs';
 import { processStartTime, type ProcessStart } from './instance-lock.js';
-import { replaceFile } from '../server/lib/atomic-write.js';
 
 export interface ChangeRecord {
   path: string;
@@ -252,6 +251,23 @@ function fileHash(abs: string): string | null {
     return sha256(fs.readFileSync(abs));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/**
+ * Replaces `p` through a temp file named for this process plus a random suffix: two processes (blue/green servers, the
+ * supervisor) writing one file at once must not share a temp file, or one rename finds it gone. A failed write removes
+ * its temp. No containment check: for app-owned state files whose path the caller built itself. It lives here, not in
+ * server/lib, because the supervisor may load only files Dev Chat cannot edit.
+ */
+export function replaceFile(p: string, text: string): void {
+  const tmp = `${p}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, p);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
     throw err;
   }
 }

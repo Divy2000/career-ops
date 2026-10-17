@@ -7,9 +7,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { SESSION_POLICY_VERSION, type PolicyClass } from './modes.js';
 import { monotonicIso } from '../runner/store.js';
-import { replaceFile } from '../lib/atomic-write.js';
 import type { SessionEvent } from './stream-parse.js';
-import { guardSessionDir } from '../../supervisor/recovery.js';
+import { guardSessionDir, replaceFile } from '../../supervisor/recovery.js';
 
 export type SessionStatus = 'queued' | 'running' | 'awaiting_user' | 'done' | 'error' | 'cancelled';
 export type TargetType = 'app' | 'url' | 'company' | 'text' | 'none';

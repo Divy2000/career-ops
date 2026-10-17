@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { replaceFile } from '../lib/atomic-write.js';
+import { replaceFile } from '../../supervisor/recovery.js';
 
 export type RunStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'lost';
 export type Cost = 'free' | 'network' | 'tokens';

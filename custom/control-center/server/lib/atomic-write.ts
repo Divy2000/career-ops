@@ -61,22 +61,6 @@ export function containedTarget(abs: string, opts: { within: Array<{ root: strin
 }
 
 /**
- * Replaces `p` through a temp file named for this process plus a random suffix: two processes (blue/green servers, the
- * supervisor) writing one file at once must not share a temp file, or one rename finds it gone. A failed write removes
- * its temp. No containment check: for app-owned state files whose path the caller built itself.
- */
-export function replaceFile(p: string, text: string): void {
-  const tmp = `${p}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
-  try {
-    fs.writeFileSync(tmp, text);
-    fs.renameSync(tmp, p);
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
-/**
  * Replaces the file at `abs` atomically: a temp file next to it, then one rename. The real path must stay inside one
  * of the `within` roots (containedTarget), or the write is refused and nothing changes, neither the link nor its
  * target. Inside, the temp file goes next to the real target, which is replaced and keeps its mode, so a link stays a
