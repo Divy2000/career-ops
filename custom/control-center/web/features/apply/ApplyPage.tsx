@@ -84,7 +84,12 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
   );
 }
 
-type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: string };
+// The row's tracker status: Mark applied is not offered once the row is Applied, and asks before it moves a row back
+// from a later stage.
+type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: string; status?: string };
+
+/** Statuses a row reaches only after it was applied to: Mark applied would move it back. */
+const PAST_APPLIED = ['Responded', 'Interview', 'Offer', 'Hired', 'Rejected'];
 
 /** Leaving the page with edited answers asks first: the session keeps only the answers as it drafted them. */
 export function ApplyBody(props: ApplyBodyProps) {
@@ -147,7 +152,7 @@ function writeDraftDocs(sid: string, docs: DraftDocs | null): void {
   }
 }
 
-function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
+function ApplyForm({ n, company, postingUrl, status: rowStatus, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
   const navigate = useNavigate();
   const engine = useEngine();
   // The draft is a paid session and Fill is reachable only here: the row's last apply session is re-attached when the
@@ -191,6 +196,18 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const [status, setStatus] = useState('queued');
   const [fillNote, setFillNote] = useState<string | null>(null);
   const actions = useRunAction();
+  // A second click while the confirm is open would ask twice: it is ignored, as New draft's is.
+  const marking = useRef(false);
+  const markApplied = async () => {
+    if (marking.current) return;
+    marking.current = true;
+    try {
+      if (rowStatus && PAST_APPLIED.includes(rowStatus) && !(await confirm({ title: 'Move this row back to Applied?', body: `The row is at ${rowStatus}. Marking it applied replaces that status, and follow-ups count from Applied again.`, confirmLabel: 'Mark applied', danger: true }))) return;
+      await actions.run('tracker.setStatus', { row: Number(n), state: 'Applied' }, 'Marked as Applied');
+    } finally {
+      marking.current = false;
+    }
+  };
   const docs = useQuery({ queryKey: ['apply', 'documents', n], queryFn: () => apiGet<ApplyDocuments>(n ? `/api/apply/documents?n=${n}` : '/api/apply/documents') });
   // null until the user picks, so the row's tailored CV and cover letter are preselected once the listing arrives.
   const [pickedPdf, setPickedPdf] = useState<string | null>(null);
@@ -399,8 +416,8 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
               <button type="button" disabled={!docs.data || blockers.reasons.length > 0 || actions.busy !== null} aria-describedby={docs.data && blockers.reasons.length > 0 ? 'prefill-blockers' : undefined} onClick={() => void prefill()}>
                 Zero-token prefill <Pill tone="info">Network</Pill>
               </button>
-              {n && (
-                <button type="button" disabled={actions.busy !== null} onClick={() => void actions.run('tracker.setStatus', { row: Number(n), state: 'Applied' }, 'Marked as Applied')}>
+              {n && rowStatus !== 'Applied' && (
+                <button type="button" disabled={actions.busy !== null} onClick={() => void markApplied()}>
                   Mark applied
                 </button>
               )}
@@ -537,7 +554,7 @@ export function ApplyRowPage() {
         <h1 id="page-title">Apply: {q.data?.row.company ?? `row #${n}`}</h1>
         {q.data && <span className="muted">{q.data.row.role}</span>}
       </div>
-      <DataState query={q}>{q.data && <ApplyBody key={n} n={n} company={q.data.row.company} postingUrl={q.data.row.url ?? ''} />}</DataState>
+      <DataState query={q}>{q.data && <ApplyBody key={n} n={n} company={q.data.row.company} postingUrl={q.data.row.url ?? ''} status={q.data.row.status} />}</DataState>
     </section>
   );
 }
