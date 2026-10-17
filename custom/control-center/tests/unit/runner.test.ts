@@ -275,12 +275,19 @@ describe('Runner', () => {
   }, 20_000);
 
   it('a cancel that lands while the wrapper is still starting ends the run cancelled, with an exit record and no command left running', async () => {
-    const runner = new Runner(tmpRoot(), new EventBus(), { pollMs: 50 });
+    // The wrapper's process is a shell that execs node only once the gate file exists, so the cancel surely lands
+    // before the wrapper has run a line of its own (a loaded machine can otherwise start it before the cancel).
+    const dir = tmpRoot();
+    const gate = path.join(dir, 'gate');
+    const nodePath = path.join(dir, 'gated-node');
+    fs.writeFileSync(nodePath, `#!/bin/sh\nwhile [ ! -e '${gate}' ]; do sleep 0.02; done\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
+    const runner = new Runner(dir, new EventBus(), { pollMs: 50, nodePath });
     runners.push(runner);
     const meta = runner.start(req(['0', '20000']));
-    // At once: the wrapper process exists but has not run a line of its own yet (no wrapper.json, no signal handler).
+    // The wrapper process exists but has not run a line of its own yet (no wrapper.json, no signal handler).
     expect(runner.store.readWrapper(meta.id)).toBeNull();
     runner.cancel(meta.id);
+    fs.writeFileSync(gate, '');
     await until(() => Boolean(runner.store.readExit(meta.id)) && runner.store.read(meta.id)?.status === 'cancelled', 10_000);
     // The command never started, or was stopped with the run: nothing of it outlives the cancel.
     const childPid = runner.store.readWrapper(meta.id)?.childPid;
