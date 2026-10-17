@@ -17,7 +17,7 @@ const headingTitle = (line: string): string | null => line.match(HEADING_RE)?.[1
 const SECTION_RE = /^##\s+/;
 // An open row as parsePipeline reads one (indented or loosely spaced): `[ ]`, or `[!]` for a URL that waits for its JD
 // text, which a completed evaluation also moves (modes/pipeline.md, Workflow 2f).
-const OPEN_ITEM_RE = /^\s*-\s*\[[ !]\]\s*/;
+const OPEN_ITEM_RE = /^\s*-\s*\[([ !])\]\s*/;
 const STRUCK = /^~~([\s\S]*?)(?:~~|$)/;
 
 export interface EvaluatedPosting {
@@ -53,9 +53,10 @@ export function pdfGenerated(header: string | null, dataRoot: string): boolean {
   return false;
 }
 
-/** "{url} | company | role" to "{url}": the first cell's first word, since a `[!]` row notes its error after it. */
-function lineUrl(body: string): string {
-  return body.split('|')[0]!.trim().split(/\s+/)[0] ?? '';
+/** "{url} | company | role" to "{url}". A `[!]` row notes its error after the URL, so only its first word is the URL. */
+function lineUrl(body: string, flagged: boolean): string {
+  const cell = body.split('|')[0]!.trim();
+  return flagged ? (cell.split(/\s+/)[0] ?? '') : cell;
 }
 
 function scoreCell(score: number | null): string {
@@ -113,11 +114,12 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
       continue;
     }
     if (section === 'done') continue;
-    if (!OPEN_ITEM_RE.test(lines[i]!)) continue;
+    const open = lines[i]!.match(OPEN_ITEM_RE);
+    if (!open) continue;
     // A restored expired row keeps its strike (`~~URL | Company | Role~~ <dash> posting expired`): read inside it.
     const rest = lines[i]!.replace(OPEN_ITEM_RE, '');
     const body = rest.match(STRUCK)?.[1] ?? rest;
-    const cell = lineUrl(body);
+    const cell = lineUrl(body, open[1] === '!');
     if (unescapeMarkdownUrl(cell) !== target) continue;
     remove.add(i);
     if (listed.has(target) || processedLine !== null) continue;

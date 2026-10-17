@@ -160,6 +160,11 @@ describe('moving an evaluated posting to Processed', () => {
     }
   });
 
+  it('leaves a [ ] row alone when a hand note follows its URL, since the Pipeline page lists it under the whole cell (R28-srv-dom-b-L2-01 review)', () => {
+    const md = `## Pending\n- [ ] ${URL} - asked to wait | Acme | Eng\n## Processed\n`;
+    expect(moveToProcessed(md, URL, POSTING)).toEqual({ text: md, moved: false });
+  });
+
   it('moves an indented or loosely spaced Pending row the Pipeline page lists as pending (R28-srv-dom-b-L1-01)', () => {
     for (const row of [`  - [ ] ${URL} | Acme | Eng`, `-[ ] ${URL} | Acme | Eng`, `- [ ]${URL} | Acme | Eng`, `\t- [!] ${URL} \u2014 Error: login required`]) {
       const r = moveToProcessed(`## Pending\n${row}\n- [ ] https://jobs.example.com/other | Other | Role\n## Processed\n`, URL, POSTING);
