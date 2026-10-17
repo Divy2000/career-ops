@@ -9,6 +9,7 @@ import type { SessionMeta } from '@shared/api';
 import { describeError } from '../../lib/actions';
 import { BATCH_MAX_URLS } from '@shared/fanout';
 import { plainPostingUrl } from '@shared/posting-url';
+import { dedupUrlKey } from '@shared/dedup-url';
 import { fanoutOutcome } from '../../lib/fanoutOutcome';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { lastSession } from '../../lib/lastSession';
@@ -41,7 +42,18 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
   const [urls, setUrls] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: 'ok' | 'danger'; text: string } | null>(null);
-  const list = [...new Set(urls.split(/\s+/).filter(Boolean))];
+  // Two spellings of one posting (a tracking param, a trailing slash) are one evaluation, as the fan-out counts them: only
+  // the first is sent, since the server would refuse the other as a failure on every retry.
+  const { list, folded } = useMemo(() => {
+    const byPosting = new Map<string, string>();
+    const twins: string[] = [];
+    for (const u of new Set(urls.split(/\s+/).filter(Boolean))) {
+      const key = dedupUrlKey(u);
+      if (byPosting.has(key)) twins.push(u);
+      else byPosting.set(key, u);
+    }
+    return { list: [...byPosting.values()], folded: twins };
+  }, [urls]);
   const tooMany = list.length > BATCH_MAX_URLS;
   // Only what the fan-out route takes (plainPostingUrl): a saved JD (local:jds/) or another scheme would start a paid session
   // on the liveness and fetch path, which cannot read it, and a URL carrying credentials would put them in the prompt.
@@ -179,6 +191,7 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       {!pipelineLive && fanningOut && !busy && <p className="muted small">Evaluations started from Pipeline are still starting, so Batch evaluate is off until they have.</p>}
       {!pipelineLive && !fanningOut && !sessions.isError && (sessions.isPending || (processUnlisted && readFor !== processId)) && <p className="muted small">Checking for a running Process inbox.</p>}
       {!pipelineLive && sessions.isError && <p className="danger-text small">Could not check for a running Process inbox, so Batch evaluate is off until the sessions list loads.</p>}
+      {folded.length > 0 && <p className="muted small">Left out as the same posting as one above: {folded.join(', ')}.</p>}
       {refused.length > 0 && (
         <p className="danger-text small">
           Not posting URLs: {refused.join(', ')}. Paste http(s) posting links only; a saved JD (local:jds/) is evaluated from its Inbox row with Evaluate JD.
