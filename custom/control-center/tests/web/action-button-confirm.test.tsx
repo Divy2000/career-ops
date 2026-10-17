@@ -80,6 +80,15 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     expect(onRun).toHaveBeenCalledTimes(1);
   });
 
+  it('given the run has not settled, then the button shows it is busy until it does', async () => {
+    const { releases, button } = await renderPending();
+    await press(button);
+    expect(button.disabled).toBe(true);
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(button.disabled).toBe(false);
+  });
+
   it('given the run settled, then the next click starts it again', async () => {
     const { onRun, releases, button } = await renderPending();
     await press(button);

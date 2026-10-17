@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { Pill } from './ui';
 import { useConfirm } from './ConfirmDialog';
 import type { ActionMeta } from '@shared/api';
@@ -18,11 +18,14 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
   // Confirms queue, so a second click while one is asking would ask twice, and one while the run is in flight would run
   // it twice: both are ignored.
   const asking = useRef(false);
+  // Shown while the run is in flight, so a click it ignores does not look like a dead button. Not while the confirm
+  // is open: the dialog hands focus back to this button when it closes.
+  const [running, setRunning] = useState(false);
   if (!meta) return null;
   return (
     <button
       type="button"
-      disabled={disabled}
+      disabled={disabled || running}
       title={meta.confirm ?? undefined}
       onClick={() => {
         if (asking.current) return;
@@ -30,11 +33,13 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
         void (async () => {
           try {
             if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
+            setRunning(true);
             await onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
           } catch (err) {
             console.error(`${meta.id} failed:`, err);
           } finally {
             asking.current = false;
+            setRunning(false);
           }
         })();
       }}
