@@ -893,11 +893,19 @@ export class SessionManager {
 
   /**
    * A session credited a report under `num`, and a report numbered `num` is still there (the credited file, or the same
-   * report renamed): it holds the number. Once the user deleted it, nothing does.
+   * report renamed): it holds the number. Once the user deleted it, nothing does. A reports folder that cannot be read
+   * proves no report there: the number is then handled as one no report holds (released only while still the session's).
    */
   private creditedHolds(meta: SessionMeta, num: number): boolean {
     if (meta.creditedReport?.num !== num) return false;
-    for (const file of snapshotReports(this.cfg.dataRoot)) if (!isBareDateFile(file) && reportNumberOf(file) === num) return true;
+    let files: Set<string>;
+    try {
+      files = snapshotReports(this.cfg.dataRoot);
+    } catch (err) {
+      console.warn(`[sessions] session ${meta.id}: could not read the reports folder to check report number ${num}: ${(err as Error).message}`);
+      return false;
+    }
+    for (const file of files) if (!isBareDateFile(file) && reportNumberOf(file) === num) return true;
     return false;
   }
 

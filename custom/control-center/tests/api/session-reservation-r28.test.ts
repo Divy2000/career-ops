@@ -93,6 +93,28 @@ describe('a credited report that holds its number (R27-mgr-rev-01)', () => {
     }
   });
 
+  // chmod does not stop root, so as root there is no EACCES to provoke.
+  it.skipIf(process.getuid?.() === 0)('given a waiting session credited a report, when the reports folder cannot be read, then the user can still delete it', async () => {
+    const app = await makeTestApp();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reports = path.join(app.cfg.dataRoot, 'reports');
+    try {
+      const meta = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+      app.sessions.store.setStatus(meta.id, 'awaiting_user');
+      app.sessions.store.setReportNum(meta.id, 75);
+      app.sessions.store.setCreditedReport(meta.id, { num: 75, file: '075-acme-2026-10-11.md' });
+      fs.mkdirSync(reports, { recursive: true });
+      fs.chmodSync(reports, 0o000);
+
+      expect(await app.sessions.delete(meta.id)).toBe(true);
+      expect(app.sessions.read(meta.id)).toBeNull();
+    } finally {
+      fs.chmodSync(reports, 0o755);
+      warn.mockRestore();
+      await app.close();
+    }
+  });
+
   it('given a waiting session whose credited report was deleted and whose sentinel is gone, when the user deletes it, then the number reads as lost', async () => {
     const app = await makeTestApp();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
