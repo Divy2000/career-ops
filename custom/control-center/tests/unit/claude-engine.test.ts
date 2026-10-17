@@ -455,7 +455,10 @@ describe('guard hook', () => {
 
   /** A reservation sentinel as reserve-report-num.mjs writes it, and the created_at a hold on it records. */
   const reserveAs = (n: number, createdAt: string) => fs.writeFileSync(path.join(realRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`), JSON.stringify({ pid: process.pid, token: `t${n}`, created_at: createdAt }));
-  const heldAt = (n: number) => Date.parse((JSON.parse(fs.readFileSync(path.join(realRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`), 'utf8')) as { created_at: string }).created_at);
+  const heldAt = (n: number) => {
+    const sentinel = JSON.parse(fs.readFileSync(path.join(realRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`), 'utf8')) as { created_at: string; token: string };
+    return `${Date.parse(sentinel.created_at)}~${sentinel.token}`;
+  };
 
   it('given a session holding report 060, when it runs reserve-report-num.mjs --release, then only 060 may go, once, in any quoting (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-held-'));
@@ -602,6 +605,22 @@ describe('guard hook', () => {
     reserveAs(79, '2026-10-17T10:02:19.000Z');
     reconcileHeldReportNums(dir, realRoot);
     expect(release('toolu_n')).toBe(2);
+  }, 30_000);
+
+  it('given a hold given back after its number was reserved again in the same millisecond, when the session releases it, then the other reservation\'s token refuses it (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-samems-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 082' }, tool_use_id: id, cwd: realRoot, session_id: 's' }).status;
+    const sentinel = path.join(realRoot, 'reports', '082-RESERVED.md');
+    fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'mine', created_at: '2026-10-17T10:01:22.000Z' }));
+    recordHeldReportNums(dir, [82], realRoot);
+    expect(release('toolu_s')).toBe(0);
+    // The release deleted it and another evaluation reserved 082 in that same millisecond, then the result read failed.
+    fs.writeFileSync(sentinel, JSON.stringify({ pid: process.pid, token: 'another-evaluation', created_at: '2026-10-17T10:01:22.000Z' }));
+    restoreHeldReportNums(dir, [82], 'toolu_s');
+    expect(release('toolu_t')).toBe(2);
+    reconcileHeldReportNums(dir, realRoot);
+    expect(release('toolu_u')).toBe(2);
   }, 30_000);
 
   it('given a held number whose sentinel is gone, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {

@@ -179,17 +179,17 @@ export function writeProgress(file: string, p: TurnProgress): void {
 /**
  * The report numbers a session holds, logged in its guard folder (outside every write scope): the app adds the one it
  * reserved for the session and the ones its own reserve-report-num.mjs runs printed, each naming its reservation by the
- * sentinel's created_at (`+N=<ms>;`), and guard-hook.mjs, which lets a session release only reservations it holds
- * (reserve-report-num.mjs --release deletes whichever sentinels it names), removes each one it lets go. A number
- * released, collected or reserved again has another created_at, so a hold on it no longer matches. With `since` (when
+ * sentinel's created_at and allocator token (`+N=<ms>~<token>;`), and guard-hook.mjs, which lets a session release only
+ * reservations it holds (reserve-report-num.mjs --release deletes whichever sentinels it names), removes each one it lets
+ * go. A number released, collected or reserved again is another reservation, so a hold on it no longer matches. With `since` (when
  * the session got the numbers), a sentinel written after it is another reservation's and is not recorded.
  */
 export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
 
 export function recordHeldReportNums(sessionDir: string, nums: readonly number[], dataRoot: string, since?: number | null): void {
   const records = nums.flatMap((n) => {
-    const at = readSentinelCreatedAt(path.join(dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`));
-    return at === null || (since !== undefined && (since === null || at > since)) ? [] : [`\n+${n}=${at};`];
+    const id = readSentinelIdentity(dataRoot, n);
+    return id === null || (since !== undefined && (since === null || id.at > since)) ? [] : [`\n+${n}=${id.key};`];
   });
   if (records.length === 0) return;
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -219,8 +219,8 @@ export function reconcileHeldReportNums(sessionDir: string, dataRoot: string): v
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
     throw err;
   }
-  const held = new Map<number, number>();
-  const letGo = new Map<number, { id: string | null; at: number | null }>();
+  const held = new Map<number, string>();
+  const letGo = new Map<number, { id: string | null; at: string | null }>();
   for (const line of text.split('\n')) {
     const m = HELD_RECORD.exec(line);
     if (!m) continue;
@@ -229,18 +229,34 @@ export function reconcileHeldReportNums(sessionDir: string, dataRoot: string): v
       letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
       held.delete(num);
     } else if (m[3] !== undefined) {
-      held.set(num, Number(m[3]));
+      held.set(num, m[3]);
       letGo.delete(num);
     } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num)!.at !== null && !held.has(num)) {
       held.set(num, letGo.get(num)!.at!);
       letGo.delete(num);
     }
   }
-  const records = [...letGo].flatMap(([n, { at }]) => (at !== null && readSentinelCreatedAt(path.join(dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`)) === at ? [`\n+${n}=${at};`] : []));
+  const records = [...letGo].flatMap(([n, { at }]) => (at !== null && readSentinelIdentity(dataRoot, n)?.key === at ? [`\n+${n}=${at};`] : []));
   if (records.length) fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), records.join(''));
 }
 
-const HELD_RECORD = /^([+-])(\d+)(?:=(\d+)|@([A-Za-z0-9_-]{1,100}))?;$/;
+const HELD_RECORD = /^([+-])(\d+)(?:=(\d+(?:~[A-Za-z0-9_-]{1,100})?)|@([A-Za-z0-9_-]{1,100}))?;$/;
+const SENTINEL_TOKEN = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** Which reservation `num`'s sentinel is: its created_at, and the key a hold names it by (guard-hook.mjs sentinelIdentity). */
+function readSentinelIdentity(dataRoot: string, num: number): { at: number; key: string } | null {
+  const file = path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+  let sentinel: { created_at?: unknown; token?: unknown };
+  try {
+    sentinel = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof sentinel;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    return null;
+  }
+  const at = typeof sentinel?.created_at === 'string' ? Date.parse(sentinel.created_at) : NaN;
+  if (Number.isNaN(at)) return null;
+  return { at, key: typeof sentinel.token === 'string' && SENTINEL_TOKEN.test(sentinel.token) ? `${at}~${sentinel.token}` : String(at) };
+}
 
 /** The tool ids the CLI hands out (toolu_...); anything else is never written into a hold record. */
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;

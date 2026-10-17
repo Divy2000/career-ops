@@ -54,8 +54,9 @@ function endsTorn(file) {
 // only right after that same call's `-N`. A record cut short (no `;`) holds nothing, and the next one starts its own
 // line rather than joining it.
 const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
-const HELD_RECORD = /^([+-])(\d+)(?:=(\d+)|@([A-Za-z0-9_-]{1,100}))?;$/;
+const HELD_RECORD = /^([+-])(\d+)(?:=(\d+(?:~[A-Za-z0-9_-]{1,100})?)|@([A-Za-z0-9_-]{1,100}))?;$/;
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
+const SENTINEL_TOKEN = /^[A-Za-z0-9_-]{1,100}$/;
 // Held while one release checks and consumes holds, so two releases of one number at once never both pass.
 const HELD_LOCK_FILE = 'held-report-nums.lock';
 // A lock whose content never got written (its hook died between creating and writing it) is replaced this old.
@@ -96,7 +97,7 @@ function heldReportNums(file) {
       letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
       held.delete(num);
     } else if (m[3] !== undefined) {
-      held.set(num, Number(m[3]));
+      held.set(num, m[3]);
       letGo.delete(num);
     } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num).at !== null && !held.has(num)) {
       held.set(num, letGo.get(num).at);
@@ -111,10 +112,11 @@ function heldReportNums(file) {
 const RELEASE_MAX_SENTINEL_AGE_MS = 3 * 60 * 60 * 1000;
 
 /**
- * The created_at of report `num`'s reservation sentinel: 'gone' without one, null when it cannot be read or is old
- * enough that the allocator may collect it before the release runs.
+ * Which reservation report `num`'s sentinel is, `<created_at ms>~<token>` as the app records it (the token the allocator
+ * gives each reservation tells apart two made in one millisecond): 'gone' without one, null when it cannot be read or
+ * is old enough that the allocator may collect it before the release runs.
  */
-function sentinelCreatedAt(dataRoot, num) {
+function sentinelIdentity(dataRoot, num) {
   const file = path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
   let text;
   try {
@@ -125,8 +127,10 @@ function sentinelCreatedAt(dataRoot, num) {
     return err.code === 'ENOENT' ? 'gone' : null;
   }
   try {
-    const at = Date.parse(JSON.parse(text).created_at ?? '');
-    return Number.isNaN(at) ? null : at;
+    const sentinel = JSON.parse(text);
+    const at = Date.parse(sentinel.created_at ?? '');
+    if (Number.isNaN(at)) return null;
+    return typeof sentinel.token === 'string' && SENTINEL_TOKEN.test(sentinel.token) ? `${at}~${sentinel.token}` : String(at);
   } catch {
     return null;
   }
@@ -256,7 +260,7 @@ async function releaseReason(command, policy, sessionDir, toolUseId) {
   const holds = (held, n) => {
     if (!held.has(n)) return false;
     // A sentinel gone holds nothing to release: the app dropped it, or another evaluation may reserve it next.
-    return sentinelCreatedAt(dataRoot, n) === held.get(n);
+    return sentinelIdentity(dataRoot, n) === held.get(n);
   };
   let unheld;
   for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(100)) {
