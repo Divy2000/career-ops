@@ -7,6 +7,9 @@
 #   5. sponsorship-aware shortlist -> data/shortlist.md (zero tokens)
 # A failing step is logged and the remaining steps still run.
 set -uo pipefail
+# This script's own name for the Keychain token, read later: an inherited copy is dropped before any child runs, and
+# unsetting it also drops the export a later assignment would keep, so only the claude calls ever hold the token.
+unset CC_OAUTH_TOKEN
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
@@ -165,8 +168,6 @@ bounded() {
     exit status();
   ' "$@"
 }
-# Unset first: an assignment keeps an inherited export, and only the claude calls may hold the token.
-unset CC_OAUTH_TOKEN
 keychain_rc=0
 CC_OAUTH_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s career-ops-claude-token -w 2>"$KEYCHAIN_ERR")" || keychain_rc=$?
 # Trimmed, as the Control Center trims it: a token of only whitespace is as missing as an empty one.

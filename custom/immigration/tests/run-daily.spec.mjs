@@ -986,6 +986,18 @@ jobTest('an exported CC_OAUTH_TOKEN in the job environment reaches no step: the 
   assert.equal(r.rankCalls[0].token, true, 'the rank call gets the token through the shim');
 });
 
+jobTest('an exported CC_OAUTH_TOKEN never reaches the data-root resolver that runs before the lock re-exec (R27-scripts-a-H-01 review)', () => {
+  const w = dailyWorld();
+  const seen = path.join(w.T, 'resolver-env.log');
+  const resolver = path.join(w.root, 'path-resolver.mjs');
+  fs.appendFileSync(resolver, `\nimport { appendFileSync as __log } from 'node:fs';\n__log(${JSON.stringify(seen)}, (process.env.CC_OAUTH_TOKEN ? 'token' : 'none') + '\\n');\n`);
+  const r = w.run({ CC_OAUTH_TOKEN: 'inherited-from-launchd' });
+  assert.equal(r.status, 0, r.log);
+  const lines = readFileSync(seen, 'utf8').trim().split('\n');
+  assert.ok(lines.length >= 1, 'the resolver ran');
+  assert.deepEqual([...new Set(lines)], ['none'], `the resolver saw CC_OAUTH_TOKEN: ${lines}`);
+});
+
 test('the daily policy pass and the Control Center immigration-policy session may write exactly the same files (parity with modes.ts)', () => {
   const runDaily = readFileSync(RUN_DAILY, 'utf8');
   const outputs = JSON.parse(runDaily.match(/^const OUTPUTS = (\[[^\]]*\]);$/m)?.[1] ?? 'null');
