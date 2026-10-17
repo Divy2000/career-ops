@@ -242,12 +242,15 @@ describe('claude shim: running the real binary', () => {
     }
   });
 
-  it("a real claude that ignores the forwarded SIGTERM is killed after a grace period, so the caller's timeout still ends the call (R27-claude-L1-02 review)", async () => {
+  it.each([
+    ['ignores the forwarded SIGTERM', 'is killed after a grace period', "process.on('SIGTERM', () => {});"],
+    ['exits 0 on the forwarded SIGTERM', 'still fails the call', "process.on('SIGTERM', () => process.exit(0));"],
+  ])("a real claude that %s %s: the caller's stop ends the call as stopped (R27-claude-L1-02 review)", async (_what, _outcome, onTerm) => {
     const dir = tempDir('cc-shim-stuck-');
     const bin = path.join(dir, 'claude-real');
     const pidFile = path.join(dir, 'pid');
-    // Ignores SIGTERM, then runs far past any caller timeout; the pid goes in by rename so a reader never sees it half-written.
-    fs.writeFileSync(bin, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv[2] === '--version') { console.log(${JSON.stringify(`${APPROVED} (Claude Code)`)}); process.exit(0); }\nprocess.on('SIGTERM', () => {});\nfs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));\nfs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});\nsetTimeout(() => process.exit(0), 60_000);\n`, { mode: 0o755 });
+    // Handles SIGTERM its own way, then runs far past any caller timeout; the pid goes in by rename so a reader never sees it half-written.
+    fs.writeFileSync(bin, `#!${process.execPath}\nconst fs = require('node:fs');\nif (process.argv[2] === '--version') { console.log(${JSON.stringify(`${APPROVED} (Claude Code)`)}); process.exit(0); }\n${onTerm}\nfs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid));\nfs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)});\nsetTimeout(() => process.exit(0), 60_000);\n`, { mode: 0o755 });
     const { CC_CLAUDE_BIN: _drop, CAREER_OPS_ROOT: _root, CAREER_OPS_DATA_DIR: _dataDir, ...base } = process.env;
     const child = spawn(process.execPath, [CLAUDE_SHIM_PATH, '-p', 'rank these'], { env: { ...base, CAREER_OPS_ROOT: DATA_ROOT, CC_CLAUDE_BIN: bin }, stdio: 'ignore' });
     const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));

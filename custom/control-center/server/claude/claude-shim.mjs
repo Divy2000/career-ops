@@ -83,16 +83,12 @@ const NODE_SURVIVES = new Set(['SIGPIPE', 'SIGUSR1']);
 function runReal(real, args, env) {
   const child = spawn(real, args, { stdio: 'inherit', env });
   let stoppedBy = null;
-  let escalated = false;
   const forward = (sig) => {
     child.kill(sig);
     if (stoppedBy) return;
     stoppedBy = sig;
-    setTimeout(() => {
-      // Dies below of the caller's own signal, not of this SIGKILL.
-      escalated = true;
-      child.kill('SIGKILL');
-    }, STOP_GRACE_MS).unref();
+    // Dies below of the caller's own signal, not of this SIGKILL.
+    setTimeout(() => child.kill('SIGKILL'), STOP_GRACE_MS).unref();
   };
   for (const sig of FORWARDED) process.on(sig, forward);
   child.on('error', (err) => {
@@ -100,7 +96,8 @@ function runReal(real, args, env) {
     process.exit(1);
   });
   child.on('exit', (code, exitSignal) => {
-    const signal = escalated ? stoppedBy : exitSignal;
+    // A stopped call ends as stopped, even when claude handled the signal and exited cleanly.
+    const signal = stoppedBy ?? exitSignal;
     if (signal) {
       // Die of the same signal, so the caller sees what it would have without the shim.
       for (const sig of FORWARDED) process.off(sig, forward);
