@@ -143,11 +143,19 @@ describe('the daily job probe on real processes', () => {
       const env = { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: T, TMPDIR: tmp, CAREER_OPS_ROOT: data, CC_KEYCHAIN_TIMEOUT: '3600' };
       return { root, data, tmp, env };
     }
-    // Waits for the pidfile for as long as the job is alive, not a fixed number of polls: under heavy load the job's
-    // startup (node resolving the data root, the lockf re-exec) takes seconds, and a probe before it reads not running.
+    // Waits for the pidfile to hold a pid for as long as the job is alive, not a fixed number of polls: under heavy load
+    // the job's startup (node resolving the data root, the lockf re-exec) takes seconds, and a probe before it reads not
+    // running. The shell's `echo "$$" > file` creates the file empty before it writes the pid, so existing is not enough.
+    const pidWritten = (data: string) => {
+      try {
+        return /^[1-9]\d*\n?$/.test(fs.readFileSync(dailyPidfile(data), 'utf8'));
+      } catch {
+        return false;
+      }
+    };
     const runningSoon = async (data: string, pid: number) => {
       const job = children.find((c) => c.pid === pid)!;
-      while (!fs.existsSync(dailyPidfile(data))) {
+      while (!pidWritten(data)) {
         if (job.exitCode !== null || job.signalCode !== null) throw new Error(`run-daily.sh ended (${job.exitCode ?? job.signalCode}) before it wrote its pidfile`);
         await new Promise((r) => setTimeout(r, 50));
       }
