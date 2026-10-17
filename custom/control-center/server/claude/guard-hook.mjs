@@ -47,18 +47,17 @@ function endsTorn(file) {
 }
 
 // The report numbers the session holds, logged in its folder (manager.ts HELD_REPORT_NUMS_FILE), each record on a line
-// of its own: `+N~<ms>;` from the app (taken then), `-N@<tool id>;` from here once a release lets one go, and the app's
-// `+N@<tool id>;` that gives a failed release's hold back, honoured only right after that same call's `-N`. A record cut
-// short (no `;`) holds nothing, and the next one starts its own line rather than joining it.
+// of its own: `+N=<created_at ms>;` from the app, naming the reservation by its sentinel's created_at, `-N@<tool id>;`
+// from here once a release lets one go, and the app's `+N@<tool id>;` that gives a failed release's hold back, honoured
+// only right after that same call's `-N`. A record cut short (no `;`) holds nothing, and the next one starts its own
+// line rather than joining it.
 const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
-const HELD_RECORD = /^([+-])(\d+)(?:~(\d+)|@([A-Za-z0-9_-]{1,100}))?;$/;
+const HELD_RECORD = /^([+-])(\d+)(?:=(\d+)|@([A-Za-z0-9_-]{1,100}))?;$/;
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
-// reserve-report-num.mjs collects a sentinel 4 hours old, and another evaluation may then reserve its number: a hold
-// ends well before that.
-const HOLD_MAX_AGE_MS = 3.5 * 60 * 60 * 1000;
 // Held while one release checks and consumes holds, so two releases of one number at once never both pass.
 const HELD_LOCK_FILE = 'held-report-nums.lock';
-const HELD_LOCK_STALE_MS = 10_000;
+// A lock whose content never got written (its hook died between creating and writing it) is replaced this old.
+const HELD_LOCK_UNREADABLE_MS = 10_000;
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
 const RELEASE_ARG = /^(\d+)(?:-(\d+))?$/;
 const RELEASE_MAX = 50;
@@ -68,8 +67,8 @@ const HELD_WAIT_MS = 3000;
 
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** The numbers held now, each with when it was taken. */
-function heldReportNums(file, now) {
+/** The numbers held, each with the created_at of the reservation it holds. */
+function heldReportNums(file) {
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');
@@ -78,7 +77,7 @@ function heldReportNums(file, now) {
     throw err;
   }
   const held = new Map();
-  // The release that last let each number go, and when the hold it ended was taken.
+  // The release that last let each number go, and the reservation the hold it ended named.
   const letGo = new Map();
   for (const line of text.split('\n')) {
     const m = line.match(HELD_RECORD);
@@ -95,22 +94,67 @@ function heldReportNums(file, now) {
       letGo.delete(num);
     }
   }
-  for (const [num, at] of held) if (now - at >= HOLD_MAX_AGE_MS) held.delete(num);
   return held;
 }
 
-/** Runs `fn` holding the session's hold lock (one taken by a process that died is replaced once it is stale). */
+/** The created_at of report `num`'s reservation sentinel: 'gone' without one, null when it cannot be read. */
+function sentinelCreatedAt(dataRoot, num) {
+  let text;
+  try {
+    text = fs.readFileSync(path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`), 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return 'gone';
+    throw err;
+  }
+  try {
+    const at = Date.parse(JSON.parse(text).created_at ?? '');
+    return Number.isNaN(at) ? null : at;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the process a lock names is gone; a lock with no readable holder is gone once it is old. */
+function lockHolderGone(lock, text) {
+  let pid = null;
+  try {
+    pid = JSON.parse(text).pid;
+  } catch {
+    /* written only partly */
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return Date.now() - fs.statSync(lock).mtimeMs >= HELD_LOCK_UNREADABLE_MS;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    return err.code === 'ESRCH';
+  }
+}
+
+/** A file's text, or null once it is gone. */
+function readIfPresent(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+/** Runs `fn` holding the session's hold lock; one whose hook process died is replaced. */
 async function withHeldLock(dir, fn) {
   const lock = path.join(dir, HELD_LOCK_FILE);
+  const text = JSON.stringify({ pid: process.pid, nonce: crypto.randomUUID() });
   for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(20)) {
     try {
-      fs.closeSync(fs.openSync(lock, 'wx'));
+      fs.writeFileSync(lock, text, { flag: 'wx' });
       break;
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
     }
     try {
-      if (Date.now() - fs.statSync(lock).mtimeMs >= HELD_LOCK_STALE_MS) fs.rmSync(lock, { force: true });
+      const seen = fs.readFileSync(lock, 'utf8');
+      if (lockHolderGone(lock, seen) && fs.readFileSync(lock, 'utf8') === seen) fs.rmSync(lock, { force: true });
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
@@ -119,16 +163,18 @@ async function withHeldLock(dir, fn) {
   try {
     return fn();
   } finally {
-    fs.rmSync(lock, { force: true });
+    // Only this hook's own lock: a live holder's lock is never replaced, so it is still this one.
+    if (readIfPresent(lock) === text) fs.rmSync(lock, { force: true });
   }
 }
 
 /**
  * reserve-report-num.mjs --release deletes the sentinels it names whoever reserved them, so a session releases only
- * the numbers it holds: the one the app reserved for it, and the ones its own reservations printed. A number let go
- * is no longer held: another evaluation may reserve it next.
+ * the reservations it holds: the one the app reserved for it, and the ones its own reservations printed, each while
+ * its sentinel is still that reservation's (a number released, collected and reserved again is someone else's). A
+ * number let go is no longer held.
  */
-async function releaseReason(command, sessionDir, toolUseId) {
+async function releaseReason(command, policy, sessionDir, toolUseId) {
   const tokens = tokenize(command);
   if (!tokens || tokens[0] !== 'node' || tokens[1] !== 'reserve-report-num.mjs' || tokens[2] !== '--release') return null;
   const m = (tokens[3] ?? '').match(RELEASE_ARG);
@@ -139,10 +185,16 @@ async function releaseReason(command, sessionDir, toolUseId) {
   const nums = Array.from({ length: end - start + 1 }, (_, i) => start + i);
   const file = path.join(sessionDir, HELD_REPORT_NUMS_FILE);
   const tag = typeof toolUseId === 'string' && TOOL_USE_ID.test(toolUseId) ? `@${toolUseId}` : '';
+  const dataRoot = policy.dataRoot || policy.codeRoot;
+  const holds = (held, n) => {
+    if (!held.has(n)) return false;
+    const at = sentinelCreatedAt(dataRoot, n);
+    return at === 'gone' || at === held.get(n);
+  };
   for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(100)) {
     const taken = await withHeldLock(sessionDir, () => {
-      const held = heldReportNums(file, Date.now());
-      if (!nums.every((n) => held.has(n))) return false;
+      const held = heldReportNums(file);
+      if (!nums.every((n) => holds(held, n))) return false;
       fs.appendFileSync(file, nums.map((n) => `\n-${n}${tag};`).join(''));
       return true;
     });
@@ -225,7 +277,7 @@ async function main() {
 
   if (tool === 'Bash') {
     const command = String(input.command ?? '');
-    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, sessionDir, payload.tool_use_id));
+    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, policy, sessionDir, payload.tool_use_id));
     if (reason) deny(reason);
     // URLs a script reads from a list file it was given get the same checks as its URL arguments.
     const listed = [];

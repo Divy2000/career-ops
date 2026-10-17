@@ -178,16 +178,21 @@ export function writeProgress(file: string, p: TurnProgress): void {
 
 /**
  * The report numbers a session holds, logged in its guard folder (outside every write scope): the app adds the one it
- * reserved for the session and the ones its own reserve-report-num.mjs runs printed (`+N~<ms>;`), and guard-hook.mjs,
- * which lets a session release only numbers it holds (reserve-report-num.mjs --release deletes whichever sentinels it
- * names), removes each one it lets go. A hold ends before the allocator would collect its sentinel.
+ * reserved for the session and the ones its own reserve-report-num.mjs runs printed, each naming its reservation by the
+ * sentinel's created_at (`+N=<ms>;`), and guard-hook.mjs, which lets a session release only reservations it holds
+ * (reserve-report-num.mjs --release deletes whichever sentinels it names), removes each one it lets go. A number
+ * released, collected or reserved again has another created_at, so a hold on it no longer matches.
  */
 export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
 
-export function recordHeldReportNums(sessionDir: string, nums: readonly number[]): void {
+export function recordHeldReportNums(sessionDir: string, nums: readonly number[], dataRoot: string): void {
+  const records = nums.flatMap((n) => {
+    const at = readSentinelCreatedAt(path.join(dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`));
+    return at === null ? [] : [`\n+${n}=${at};`];
+  });
+  if (records.length === 0) return;
   fs.mkdirSync(sessionDir, { recursive: true });
-  const at = Date.now();
-  fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n}~${at};`).join(''));
+  fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), records.join(''));
 }
 
 /**
@@ -1188,7 +1193,7 @@ export class SessionManager {
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
       if (n > 1) meta = await this.reassertReservation(meta);
-      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum]);
+      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum], this.cfg.dataRoot);
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
@@ -1337,7 +1342,7 @@ export class SessionManager {
         if (ev.type === 'tool.result') {
           const sessionDir = this.store.guardDirOf(id);
           const nums = reserveRuns.delete(ev.id) && ev.ok ? printedReservation(ev.summary) : [];
-          if (nums.length) recordHeldReportNums(sessionDir, nums);
+          if (nums.length) recordHeldReportNums(sessionDir, nums, this.cfg.dataRoot);
           const released = releaseRuns.get(ev.id);
           releaseRuns.delete(ev.id);
           if (released && !ev.ok) restoreHeldReportNums(sessionDir, released, ev.id);
