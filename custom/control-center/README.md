@@ -27,7 +27,7 @@ custom/control-center/bin/cc
 
 Preflight fails with an actionable message when Node is not 22.22.2+, 24.15+ or 26+ (the versions every dependency in `package-lock.json` accepts, test tools included; a test keeps it so), the `claude` binary is missing, or the Keychain item `career-ops-claude-token` is absent (it prints the `claude setup-token` / `security add-generic-password` steps from `custom/immigration/run-daily.sh`). It warns when `ANTHROPIC_API_KEY` is set, because sessions force it empty, and when the installed Claude Code is not an approved version: the app starts, the setup chip in the top bar says so, and only sessions are refused (section 4).
 
-Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-ops data root from `path-resolver.mjs`), `CC_GUARD_DIR` (session policies, hook settings and Dev Chat revert bookkeeping; default `~/Library/Application Support/career-ops-control-center`, and the supervisor refuses to start when it is inside the code or data root), `CC_CLAUDE_BIN`, `CC_NO_OPEN=1`, `CC_LAUNCH_AGENTS_DIR` (default `~/Library/LaunchAgents`), `CC_CLAUDE_PROJECTS_DIR` (default `~/.claude/projects`, read-only usage meter).
+Environment: `CC_PORT` (default 4317), `CC_DATA_ROOT` (defaults to the career-ops data root from `path-resolver.mjs`), `CC_GUARD_DIR` (session policies, hook settings and Dev Chat revert bookkeeping; default `~/Library/Application Support/career-ops-control-center`, and the supervisor refuses to start when it is inside the code or data root), `CC_CLAUDE_BIN`, `CC_NO_OPEN=1`, `CC_LAUNCH_AGENTS_DIR` (default `~/Library/LaunchAgents`), `CC_CLAUDE_PROJECTS_DIR` (where sessions' transcripts and tool results are read from, including by the usage meter; default the `projects` folder of `CLAUDE_CONFIG_DIR` when that is set, else `~/.claude/projects`).
 
 ## 3. Pages tour
 
@@ -164,7 +164,7 @@ Note: `custom/` is public. `custom/immigration/daily-prompt.md` describes the us
 - `dist/index.html missing`: run `npm --prefix custom/control-center run build` before `start:built`.
 - "launchctl bootstrap failed": the plist is written and linted first; check that `/bin/bash` has Full Disk Access when the checkout lives under `~/Desktop` or `~/Documents`.
 - A structured save returns 409: the file changed on disk (another editor, Dev Chat or the daily job). Your pending edits stay in the form on top of the current version; review and save again, or discard.
-- The usage meter says "No Claude Code logs": set `CC_CLAUDE_PROJECTS_DIR` if your Claude Code config lives elsewhere.
+- The usage meter says "No Claude Code logs": the app follows `CLAUDE_CONFIG_DIR`; if your Claude Code logs live somewhere else again, set `CC_CLAUDE_PROJECTS_DIR` to that `projects` folder.
 
 ## 11. Tutorials
 
@@ -311,7 +311,7 @@ With no `tutorial.json` in the folder it builds one from `chapters/toc.json` (`[
   - Playwright MCP stays off until a probe covers its file-capable operations (`browser_navigate` to `file:`, `browser_file_upload`, screenshot file names).
   - The app neutralizes `@`-mentions in prompts, because Claude Code applies Read rules to them only on a best-effort basis.
   - A fork's first turn cannot read its own oversized tool output (`--fork-session` mints its session id, so the guard does not know the folder yet); later turns can.
-  - When your Claude Code configuration lives elsewhere (`CLAUDE_CONFIG_DIR`), set `CC_CLAUDE_PROJECTS_DIR` to its `projects` folder, or sessions cannot read back their oversized tool results.
+  - Sessions read back their oversized tool results from the `projects` folder of `CLAUDE_CONFIG_DIR` (a relative one resolves against the code root; blank counts as unset), else `~/.claude/projects`. `CC_CLAUDE_PROJECTS_DIR` overrides that folder.
 - The session cookie is not bound to a port. Browsers send `cc_session` to every server on `127.0.0.1` (and `localhost`) whatever its port, so another local web server you open in the same browser receives it and could use it to call this app's API. Only run local web servers you trust while the Control Center is signed in.
 - LaTeX: sessions may not run `generate-latex.mjs`, because TeX reads any file a `.tex` names (`\input`, `\verbatiminput`, a sibling `.sty`). They compile with `node custom/cv/compile-latex.mjs <in.tex> <out.pdf>`, which copies only the `.tex` into a temp folder and runs the engine under `sandbox-exec` with no read access to the data root or your home folder, then copies back only the PDF. A multi-file `.tex` (local `\input` sections, `.cls`/`.sty`) must be inlined; tectonic's sandbox grants are untested here. The upstream `modes/latex.md` still names `generate-latex.mjs`; the guard's refusal names the wrapper.
 - HTML to PDF: every child the app starts preloads `server/claude/local-file-guard.mjs` (`NODE_OPTIONS=--import`), so Playwright pages load only the `file://` document they were sent to; other `file://` subresources (iframes, objects, local images beside the HTML) are blocked and logged. The shipped templates inline their fonts, so they are unaffected.
