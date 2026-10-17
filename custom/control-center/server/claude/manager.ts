@@ -319,8 +319,6 @@ export function printedReservation(output: string): number[] {
  * marks it running): two server processes on one data root (blue/green) would otherwise both start a paid turn on it.
  */
 const TURN_CLAIM_FILE = 'turn.claim';
-/** A claim whose holder recorded no start (ps could not date it) is freed this old, its PID maybe since reused. */
-const TURN_CLAIM_STALE_MS = 15 * 60_000;
 let ownStart: ProcessStart | undefined;
 /** Held while a process replaces a stale turn claim; it takes milliseconds, so one left this old is a crashed holder's. */
 const TURN_CLAIM_REPLACE_FILE = 'turn.claim.replace';
@@ -348,8 +346,7 @@ function lockTurnClaimReplace(dir: string, text: string): (() => void) | null {
 /**
  * Whether the process a turn claim names is gone: dead or a reused PID. A live holder keeps its claim however long it
  * prepares (a slow token read), since a peer starting the turn beside it would run two turns, and so does one ps
- * cannot date. One whose holder recorded no start counts as gone once the claim is stale, and a claim cut short once
- * the unreadable grace has passed.
+ * cannot date or that recorded no start of its own. A claim cut short is gone once the unreadable grace has passed.
  */
 export function turnClaimGone(file: string, text: string, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
   let holder: { pid?: unknown; start?: unknown; at?: unknown };
@@ -363,8 +360,8 @@ export function turnClaimGone(file: string, text: string, startOf: (pid: number)
   if (start === null) return true;
   // A holder that runs but whose start ps cannot tell is held: freeing a live one would start a second paid turn.
   if (start === 'unknown') return false;
-  if (typeof holder.start === 'number') return start !== holder.start;
-  return Date.now() - holder.at >= TURN_CLAIM_STALE_MS;
+  // Only a start that differs proves the PID reused; a live holder that recorded none keeps its claim.
+  return typeof holder.start === 'number' && start !== holder.start;
 }
 
 /** A claim with no readable holder is gone once the unreadable grace has passed, or once its holder removed it. */
@@ -584,7 +581,8 @@ export class SessionManager {
     const dir = this.store.guardDirOf(id);
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, TURN_CLAIM_FILE);
-    ownStart ??= processStartTime(process.pid);
+    // Asked again until ps dates this process: a claim with no start of its own is never freed while the PID runs.
+    if (typeof ownStart !== 'number') ownStart = processStartTime(process.pid);
     const text = JSON.stringify({ pid: process.pid, start: ownStart, at: Date.now(), nonce: crypto.randomUUID() });
     const release = () => {
       removeIf(file, text);

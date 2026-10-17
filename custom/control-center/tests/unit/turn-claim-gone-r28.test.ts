@@ -17,4 +17,10 @@ describe('turnClaimGone', () => {
     expect(turnClaimGone(file, text, () => null)).toBe(true);
     expect(turnClaimGone(file, text, () => 2)).toBe(true);
   });
+
+  it('given a claim whose holder recorded no start and still runs, however old, when checked, then it is held', () => {
+    const file = path.join(tempDir('cc-claim-nostart-'), 'turn.claim');
+    for (const start of [null, 'unknown']) expect(turnClaimGone(file, JSON.stringify({ pid: process.pid, start, at: Date.now() - 60 * 60_000 }), () => 5), String(start)).toBe(false);
+    expect(turnClaimGone(file, JSON.stringify({ pid: process.pid, start: null, at: Date.now() }), () => null)).toBe(true);
+  });
 });
