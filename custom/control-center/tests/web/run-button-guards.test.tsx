@@ -98,11 +98,11 @@ describe('Discover script tab: the run its button starts (R27-comp-discover-01)'
     const b = await until(() => { const found = button(/^Scan portals/); return found && !found.disabled ? found : null; }, 'Scan portals to be ready');
     b.focus();
     await act(async () => b.click());
-    // A browser moves focus off a focused button that becomes disabled; jsdom does not, so focus drops through an element that goes away.
-    const gone = document.createElement('input');
-    document.body.append(gone);
-    gone.focus();
-    gone.remove();
+    // A browser moves focus off a focused button that becomes disabled, with no focusin anywhere; jsdom keeps it there and
+    // ignores blur() on a disabled button, so the button is blurred while briefly re-enabled behind React's back.
+    b.disabled = false;
+    b.blur();
+    b.disabled = true;
     expect(document.activeElement).toBe(document.body);
     await act(async () => release!());
     await act(async () => new Promise((r) => setTimeout(r, 20)));
