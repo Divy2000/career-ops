@@ -1037,12 +1037,9 @@ export class SessionManager {
       // Nothing was spawned (its run record could not be created): the turn fails like any other that cannot start.
       return this.failBeforeSpawn(meta, (err as Error).message);
     }
+    let began: SessionMeta;
     try {
-      const began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
-      this.emit(meta.id, { type: 'status', status: 'running', turn: n });
-      this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
-      this.track(meta.id, n, run.id, policy, state, token);
-      return began;
+      began = this.store.beginTurn(meta.id, { runId: run.id, userText: prompt });
     } catch (err) {
       // The run exists and may already be writing: it is stopped first. A first turn's report number goes back to the pool
       // only once that run has ended; a later turn's stays with the session, as for any reply that could not start.
@@ -1066,6 +1063,15 @@ export class SessionManager {
       }
       throw new TurnStartedError(message);
     }
+    // The turn is recorded: it is followed (and finalized once) whatever else fails, or a reply would leave it open.
+    this.track(meta.id, n, run.id, policy, state, token);
+    try {
+      this.emit(meta.id, { type: 'status', status: 'running', turn: n });
+      this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
+    } catch (err) {
+      console.error(`[sessions] session ${meta.id} turn ${n}: could not record its running status: ${(err as Error).message}`);
+    }
+    return began;
   }
 
   private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {

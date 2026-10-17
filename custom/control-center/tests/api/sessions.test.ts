@@ -1799,6 +1799,27 @@ describe('report reservations and session trackers survive failures (r16-claude)
     }
   });
 
+  it('a turn whose running status cannot be recorded after the turn was is still followed and finalized once (R28-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const append = app.sessions.store.appendEvent.bind(app.sessions.store);
+      vi.spyOn(app.sessions.store, 'appendEvent').mockImplementation((id, event) => {
+        if (event.type === 'status' && event.status === 'running') throw new Error('EACCES: the event log is read-only');
+        return append(id, event);
+      });
+      await withScenario(scenarioFile({ events: [INIT, result('Nothing is overdue.', 0.02)] }), async () => call(app, 'POST', '/api/sessions', { mode: 'advisor', prompt: 'What is overdue?' }));
+      expect(app.sessions.store.list()).toHaveLength(1);
+      const id = app.sessions.store.list()[0]!.id;
+      // Recorded before the status failed: the turn is ended with its cost, as any other, so a reply cannot leave it open.
+      await until(() => app.sessions.read(id)!.turns[0]?.endedAt != null);
+      expect(app.sessions.read(id)!.turns).toHaveLength(1);
+      expect(app.sessions.read(id)!.turns[0]!.costUsd).toBe(0.02);
+      expect(fs.existsSync(path.join(app.sessions.store.guardDirOf(id), 'turns', '1', 'after.json'))).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('a session left queued with no run at a restart releases its reserved report number (R14-claude-1-02)', async () => {
     const app = await freshApp();
     try {
