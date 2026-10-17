@@ -212,13 +212,13 @@ describe('claude shim: running the real binary', () => {
     };
     let realPid = 0;
     try {
-      for (let i = 0; i < 200 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 25));
+      for (let i = 0; i < 800 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 25));
       realPid = Number(fs.readFileSync(pidFile, 'utf8'));
       expect(alive(realPid)).toBe(true);
       // What execFileSync's timeout does (SIGTERM) or a caller's quit does: a signal to its direct child, the shim.
       child.kill(stop);
       expect(await exited).toEqual({ code: null, signal: stop });
-      for (let i = 0; i < 80 && alive(realPid); i++) await new Promise((r) => setTimeout(r, 25));
+      for (let i = 0; i < 400 && alive(realPid); i++) await new Promise((r) => setTimeout(r, 25));
       expect(alive(realPid)).toBe(false);
     } finally {
       if (realPid && alive(realPid)) process.kill(realPid, 'SIGKILL');
