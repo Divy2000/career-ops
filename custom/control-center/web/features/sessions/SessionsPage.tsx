@@ -140,8 +140,9 @@ function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['
   const sessions = useSessions();
   const activeFor = useActiveEvaluation();
   const posting = !started && !badUrl && mode === 'oferta' && target.value !== null && (target.type === 'url' || localJdPath(target.value) !== null) ? target.value : null;
-  // Until the sessions list loads (and when it cannot), a running evaluation of the posting cannot be told apart from none.
-  const checking = posting !== null && (sessions.isPending || sessions.isError);
+  // Until the sessions list first loads (and when it cannot), a running evaluation of the posting cannot be told apart
+  // from none. A failed later poll keeps the list it had, so it does not lock the prompt being typed.
+  const checking = posting !== null && sessions.data === undefined;
   const active = posting !== null && !checking ? activeFor(posting) : undefined;
   return (
     <>

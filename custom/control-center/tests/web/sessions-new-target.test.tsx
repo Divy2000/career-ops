@@ -12,6 +12,7 @@ vi.mock('sonner', () => ({ toast: { success: () => undefined, warning: () => und
 
 let host: HTMLElement;
 let root: Root;
+let client: QueryClient;
 let starts: unknown[];
 // The start's answer: the route's 400 for a refused target, or a running session.
 let accept: boolean;
@@ -62,7 +63,8 @@ async function renderSessions() {
   const detail = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => null });
   const router = createRouter({ routeTree: rootRoute.addChildren([page, detail]), history: createMemoryHistory({ initialEntries: ['/sessions'] }) });
   root = createRoot(host);
-  await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(RouterProvider, { router }))));
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(RouterProvider, { router }))));
 }
 
 function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
@@ -180,9 +182,22 @@ describe('Sessions > New session: an oferta on a posting already being evaluated
     accept = true;
     await openNewSession('https://jobs.example.com/1');
     await act(async () => button('Start session')!.click());
-    listed = [RUNNING];
     const cancel = await until(() => button('Cancel'), 'the running session Cancel');
+    // The next poll of the list shows this panel's own session running on the posting.
+    listed = [RUNNING];
+    await act(async () => client.refetchQueries({ queryKey: ['sessions'], exact: true }));
+    expect(client.getQueryData<Array<{ id: string }>>(['sessions'])?.map((s) => s.id)).toEqual(['s-1']);
     await act(async () => type(document.querySelector<HTMLInputElement>('input[aria-label="New session target"]')!, 'https://jobs.example.com/1/'));
     expect(cancel.matches(':disabled')).toBe(false);
+  });
+
+  it('given the list loaded once, when a later poll fails, then the typed prompt and Start session stay usable', async () => {
+    await openNewSession('https://jobs.example.com/1');
+    await until(() => (button('Start session') && !button('Start session')!.matches(':disabled')) || undefined, 'Start session on');
+    listed = 500;
+    await act(async () => client.refetchQueries({ queryKey: ['sessions'], exact: true }));
+    expect(client.getQueryState(['sessions'])?.status).toBe('error');
+    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    expect(button('Start session')!.matches(':disabled')).toBe(false);
   });
 });
