@@ -1836,6 +1836,8 @@ test('a Control Center lock that cannot be read is treated as running: no npm ci
   assert.equal(r.status, 3, `its skipped npm ci is a pending action (R27-scripts-b-L1-01)\n${r.out}`);
   assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run while the lock cannot be read');
   assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+  assert.match(r.out, /\d+\. The Control Center lock .*supervisor\.lock'? cannot be read, so its dependencies were not reinstalled: if no Control Center is running, remove that lock, run npm --prefix .*custom\/control-center'? ci, then start it: .*bin\/cc/, r.out);
+  assert.doesNotMatch(r.out, /was running|already running|stop it/, `nothing may be running, so the run does not say it is (R27 merge review)\n${r.out}`);
 });
 
 test('a Control Center that stops after its npm ci was skipped gets that npm ci before the installer starts it (R18-scripts-b-review-06)', () => {
@@ -1906,6 +1908,8 @@ test('a Control Center lock that is a dangling symlink is treated as running (R1
   assert.equal(r.status, 3, `its skipped npm ci is a pending action (R27-scripts-b-L1-01)\n${r.out}`);
   assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'npm ci must not run');
   assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+  assert.match(r.out, /\d+\. The Control Center lock .*supervisor\.lock'? cannot be read, so its dependencies were not reinstalled: if no Control Center is running, remove that lock, run npm --prefix .*custom\/control-center'? ci, then start it: .*bin\/cc/, r.out);
+  assert.doesNotMatch(r.out, /was running|already running|stop it/, `nothing may be running, so the run does not say it is (R27 merge review)\n${r.out}`);
 });
 
 // Only this run's own root is one the supervisor would start on; on the root the data moved away from, a lock that
