@@ -318,7 +318,24 @@ describe('Process inbox beside a Batch evaluate still starting', () => {
     await typeUrls('https://jobs.example.com/busy');
     await settle();
     expect(button('Batch evaluate')!.disabled).toBe(true);
-    expect(host.textContent).toContain('Evaluations started from Pipeline are still starting, so Batch evaluate is off');
+    expect(host.textContent).toContain('Other evaluations are still starting, so Batch evaluate is off');
+  });
+
+  it('given an Ask drawer evaluation still starting, Batch evaluate is off and does not say it came from Pipeline (R27-comp-batchtab-01)', async () => {
+    const { markBatchStarting } = await import('@web/features/pipeline/InboxAi');
+    const router = await mount();
+    await act(async () => router.navigate({ to: '/pipeline', search: { tab: 'batch' } }));
+    await typeUrls('https://jobs.example.com/busy');
+    // The Ask drawer holds the same mark while its evaluate starts.
+    await act(async () => markBatchStarting(true));
+    try {
+      await settle();
+      expect(button('Batch evaluate')!.disabled).toBe(true);
+      expect(host.textContent).toContain('Other evaluations are still starting, so Batch evaluate is off');
+      expect(host.textContent).not.toContain('from Pipeline');
+    } finally {
+      await act(async () => markBatchStarting(false));
+    }
   });
 
   it('given only its own Evaluate visible fan-out in flight, the Inbox does not say other evaluations are starting', async () => {
