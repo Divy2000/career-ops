@@ -1313,8 +1313,9 @@ export class SessionManager {
         // Still unreadable long after: the session is no longer kept busy by it. Its number stays reserved, no longer
         // refreshed, so the allocator's stale GC frees it once any process that could still write it is long gone.
         clearInterval(timer);
-        this.active.delete(id);
         console.warn(`[sessions] session ${id}: the run record ${runId} still cannot be read; its report number is left to the stale reservation GC`);
+        // A report the run already wrote under the number is credited now; nothing would look for it later.
+        void this.settleKeptReservation(id, beforeReports, false).finally(() => this.active.delete(id));
         return;
       }
       this.keepReservationFresh(id);
@@ -1332,7 +1333,7 @@ export class SessionManager {
    * the turn) credited, and the sentinel released; a number the stale GC collected may be another reservation's, with
    * that reservation's report, so it is let go without touching either.
    */
-  private async settleKeptReservation(id: string, beforeReports: string[]): Promise<void> {
+  private async settleKeptReservation(id: string, beforeReports: string[], release = true): Promise<void> {
     try {
       const meta = this.store.read(id);
       const num = meta?.reportNum ?? null;
@@ -1342,13 +1343,15 @@ export class SessionManager {
       const found = credited ? null : (detectNewReports(this.cfg.dataRoot, new Set(beforeReports)).find((x) => x.num === num && !isBareDateFile(x.file)) ?? null);
       // Asked after the scan: a sentinel still the session's now was its own when that report was written.
       const written = found !== null && this.sentinelOwned(num, since ?? null) ? found : null;
-      // Claimed before the await, as finalize does, so the number is released once.
-      this.store.setReportNum(id, null);
+      // Claimed before the await, as finalize does, so the number is released once. Not released: the number stays the
+      // session's, and a later delete or reply settles it.
+      if (release) this.store.setReportNum(id, null);
       if (written) {
         this.store.setCreditedReport(id, written);
         this.emit(id, { type: 'evaluation', reports: [written] });
         this.bus.publish('data.changed', { domain: 'reports' });
       }
+      if (!release) return;
       console.warn(`[sessions] session ${id}: its stopped run left report number ${num} behind: ${await this.releaseReportNum(num, credited || written !== null, since)}`);
     } catch (err) {
       console.error(`[sessions] session ${id}: could not settle the report number its stopped run kept: ${(err as Error).message}`);

@@ -502,6 +502,31 @@ describe('a number a turn kept while its stopped run could still write (R27-mgr-
     }
   }, 40_000);
 
+  it('given a kept number whose run record stays unreadable, when the session stops waiting for it, then a report its run wrote under the number is credited and the number kept', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, runId } = await keptAfterError(app, 'https://jobs.example.com/synthetic/r28-kept-unreadable-credit');
+      const ending = app.runner.ending.bind(app.runner);
+      vi.spyOn(app.runner, 'ending').mockImplementation((rid: string) => {
+        if (rid === runId) throw new Error('EIO: i/o error, read');
+        return ending(rid);
+      });
+      const file = `${String(n).padStart(3, '0')}-acme-2026-10-17.md`;
+      fs.writeFileSync(reportPath(app, file), '# Acme\n');
+      (app.sessions as unknown as { deps: { unreadableRunWaitMs?: number } }).deps.unreadableRunWaitMs = 300;
+
+      await until(() => !app.sessions.isActive(id), 20_000);
+      expect(app.sessions.read(id)!.creditedReport).toEqual({ num: n, file });
+      expect(app.sessions.read(id)!.reportNum).toBe(n);
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+    }
+  }, 40_000);
+
   it('given a kept number that a bare-date digest shares, when the process stops after the digest is written, then the digest is not credited', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
