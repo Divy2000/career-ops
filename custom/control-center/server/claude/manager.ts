@@ -1354,9 +1354,14 @@ export class SessionManager {
           const released = releaseRuns.get(ev.id);
           releaseRuns.delete(ev.id);
           // A replayed result's holds were settled by the server that handled it: the sentinel under a number now may be
-          // another evaluation's.
-          if (emit && nums.length) recordHeldReportNums(sessionDir, nums, this.cfg.dataRoot);
-          if (emit && released && !ev.ok) restoreHeldReportNums(sessionDir, released, ev.id);
+          // another evaluation's. For the same reason a hold names only a sentinel written before its output was, and a
+          // hold that cannot be recorded only means the hook refuses that release: the turn goes on.
+          try {
+            if (emit && nums.length) recordHeldReportNums(sessionDir, nums, this.cfg.dataRoot, Date.parse(l.ts));
+            if (emit && released && !ev.ok) restoreHeldReportNums(sessionDir, released, ev.id);
+          } catch (err) {
+            console.warn(`[sessions] session ${id}: could not record the report numbers it holds: ${(err as Error).message}`);
+          }
         }
         if (ev.type === 'turn.done') {
           turnDone = ev;
