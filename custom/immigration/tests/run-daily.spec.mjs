@@ -957,13 +957,18 @@ for (const [signal, code] of [['SIGTERM', 143], ['SIGINT', 130], ['SIGHUP', 129]
     assert.equal(alive(holder), false, 'the lock holder exits on the signal');
     assert.deepEqual(fs.readdirSync(w.tmp), [], `the token outlived the cancelled rank step (expected exit ${code})`);
     assert.equal(fs.existsSync(path.join(imm, '.run-daily.pid')), false, 'the pidfile goes too');
+    // The shim runs in its own process group (set -m), so the group signal reaches it only through the wrapper's trap.
+    const [claudePid, shimPid] = readFileSync(pids, 'utf8').trim().split(' ').map(Number);
+    for (let i = 0; i < 40 && (alive(claudePid) || alive(shimPid)); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(alive(shimPid), false, `the node shim outlived the ${signal} cancel (R30-scripts-a-L1-01)`);
+    assert.equal(alive(claudePid), false, `the claude the shim ran outlived the ${signal} cancel, holding the token (R30-scripts-a-L1-01)`);
   });
 }
 
-test('the rank wrapper sets its TERM/INT trap before it starts the shim, so a timeout that comes first still records the failure and orphans nothing', () => {
+test('the rank wrapper sets its TERM/INT/HUP/QUIT trap before it starts the shim, so a timeout that comes first still records the failure and orphans nothing', () => {
   const body = readFileSync(RUN_DAILY, 'utf8');
   const wrapper = body.slice(body.indexOf('rank_top() {'));
-  const trap = wrapper.indexOf('"trap on_term TERM INT"');
+  const trap = wrapper.indexOf('"trap on_term TERM INT HUP QUIT"');
   const start = wrapper.indexOf('"$@" &`');
   assert.ok(trap > -1 && start > -1, 'the wrapper has a trap and a background start');
   assert.ok(trap < start, 'the trap comes before the shim starts');
