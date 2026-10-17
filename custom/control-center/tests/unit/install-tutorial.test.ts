@@ -302,6 +302,15 @@ describe('installTutorial with a quick guide', () => {
     expect(fs.existsSync(dest('guided'))).toBe(false);
   });
 
+  it('lists and copies a file once when three entries name it in two spellings of one file', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg', posterLight: 'Poster.jpg' }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }) });
+    write('poster.jpg', 'POSTER');
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) fs.linkSync(path.join(src(), 'poster.jpg'), path.join(src(), 'Poster.jpg'));
+    const r = installTutorial({ source: src(), dataRoot, dryRun: true });
+    expect(r.files.filter((n) => n === 'Poster.jpg')).toHaveLength(1);
+    expect(r.files.filter((n) => n === 'poster.jpg')).toHaveLength(1);
+  });
+
   it.each([
     ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
     ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],

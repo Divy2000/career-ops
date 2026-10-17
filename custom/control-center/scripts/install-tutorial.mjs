@@ -373,9 +373,9 @@ export function installTutorial(opts) {
     if (c.to === 'tutorial.json' && !built && sameFile(c.from, manifestPath)) continue;
     // Staging may sit on a case-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
     if (c.to.toLowerCase() === 'tutorial.json') throw new Error(`"${c.to}" is used by both the manifest and the ${c.kind} file, so the manifest would overwrite it`);
-    const same = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase());
-    if (same && !sameFile(same.from, c.from)) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
-    if (!same || same.to !== c.to) copies.push(c);
+    const clash = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase() && !sameFile(o.from, c.from));
+    if (clash) throw new Error(`"${c.to}" is used by both the ${clash.kind} and the ${c.kind} file, which are different files`);
+    if (!copies.some((o) => o.to === c.to)) copies.push(c);
   }
 
   const tutorialsDir = path.join(dataRoot, 'data', 'control-center', 'tutorials');
