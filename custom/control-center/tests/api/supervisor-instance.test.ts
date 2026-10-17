@@ -915,6 +915,66 @@ describe('stopping the supervisor holds the data-root lock until every server ch
     }
   }, 90_000);
 
+  /** Closes hang as in packageWhoseCloseHangs, and no request is ever answered, /healthz included, so the start fails. */
+  function packageThatNeverAnswersOrCloses(): string {
+    const pkg = packageWhoseCloseHangs();
+    const app = path.join(pkg, 'server', 'app.ts');
+    const text = fs.readFileSync(app, 'utf8');
+    const healthz = "  app.get('/healthz', async () => ({ ok: true, pid: process.pid }));\n";
+    expect(text).toContain(healthz);
+    fs.writeFileSync(app, text.replace(healthz, `  app.addHook('onRequest', () => new Promise<void>(() => undefined));\n${healthz}`));
+    return pkg;
+  }
+
+  it('a first start that fails without reloads exits only after its stuck server child is gone', async () => {
+    const pkg = packageThatNeverAnswersOrCloses();
+    const s = startSupervisor(await freePort(), copyFixtureRoot(), { packageRoot: pkg });
+    try {
+      expect(await s.exited, s.output()).toBe(1);
+      expect(s.output()).toMatch(/could not start/);
+      expect(childrenOfPackage(pkg), s.output()).toEqual([]);
+    } finally {
+      await stop(s);
+      await reap(childrenOfPackage(pkg), pkg);
+    }
+  }, 90_000);
+
+  it('a stop while the first server child is still starting waits for that child too', async () => {
+    const pkg = packageThatNeverAnswersOrCloses();
+    const s = startSupervisor(await freePort(), copyFixtureRoot(), { packageRoot: pkg });
+    try {
+      await until(() => childrenOfPackage(pkg).length === 1, 'the first server child to start');
+      // Listening (it reported its port) but not healthy, so the supervisor is still waiting on it.
+      await new Promise((r) => setTimeout(r, 2000));
+      process.kill(supervisorPid(s), 'SIGTERM');
+      expect(await s.exited, s.output()).toBe(0);
+      expect(childrenOfPackage(pkg), s.output()).toEqual([]);
+    } finally {
+      await stop(s);
+      await reap(childrenOfPackage(pkg), pkg);
+    }
+  }, 90_000);
+
+  it('a second stop kills a stuck server child at once instead of waiting the 5 s', async () => {
+    const root = copyFixtureRoot();
+    const pkg = packageWhoseCloseHangs();
+    const s = startSupervisor(await freePort(), root, { packageRoot: pkg });
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      const pid = supervisorPid(s);
+      const started = Date.now();
+      process.kill(pid, 'SIGTERM');
+      await new Promise((r) => setTimeout(r, 500));
+      process.kill(pid, 'SIGTERM');
+      expect(await s.exited, s.output()).toBe(0);
+      expect(Date.now() - started).toBeLessThan(4000);
+      expect(childrenOfPackage(pkg), s.output()).toEqual([]);
+    } finally {
+      await stop(s);
+      await reap(childrenOfPackage(pkg), pkg);
+    }
+  }, 90_000);
+
   it('a child still draining after a reload is killed too, not only the active one', async () => {
     const root = copyFixtureRoot();
     const pkg = packageWhoseCloseHangs();

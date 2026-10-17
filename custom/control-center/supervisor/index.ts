@@ -67,6 +67,31 @@ interface Child extends ChildHandle {
 const liveChildren = new Map<ChildProcess, Promise<void>>();
 /** Set once the supervisor stops: no child is started or activated after that, so none outlives it or reconciles. */
 let stopping = false;
+/** The listener, once main() has made it: closed when the supervisor stops. */
+let proxyServer: http.Server | null = null;
+
+/**
+ * The data-root lock is released at exit, so every exit after the first child may have spawned comes here: it exits only
+ * once no server child is left, as one still shutting down would keep tracking runs and sessions next to the next
+ * instance's. A child stuck in shutdown is SIGKILLed after 5 s, on a timer that is not unref'd. Called again while
+ * stopping, it does nothing; killNow() is how a second Ctrl-C cuts the wait short.
+ */
+function exitAfterChildren(code: number): void {
+  if (stopping) return;
+  stopping = true;
+  if (proxyServer?.listening) proxyServer.close();
+  const children = [...liveChildren.keys()];
+  for (const c of children) c.kill('SIGTERM');
+  const hard = setTimeout(killNow, 5000);
+  void Promise.all([...liveChildren.values()]).then(() => {
+    clearTimeout(hard);
+    process.exit(code);
+  });
+}
+
+function killNow(): void {
+  for (const c of liveChildren.keys()) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
+}
 
 function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
   return new Promise((resolve, reject) => {
@@ -199,6 +224,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   process.on('exit', () => lock.release());
+  // From here on a signal waits for the server children, the first one too while it is still starting.
+  const stop = () => (stopping ? killNow() : exitAfterChildren(0));
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
   const sessionsDir = path.join(dataRoot, 'data', 'control-center', 'sessions');
   const guardRoot = resolveGuardRoot({ env: process.env, codeRoot: CODE_ROOT, dataRoot, home: os.homedir(), platform: process.platform });
   const { claudeBin, alternatives } = chooseClaudeBin(process.env);
@@ -235,14 +264,21 @@ async function main(): Promise<void> {
     first = await spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' });
     await waitHealthy(first.port, 20_000, `127.0.0.1:${PORT}`);
   } catch (err) {
+    // Stopped while it started: exitAfterChildren is already waiting for it.
+    if (stopping) return;
     startError = { error: (err as Error).message, stderrTail: first?.stderrTail() ?? '' };
-    first?.kill();
-    first = null;
     console.error(`[supervisor] the server child could not start: ${startError.error}`);
     // Without reloads nothing could bring the server up again, so stop as before.
-    if (process.env.CC_NO_RELOAD) process.exit(1);
+    if (process.env.CC_NO_RELOAD) {
+      exitAfterChildren(1);
+      return;
+    }
+    first?.kill();
+    first = null;
     console.error('Only /__recovery is served until a reload brings the server up (a revert or Restart there, or a fix under server/ or shared/).');
   }
+  // Stopped after the first child came up.
+  if (stopping) return;
   // A reload asked for while stopping (a debounced change, a queued run, a Restart) starts nothing.
   const bg = new BlueGreen(first, () => (stopping ? Promise.reject(new Error('the supervisor is stopping')) : spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' })), (port) => waitHealthy(port, 20_000, `127.0.0.1:${PORT}`), { drainMs: 2000 });
   if (startError) bg.status = { state: 'failed', at: new Date().toISOString(), ...startError };
@@ -255,8 +291,8 @@ async function main(): Promise<void> {
       if (bg.active !== c || stopping) return;
       if (process.env.CC_NO_RELOAD) {
         console.error(`server child exited (${code}); supervisor stopping`);
-        proxy.close();
-        process.exit(code ?? 1);
+        exitAfterChildren(code ?? 1);
+        return;
       }
       console.error(`[supervisor] the server child exited (code ${code}, signal ${signal}) after it started. Only /__recovery is served until a reload brings the server up (a revert or Restart there, or a fix under server/ or shared/).`);
       bg.lost(c, `server child exited (code ${code}, signal ${signal}) after it started`);
@@ -421,40 +457,21 @@ async function main(): Promise<void> {
     socket.on('error', () => target.destroy());
   });
 
-  // The lock is released at exit, so exit only once no server child is left: one still shutting down would otherwise keep
-  // tracking runs and sessions next to the next instance's. A child stuck in shutdown is killed; the timer is not unref'd.
-  const shutdown = (code: number) => {
-    if (stopping) return;
-    stopping = true;
-    if (proxy.listening) proxy.close();
-    const children = [...liveChildren.keys()];
-    for (const c of children) c.kill('SIGTERM');
-    const hard = setTimeout(() => {
-      for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
-    }, 5000);
-    void Promise.all([...liveChildren.values()]).then(() => {
-      clearTimeout(hard);
-      process.exit(code);
-    });
-  };
-  const stop = () => shutdown(0);
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
-
+  proxyServer = proxy;
   proxy.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`Port ${PORT} is already in use. Stop the other process or set CC_PORT to a free port.`);
     } else {
       console.error(`Supervisor failed to listen: ${err.message}`);
     }
-    shutdown(1);
+    exitAfterChildren(1);
   });
 
   proxy.listen(PORT, '127.0.0.1', () => {
     // Only the instance whose lock is still the one on disk may reconcile; one displaced while starting stops here.
     if (!lock.verify()) {
       console.error(`Another Control Center took this data root's lock while this one was starting: ${dataRoot}. This one stops.`);
-      shutdown(1);
+      exitAfterChildren(1);
       return;
     }
     // A reload that already swapped the first child out activates its replacement itself.
@@ -492,5 +509,5 @@ async function main(): Promise<void> {
 
 main().catch((err: Error) => {
   console.error(err.message);
-  process.exit(1);
+  exitAfterChildren(1);
 });
