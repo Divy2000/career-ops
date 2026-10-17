@@ -1127,9 +1127,22 @@ export class SessionManager {
     }
   }
 
-  /** Keeps the session in `active` while the runner still follows the run's process, then drops it. */
+  /**
+   * Keeps the session in `active` while the runner still follows the run's process, then drops it. Meanwhile the stop
+   * that failed while the record could not be read is tried again, and the number the session kept stays reserved.
+   */
   private untilRunStops(id: string, runId: string): void {
+    if (this.closed) return;
+    let stopped = false;
     const following = () => {
+      if (!stopped) {
+        try {
+          this.runner.cancel(runId);
+          stopped = true;
+        } catch {
+          /* the run record is still unreadable: tried again on the next tick */
+        }
+      }
       try {
         return this.runner.ending(runId);
       } catch {
@@ -1142,6 +1155,7 @@ export class SessionManager {
       return;
     }
     const timer = setInterval(() => {
+      this.keepReservationFresh(id);
       if (following()) return;
       clearInterval(timer);
       this.active.delete(id);

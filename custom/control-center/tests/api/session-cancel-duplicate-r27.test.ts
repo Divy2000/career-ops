@@ -94,8 +94,52 @@ describe('a cancelled evaluation whose run is still stopping (R27-claude-L1-01)'
 
       const res = await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: url }, prompt: 'Evaluate it' });
       expect(res.statusCode, res.body).toBe(409);
-      app.runner.cancel(runId);
-      await until(() => app.runner.store.read(runId)?.endedAt != null, 20_000);
+      // Stopped once its record reads again (the cancel that failed while it could not is retried), well before its own end.
+      await until(() => app.runner.store.read(runId)?.endedAt != null, 15_000);
+      await until(() => !app.runner.ending(runId));
+      let deleted = 0;
+      for (let i = 0; i < 40 && deleted !== 200; i++) {
+        deleted = (await app.app.inject({ method: 'DELETE', url: `/api/sessions/${started.id}`, headers: app.authedWrite, payload: {} })).statusCode;
+        if (deleted !== 200) await wait(100);
+      }
+      expect(deleted).toBe(200);
+    } finally {
+      await app.close();
+      error.mockRestore();
+    }
+  }, 40_000);
+
+  it('given a Batch evaluate turn whose run record became unreadable while its process may still run, when its sentinel ages past the refresh threshold, then it is still refreshed', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const url = 'https://jobs.example.com/synthetic/r27-l101-unreadable-fresh';
+      const file = path.join(tempDir('cc-r27-scenario-'), 'scenario.json');
+      fs.writeFileSync(file, JSON.stringify(STUBBORN));
+      process.env.FAKE_CLAUDE_SCENARIO = file;
+      let fan: { sessions: { id: string; turns: { runId: string }[] }[]; reserved: number[] };
+      try {
+        fan = (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: [url] })).json();
+      } finally {
+        delete process.env.FAKE_CLAUDE_SCENARIO;
+      }
+      const id = fan.sessions[0]!.id;
+      const runId = fan.sessions[0]!.turns[0]!.runId;
+      const sentinel = path.join(app.cfg.dataRoot, 'reports', `${String(fan.reserved[0]).padStart(3, '0')}-RESERVED.md`);
+      await until(() => app.runner.store.read(runId)?.childPid != null);
+      const read = app.runner.store.read.bind(app.runner.store);
+      const spy = vi.spyOn(app.runner.store, 'read').mockImplementation((rid: string) => {
+        if (rid === runId) throw new Error('EIO: i/o error, read');
+        return read(rid);
+      });
+      await until(() => app.sessions.read(id)?.status === 'error');
+      // Aged before the record reads again: the session keeps its number while the stubborn process stops (until SIGKILL).
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
+      fs.utimesSync(sentinel, fiveHoursAgo, fiveHoursAgo);
+      spy.mockRestore();
+
+      await until(() => Date.now() - fs.statSync(sentinel).mtimeMs < 60_000, 4_000);
+      await until(() => !app.runner.ending(runId), 20_000);
     } finally {
       await app.close();
       error.mockRestore();
