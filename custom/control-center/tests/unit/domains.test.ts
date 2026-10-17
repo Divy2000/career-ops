@@ -331,6 +331,12 @@ describe('insights dashboard', () => {
     expect(d.stageTransitions[0]).toMatchObject({ from: '-', to: 'Evaluated', count: 3 });
   });
 
+  it('given ledger lines funnel-stages.mjs skips, when parsed, then they are skipped too (R27-srv-dom-a-X-01)', () => {
+    const good = '2\t2026-09-21\tApplied\tInterview\tweb\tok\tmore';
+    const bad = ['1junk\t2026-09-20\tApplied\tInterview\tweb\t', '-6\t2026-09-20\tApplied\tInterview\tweb\t', '3\t\tApplied\tInterview\tweb\t', '4\t2026-09-20\t\tInterview\tweb\t', '5\t2026-09-20\tApplied'];
+    expect(parseStatusLog([...bad, good].join('\n'))).toEqual([{ num: 2, date: '2026-09-21', from: 'Applied', to: 'Interview', source: 'web', note: 'ok\tmore' }]);
+  });
+
   it('computes an all-zero dashboard for an empty tracker without dividing by zero', async () => {
     const d = computeDashboard([], [], await loadFunnelStages(DEFAULT_CODE_ROOT));
     expect(d.totals).toMatchObject({ applications: 0, scored: 0, averageScore: null });
