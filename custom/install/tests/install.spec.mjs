@@ -1843,7 +1843,8 @@ test('a Control Center that stops after its npm ci was skipped, on a --no-start 
     const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'none'], { env: { FAKE_DOCTOR_REMOVE: lock } });
     assert.equal(r.status, 3, r.out);
     assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), 'a --no-start run does not install it either');
-    assert.match(r.out, /\d+\. The Control Center was running, so its dependencies were not reinstalled/);
+    assert.match(r.out, /\d+\. The Control Center was running, so its dependencies were not reinstalled; it has stopped since: run npm --prefix .*custom\/control-center'? ci, then start it: .*custom\/control-center\/bin\/cc/);
+    assert.doesNotMatch(r.out, /stop it, run npm/, 'there is nothing left to stop (R27 merge review)');
   } finally {
     child.kill('SIGKILL');
   }

@@ -1428,8 +1428,10 @@ fi
 # The skipped npm ci is installed below only when this run starts the Control Center; while it is still running, or
 # when this run will not start it, the new code would run on the old node_modules (bin/cc only checks they exist).
 # It goes first: a failed preflight listed above ran against those old dependencies.
-if [ "$CC_DEPS_DEFERRED" = 1 ] && { [ "$CC_LIVE" = 1 ] || [ "$CC_START" = 0 ]; }; then
+if [ "$CC_DEPS_DEFERRED" = 1 ] && [ "$CC_LIVE" = 1 ]; then
   PENDING=("The Control Center was running, so its dependencies were not reinstalled: stop it, run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it again." ${PENDING[@]+"${PENDING[@]}"})
+elif [ "$CC_DEPS_DEFERRED" = 1 ] && [ "$CC_START" = 0 ]; then
+  PENDING=("The Control Center was running, so its dependencies were not reinstalled; it has stopped since: run npm --prefix $(shell_quote "$DIR/custom/control-center") ci, then start it: $(shell_quote "$DIR/custom/control-center/bin/cc")" ${PENDING[@]+"${PENDING[@]}"})
 fi
 if [ "${#PENDING[@]}" -gt 0 ]; then
   say "Done, with pending actions:"
