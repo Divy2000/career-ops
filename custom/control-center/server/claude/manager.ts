@@ -778,7 +778,7 @@ export class SessionManager {
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
     if (num === null || this.creditedHolds(meta, num)) return meta;
-    if (await this.refreshReservation(meta, num)) {
+    if (await this.keepsReservation(meta, num)) {
       this.forgetReservationLosses(meta.id);
       return meta;
     }
@@ -807,6 +807,23 @@ export class SessionManager {
       console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
     }
     return this.store.read(meta.id)!;
+  }
+
+  /**
+   * Whether a later turn keeps `num`: a sentinel still the session's is refreshed, unless it is younger than the refresh
+   * age (no GC collects it before the turn's own ticks refresh it). One whose refresh could not run (the tracker lock
+   * stayed busy) was the session's a moment ago, so it is kept as it is rather than failing the reply.
+   */
+  private async keepsReservation(meta: SessionMeta, num: number): Promise<boolean> {
+    const sentinel = this.sentinelPath(num);
+    if (readSentinelCreatedAt(sentinel) === null || !this.sentinelOwned(num, this.reservedAt(meta, num))) return false;
+    if (Date.now() - (fs.statSync(sentinel, { throwIfNoEntry: false })?.mtimeMs ?? 0) < RESERVATION_REFRESH_AGE_MS) return true;
+    try {
+      return await this.refreshReservation(meta, num);
+    } catch (err) {
+      console.warn(`[sessions] session ${meta.id}: could not refresh its reservation of report number ${num}, kept as it is: ${(err as Error).message}`);
+      return true;
+    }
   }
 
   /**

@@ -188,6 +188,60 @@ describe('a running turn refreshing its sentinel (R27-mgr-rev-04)', () => {
     }
   }, 40_000);
 });
+describe('a reply whose sentinel refresh cannot run (R28-claude-L1-01 review follow-up)', () => {
+  it('given a waiting session that owns its aged number, when the refresh cannot get the tracker lock, then the reply still starts and keeps the number', async () => {
+    let refreshes = 0;
+    const busy: Exec = async (cmd, args, opts) => {
+      if (args.includes('--refresh')) {
+        refreshes += 1;
+        return { code: 1, stdout: '', stderr: 'tracker lock busy' };
+      }
+      return execNoShell(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec: busy });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const fan = await withScenario(NO_REPORT, async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r28-reply-lock-busy'] })).json());
+      const id = fan.sessions[0].id as string;
+      const n = fan.reserved[0] as number;
+      expect((await settleOn(app, id)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000);
+      fs.utimesSync(sentinelPath(app, n), twoHoursAgo, twoHoursAgo);
+
+      const reply = await withScenario(NO_REPORT, async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Try again.' }));
+      expect(reply.statusCode, reply.body).toBe(202);
+      expect(refreshes).toBeGreaterThan(0);
+      expect(app.sessions.read(id)!.turns).toHaveLength(2);
+      expect(app.sessions.read(id)!.reportNum).toBe(n);
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  });
+
+  it('given a waiting session whose sentinel is younger than the refresh age, when it replies, then no refresh process is spawned', async () => {
+    let refreshes = 0;
+    const counting: Exec = async (cmd, args, opts) => {
+      if (args.includes('--refresh')) refreshes += 1;
+      return execNoShell(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec: counting });
+    try {
+      const fan = await withScenario(NO_REPORT, async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r28-reply-young'] })).json());
+      const id = fan.sessions[0].id as string;
+      const n = fan.reserved[0] as number;
+      expect((await settleOn(app, id)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+
+      const reply = await withScenario(NO_REPORT, async () => call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Try again.' }));
+      expect(reply.statusCode, reply.body).toBe(202);
+      expect(app.sessions.read(id)!.reportNum).toBe(n);
+      expect(refreshes).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
+});
 describe('a number a turn kept while its stopped run could still write (R27-mgr-rev-02)', () => {
   it('given a Batch evaluate turn that ended in error keeping its number, when its process stops without a report, then the number is released', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
