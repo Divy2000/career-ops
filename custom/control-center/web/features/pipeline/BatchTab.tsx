@@ -144,7 +144,14 @@ export function BatchTab({ onStarted }: { onStarted?: () => void }) {
       return;
     }
     const now = read.value;
-    if (now.isError || !now.data || livePipelineId(now.data) !== null) return;
+    if (now.isError || !now.data) {
+      finish(null, { tone: 'danger', text: 'Could not check for a running Process inbox, so no evaluation was started. Try again.' });
+      return;
+    }
+    if (livePipelineId(now.data) !== null) {
+      finish(null, { tone: 'danger', text: 'A Process inbox run is processing the pending rows, so no evaluation was started.' });
+      return;
+    }
     const remembered = processStore.read();
     if (processStore.starting() || (remembered !== null && remembered !== knownProcess && !now.data.some((x) => x.id === remembered))) {
       finish(null, { tone: 'danger', text: 'A Process inbox run started meanwhile, so no evaluation was started.' });

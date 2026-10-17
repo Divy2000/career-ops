@@ -12,6 +12,9 @@ let qc: QueryClient;
 let started: number;
 // The fan-out answer is held until release() so the tab can be left and shown again while it runs.
 let release: ((body: unknown) => void) | null;
+// While set, the next sessions read is held until answerSessions() so the tab can be left before it answers.
+let holdSessions: boolean;
+let answerSessions: ((res: Response) => void) | null;
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -58,6 +61,8 @@ beforeEach(() => {
   document.body.innerHTML = '';
   started = 0;
   release = null;
+  holdSessions = false;
+  answerSessions = null;
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
     'fetch',
@@ -65,6 +70,10 @@ beforeEach(() => {
       const url = String(input);
       const method = init?.method ?? 'GET';
       if (url === '/api/sessions/fanout' && method === 'POST') return new Promise<Response>((resolve) => (release = (body) => resolve(json(202, body))));
+      if (url === '/api/sessions' && method === 'GET' && holdSessions) {
+        holdSessions = false;
+        return new Promise<Response>((resolve) => (answerSessions = resolve));
+      }
       if (url === '/api/sessions' && method === 'GET') return json(200, []);
       if (url === '/api/actions') return json(200, []);
       return json(404, { error: 'not stubbed' });
@@ -106,5 +115,21 @@ describe('Pipeline > Batch left while a fan-out runs (R27-feat-b-L1-02)', () => 
     await render(true);
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(textarea().value).toBe('');
+  });
+
+  it('left while the sessions list is read again and that read fails: the URLs and why none started land in the next tab', async () => {
+    await render(true);
+    await type(textarea(), 'https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    await click(button('Batch evaluate')!);
+    holdSessions = true;
+    await click(button('Start them')!);
+    await until(() => answerSessions, 'the sessions read');
+    await render(false);
+    await act(async () => answerSessions!(json(500, { error: 'boom' })));
+    await render(true);
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the error');
+    expect(alert.textContent).toMatch(/no evaluation was started/);
+    expect(textarea().value).toBe('https://jobs.example.com/1\nhttps://jobs.example.com/2');
+    expect(release).toBeNull();
   });
 });
