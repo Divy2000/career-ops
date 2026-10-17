@@ -170,4 +170,15 @@ describe('Pipeline > Batch left while a fan-out runs (R27-feat-b-L1-02)', () => 
     expect(status.textContent).toMatch(/Started 2 evaluations with report numbers 12, 13\./);
     expect(started).toBe(0);
   });
+
+  it('left while a fan-out that starts every URL answers: nothing is kept, so a later visit shows no stale success', async () => {
+    await startHeldFanOut();
+    await render(false);
+    await act(async () => release!(allStarted));
+    await until(() => (readsAfterFanOut > 0 ? true : null), 'the sessions read that ends the start');
+    await render(true);
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(textarea().value).toBe('');
+  });
 });

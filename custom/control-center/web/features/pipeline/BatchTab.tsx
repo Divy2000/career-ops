@@ -30,7 +30,8 @@ const resultListeners = new Set<(r: BatchResult) => void>();
 function handOver(r: BatchResult): void {
   const shown = [...resultListeners][0];
   if (shown) shown(r);
-  else keptResult = r;
+  // A success is on the Sessions page: only a failure, and the URLs to retry, wait for a later visit.
+  else if (r.message.tone === 'danger' || r.urls.length > 0) keptResult = r;
 }
 
 /**
