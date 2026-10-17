@@ -162,13 +162,15 @@ test('Linux with --core-only installs the core and never touches Keychain, launc
 });
 
 test('claude missing is a pending action with the official install commands; the installer never runs them', () => {
-  const { w, args } = fresh({ tools: ['git', 'node', 'npm', 'security', 'uname', 'launchctl', 'plutil'], keychain: true });
+  // brew and curl are recording stubs, so running either install command shows in the log (R27-tests-custom-L2-02).
+  const { w, args } = fresh({ tools: ['git', 'node', 'npm', 'security', 'uname', 'launchctl', 'plutil', 'brew', 'curl'], keychain: true });
   const r = w.run(args());
   assert.equal(r.status, 3, r.out);
   assert.match(r.out, /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
   assert.match(r.out, /brew install --cask claude-code/);
   assert.equal(w.calls('claude').length, 0);
-  assert.equal(w.calls('brew').length, 0);
+  assert.equal(w.calls('brew').length, 0, 'installer ran brew');
+  assert.equal(w.calls('curl').length, 0, 'installer ran curl');
 });
 
 test('an optional tool that is missing prints a one-line fix and never runs brew without --install-missing, even with a y answer waiting', () => {
