@@ -538,9 +538,10 @@ export class SessionManager {
     const batch = meta?.policyBatch ?? null;
     const num = meta?.reportNum ?? null;
     const credited = num !== null && this.creditedHolds(meta!, num);
-    // Taken before the delete removes the record of when the session got the number. A credited report still there
-    // holds the number, so no other reservation can have claimed it.
-    const since = num !== null && !credited ? this.ownedSince(meta!, num) : undefined;
+    // Taken before the delete removes the record of when the session got the number. A report under the number may be
+    // another reservation's (the credited one renamed or deleted, the number collected and claimed again), so the
+    // release is always ownership-checked.
+    const since = num !== null ? this.ownedSince(meta!, num) : undefined;
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
     let deleted: boolean;
@@ -1246,9 +1247,9 @@ export class SessionManager {
       const num = meta.reportNum;
       if (num !== null && r.keepReservation !== true) {
         // Claimed before the await, as finalize does, so the number is released once, and only while it is still the session's.
-        const since = this.creditedHolds(meta, num) ? undefined : this.ownedSince(meta, num);
+        const since = this.ownedSince(meta, num);
         this.store.setReportNum(id, null);
-        reason += `; ${await this.releaseReportNum(num, null, since)}`;
+        reason += `; ${await this.releaseReportNum(num, this.creditedHolds(meta, num) ? true : null, since)}`;
       }
       if (this.turnEnded(id, n)) return;
       const status = cancelled ? 'cancelled' : 'error';
@@ -1337,7 +1338,7 @@ export class SessionManager {
       const num = meta?.reportNum ?? null;
       if (!meta || num === null) return;
       const credited = this.creditedHolds(meta, num);
-      const since = credited ? undefined : this.ownedSince(meta, num);
+      const since = this.ownedSince(meta, num);
       const found = credited ? null : (detectNewReports(this.cfg.dataRoot, new Set(beforeReports)).find((x) => x.num === num && !isBareDateFile(x.file)) ?? null);
       // Asked after the scan: a sentinel still the session's now was its own when that report was written.
       const written = found !== null && this.sentinelOwned(num, since ?? null) ? found : null;
@@ -1401,9 +1402,9 @@ export class SessionManager {
       // An earlier turn's credited report holds the number as well as this turn's own new one, while it is still there.
       const creditedHeld = this.creditedHolds(meta, num);
       const used = newReports.some((x) => x.num === num) || creditedHeld;
-      // A report holding the number means no other reservation can have claimed it; otherwise the stale GC may have, and
-      // the sentinel now there (or the one a reservation writes before the release runs) is someone else's.
-      const since = used ? undefined : this.ownedSince(meta, num);
+      // The stale GC may have collected the number and another reservation claimed it (and written a report under it):
+      // the sentinel now there, or the one a reservation writes before the release runs, is then someone else's.
+      const since = this.ownedSince(meta, num);
       // Claimed before the await, so no other finalize of this turn can release the number again.
       this.store.setReportNum(id, null);
       reason += `; ${await this.releaseReportNum(num, used, since)}`;
@@ -1490,7 +1491,11 @@ export class SessionManager {
     let failure = '';
     // An attempt that failed may have failed after its unlink (the lock release, a timeout): a sentinel gone since then
     // was most likely released by it, not collected.
-    const notOwned = () => (failure && !fs.existsSync(this.sentinelPath(num)) ? `the reservation for report number ${num} is gone after a release attempt that failed (${failure}): it was most likely released then` : lost);
+    const notOwned = () => {
+      if (failure && !fs.existsSync(this.sentinelPath(num))) return `the reservation for report number ${num} is gone after a release attempt that failed (${failure}): it was most likely released then`;
+      // A report holds the number: its reservation, whoever's it is now, is not this session's to release.
+      return used === true ? `report number ${num} is held by a report; its reservation is not the session's, so it is not released` : lost;
+    };
     for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
       if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS * (attempt - 1)));
       if (since !== undefined && !this.sentinelOwned(num, since)) return notOwned();

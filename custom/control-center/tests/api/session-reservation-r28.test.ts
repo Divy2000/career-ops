@@ -135,6 +135,27 @@ describe('a credited report that holds its number (R27-mgr-rev-01)', () => {
     }
   }, 40_000);
 
+  it('given a waiting session whose credited report is gone and another reservation claimed the number and wrote its report, when the user deletes it, then the other reservation keeps its sentinel', async () => {
+    const app = await makeTestApp();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const meta = app.sessions.store.create({ mode: 'oferta', policyClass: 'evaluate', target: { type: 'none', value: null }, model: null });
+      app.sessions.store.setStatus(meta.id, 'awaiting_user');
+      app.sessions.store.setReportNum(meta.id, 76);
+      app.sessions.store.setCreditedReport(meta.id, { num: 76, file: '076-acme-2026-10-11.md' });
+      fs.mkdirSync(path.join(app.cfg.dataRoot, 'reports'), { recursive: true });
+      reclaim(app, 76, Date.now() + 1000);
+      fs.writeFileSync(reportPath(app, '076-globex-2026-10-17.md'), '# Globex\n');
+
+      expect(await app.sessions.delete(meta.id)).toBe(true);
+      expect(fs.existsSync(sentinelPath(app, 76))).toBe(true);
+      expect(JSON.parse(fs.readFileSync(sentinelPath(app, 76), 'utf8')).token).toBe('someone-else');
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  });
+
   it('given a waiting session whose credited report was deleted and whose sentinel is gone, when the user deletes it, then the number reads as lost', async () => {
     const app = await makeTestApp();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
