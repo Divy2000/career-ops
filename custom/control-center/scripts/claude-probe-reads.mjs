@@ -570,9 +570,10 @@ function cleanup() {
     console.error(`summary: ${summaryCopy}`);
   }
 }
-// Node's default SIGINT/SIGTERM action exits without running the finally below, leaving the canaries behind.
-// The calls are killed outright so none writes a transcript after cleanTranscripts has run.
-for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+// Node's default SIGINT/SIGTERM/SIGHUP action exits without running the finally below, leaving the canaries behind,
+// and the calls, in their own process groups, get no terminal signal of their own. They are killed outright so
+// none writes a transcript after cleanTranscripts has run.
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
   process.on(signal, () => {
     for (const child of running) killCall(child);
     console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);

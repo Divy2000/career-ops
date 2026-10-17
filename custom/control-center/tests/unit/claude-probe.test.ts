@@ -166,8 +166,9 @@ syncBuiltinESMExports();
     expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
     expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
   });
-  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-    it(`on ${signal} mid-run stops the running CLI calls, removes every canary and the temp layout, and exits ${signal === 'SIGINT' ? 130 : 143} (R28-supervisor-L1-01)`, async () => {
+  // The calls lead their own process groups, so a terminal hang-up reaches only the probe, which must pass it on.
+  for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
+    it(`on ${signal} mid-run stops the running CLI calls, removes every canary and the temp layout, and exits ${exitCode} (R28-supervisor-L1-01)`, async () => {
       const box = sandbox();
       const claude = path.join(box.bin, 'claude');
       // Answers --version; every case call starts a child of its own (a hook, a Bash-tool command), records both pids
@@ -185,16 +186,19 @@ syncBuiltinESMExports();
       expect(fs.readdirSync(box.calls).length, stderr).toBeGreaterThan(0);
       child.kill(signal);
       const code = await exited;
-      const alive = fs.readdirSync(box.calls).filter((pid) => {
-        try {
-          process.kill(Number(pid), 0);
-          return true;
-        } catch {
-          return false;
-        }
+      // A killed process can linger as a zombie until it is reaped, so give the stub's processes a moment to go.
+      const stubAlive = () => fs.readdirSync(box.calls).filter((pid) => {
+        const ps = spawnSync('ps', ['-o', 'stat=,command=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
+        return ps !== '' && !ps.startsWith('Z') && (ps.includes('sleep 60') || ps.includes(claude));
       });
+      const until = Date.now() + 2_000;
+      let alive = stubAlive();
+      while (alive.length && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 100));
+        alive = stubAlive();
+      }
       for (const pid of alive) process.kill(Number(pid), 'SIGKILL');
-      expect(code, stderr).toBe(signal === 'SIGINT' ? 130 : 143);
+      expect(code, stderr).toBe(exitCode);
       expect(alive).toEqual([]);
       expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
       expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
