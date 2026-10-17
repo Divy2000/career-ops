@@ -105,6 +105,15 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     expect(document.activeElement).toBe(button);
   });
 
+  it('given the button did not have focus when its run started (a mouse click in Safari), then the settled run does not focus it', async () => {
+    const { releases, button } = await renderPending();
+    expect(document.activeElement).toBe(document.body);
+    await press(button);
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it('given the user moved focus elsewhere during the run, then the settled run leaves it there', async () => {
     const { releases, button } = await renderPending();
     const other = document.createElement('input');

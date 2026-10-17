@@ -22,7 +22,7 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
   // is open: the dialog hands focus back to this button when it closes.
   const [running, setRunning] = useState(false);
   // A browser drops focus to the page from a focused button that becomes disabled: once the run ends and the button is
-  // enabled again, focus goes back to it, unless the user has put it somewhere else meanwhile.
+  // enabled again, focus goes back to it if it had focus at the click, unless the user has put it somewhere else meanwhile.
   const button = useRef<HTMLButtonElement>(null);
   const ran = useRef(false);
   useEffect(() => {
@@ -41,6 +41,8 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
       onClick={() => {
         if (asking.current) return;
         asking.current = true;
+        // Safari and Firefox on macOS do not focus a button clicked with the mouse: only a button that had focus gets it back.
+        const hadFocus = document.activeElement === button.current;
         void (async () => {
           let started = false;
           try {
@@ -52,7 +54,7 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
             console.error(`${meta.id} failed:`, err);
           } finally {
             asking.current = false;
-            ran.current = started;
+            ran.current = started && hadFocus;
             setRunning(false);
           }
         })();
