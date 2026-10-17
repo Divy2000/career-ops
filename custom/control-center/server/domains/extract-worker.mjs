@@ -19,7 +19,15 @@ try {
   // Once an extractor has answered its version probe, skip the probe (intake's injectable probe).
   const extractor = probed ? intake.detectPdfExtractor(() => true) : intake.detectPdfExtractor();
   if (!extractor) parentPort.postMessage({ ok: false, missing: true });
-  else parentPort.postMessage({ ok: true, name: extractor.name, text: extractor.extract(abs) });
+  else {
+    try {
+      parentPort.postMessage({ ok: true, name: extractor.name, text: extractor.extract(abs) });
+    } catch (err) {
+      // An extractor that answered an earlier probe and has since been removed: it is missing, not failing.
+      if (err?.code === 'ENOENT') parentPort.postMessage({ ok: false, missing: true });
+      else throw err;
+    }
+  }
 } catch (err) {
   parentPort.postMessage({ ok: false, error: String(err?.message ?? err).split('\n')[0] });
 }

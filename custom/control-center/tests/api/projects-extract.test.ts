@@ -50,6 +50,34 @@ describe('with a stub pdftotext (runs without Poppler)', () => {
   });
 });
 
+describe('a pdftotext removed after one extraction worked (R29-srv-dom-a-X-01)', () => {
+  let t: TestApp;
+  const oldPath = process.env.PATH;
+  beforeAll(async () => {
+    t = await makeTestApp();
+  });
+  afterAll(async () => {
+    process.env.PATH = oldPath;
+    await t.close();
+  });
+
+  it('reports the extractor as missing, not the raw spawn error, every time after it is gone', async () => {
+    const docs = path.join(t.cfg.dataRoot, 'documents', 'projects');
+    fs.mkdirSync(docs, { recursive: true });
+    fs.writeFileSync(path.join(docs, 'gone.pdf'), makePdf(['Kite Tracker']));
+    const stub = installPdftotextStub();
+    process.env.PATH = `${stub.bin}${path.delimiter}/usr/bin${path.delimiter}/bin`;
+    expect(await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/gone.pdf')).toMatchObject({ ok: true });
+    // Poppler uninstalled: no pdftotext anywhere on PATH.
+    stub.restore();
+    process.env.PATH = `/usr/bin${path.delimiter}/bin`;
+    for (let i = 0; i < 2; i++) {
+      const r = await extractSourceText(t.cfg.codeRoot, t.cfg.dataRoot, 'projects/gone.pdf');
+      expect(r).toEqual({ ok: false, error: expect.stringContaining('no PDF text extractor found') });
+    }
+  });
+});
+
 describe('a slow extractor does not block other requests', () => {
   let t: TestApp;
   let calls: string;
