@@ -549,7 +549,7 @@ export class SessionManager {
     } finally {
       if (num !== null) {
         const released = await this.releaseReportNum(num, credited, since);
-        if (released.startsWith('could not') || released.includes('already lost') || released.includes('cannot be read')) console.warn(`[sessions] session ${id} deleted: ${released}`);
+        if (released.startsWith('could not') || released.includes('already lost') || released.includes('cannot be read') || released.includes('release attempt that failed')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
     }
     for (const key of this.reservationWarned) if (key.startsWith(`${id}\0`)) this.reservationWarned.delete(key);
@@ -1488,16 +1488,19 @@ export class SessionManager {
   private async releaseReportNum(num: number, used: boolean | null, since?: number | null): Promise<string> {
     const lost = `report number ${num} was already lost (its reservation was collected), so it is not released`;
     let failure = '';
+    // An attempt that failed may have failed after its unlink (the lock release, a timeout): a sentinel gone since then
+    // was most likely released by it, not collected.
+    const notOwned = () => (failure && !fs.existsSync(this.sentinelPath(num)) ? `the reservation for report number ${num} is gone after a release attempt that failed (${failure}): it was most likely released then` : lost);
     for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
       if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS * (attempt - 1)));
-      if (since !== undefined && !this.sentinelOwned(num, since)) return lost;
+      if (since !== undefined && !this.sentinelOwned(num, since)) return notOwned();
       if (since === undefined) {
         failure = await this.tryReleaseReportNum(num);
       } else {
         const r = await this.settleSentinel('release', num, since!);
         // An unreadable sentinel is still there: whose it is cannot be told, so it is left in place.
         if (r.outcome === 'unreadable') return `the reservation of report number ${num} cannot be read, so it is not released`;
-        if (r.outcome && r.outcome !== 'released') return lost;
+        if (r.outcome && r.outcome !== 'released') return notOwned();
         failure = r.failure;
       }
       if (!failure) break;

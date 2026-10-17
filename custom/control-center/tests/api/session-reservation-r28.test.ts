@@ -253,6 +253,35 @@ describe('a release whose sentinel turns unreadable under the lock (R27-mgr-rev-
     }
   });
 });
+describe('a release that removed the sentinel but exited in error (R27-mgr-rev-03 review follow-up)', () => {
+  it('given a waiting session that owns its number, when the first release removes the sentinel and then fails, then the deletion does not call the number lost', async () => {
+    let failed = false;
+    const flaky: Exec = async (cmd, args, opts) => {
+      const r = await execNoShell(cmd, args, opts);
+      if (args.includes('--release') && !failed) {
+        failed = true;
+        return { code: 1, stdout: '', stderr: 'could not release the tracker lock' };
+      }
+      return r;
+    };
+    const app = await makeTestApp({}, { exec: flaky });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const fan = await withScenario(NO_REPORT, async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r28-release-failed-after-unlink'] })).json());
+      const id = fan.sessions[0].id as string;
+      const n = fan.reserved[0] as number;
+      expect((await settleOn(app, id)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+
+      expect((await call(app, 'DELETE', `/api/sessions/${id}`)).statusCode).toBe(200);
+      expect(failed).toBe(true);
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(false);
+      expect(warn.mock.calls.flat().join('\n')).not.toMatch(/already lost/);
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  }, 40_000);
+});
 describe('a running turn refreshing its sentinel (R27-mgr-rev-04)', () => {
   it('given a running Batch evaluate turn whose sentinel has aged past the refresh age, when another process holds the tracker lock, then the refresh waits for the lock before it touches the sentinel', async () => {
     const app = await makeTestApp();
