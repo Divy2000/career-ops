@@ -337,6 +337,46 @@ function planGuide(guideRoot, name, chapterCount, strictDims) {
 /**
  * @param {{ source: string, dataRoot: string, id?: string, title?: string, description?: string, video?: string, videoLight?: string, strictDims?: boolean, force?: boolean, dryRun?: boolean }} opts
  */
+/** Whether `pid` names a running process; one we may not signal still runs. */
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+/**
+ * Folders that a killed install of `id` left in `tutorialsDir`: its partial staging copies (`.<id>.tmp-<pid>`) and the
+ * installed tutorial it had moved aside (`.<id>.old-<pid>-<ms>`), newest first. A folder whose install still runs is not one.
+ */
+function orphans(tutorialsDir, id) {
+  const found = { staging: [], old: [] };
+  let names;
+  try {
+    names = fs.readdirSync(tutorialsDir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return found;
+    throw err;
+  }
+  for (const name of names) {
+    const m = name.startsWith(`.${id}.`) ? /^(tmp|old)-(\d+)(?:-(\d+))?$/.exec(name.slice(id.length + 2)) : null;
+    if (!m || (m[1] === 'tmp') !== (m[3] === undefined) || Number(m[2]) === process.pid || isRunning(Number(m[2]))) continue;
+    if (m[1] === 'tmp') found.staging.push(path.join(tutorialsDir, name));
+    else found.old.push({ abs: path.join(tutorialsDir, name), ms: Number(m[3]) });
+  }
+  found.old = found.old.sort((a, b) => b.ms - a.ms).map((o) => o.abs);
+  return found;
+}
+
+/** Puts back the tutorial a killed install had moved aside when nothing replaced it, and removes the rest of its leftovers. */
+function sweepOrphans(tutorialsDir, id, dest) {
+  const { staging, old } = orphans(tutorialsDir, id);
+  if (old.length > 0 && !fs.existsSync(dest)) fs.renameSync(old.shift(), dest);
+  for (const abs of [...staging, ...old]) fs.rmSync(abs, { recursive: true, force: true });
+}
+
 export function installTutorial(opts) {
   const source = path.resolve(opts.source);
   const dataRoot = path.resolve(opts.dataRoot);
@@ -396,7 +436,9 @@ export function installTutorial(opts) {
   const dest = path.join(tutorialsDir, manifest.id);
   const files = ['tutorial.json', ...copies.map((c) => c.to)];
   const result = { id: manifest.id, dest, files, manifest, built, dryRun: opts.dryRun === true };
-  if (fs.existsSync(dest) && !opts.force) throw new Error(`tutorial "${manifest.id}" is already installed at ${dest}; pass --force to replace it`);
+  if (opts.dryRun !== true) sweepOrphans(tutorialsDir, manifest.id, dest);
+  const installed = fs.existsSync(dest) || (opts.dryRun === true && orphans(tutorialsDir, manifest.id).old.length > 0);
+  if (installed && !opts.force) throw new Error(`tutorial "${manifest.id}" is already installed at ${dest}; pass --force to replace it`);
   if (opts.dryRun) return result;
 
   fs.mkdirSync(tutorialsDir, { recursive: true });
