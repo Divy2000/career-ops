@@ -314,3 +314,58 @@ test('cli.mjs same-path treats one folder spelled in two letter cases as the sam
     h.cleanup();
   }
 });
+
+// Preloaded into the seed process so a write, or the rename or link that moves the temp file into place, fails the
+// way a full volume makes it fail.
+const failingFs = (dir, which) => put(path.join(dir, 'fail-fs.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+for (const name of ${JSON.stringify(which === 'renameSync' ? ['renameSync', 'linkSync'] : [which])}) {
+  const real = fs[name];
+  fs[name] = (...args) => {
+    if (String(args[0]).includes('.tmp-')) {
+      if (name === 'writeFileSync') real('' + args[0], String(args[1]).slice(0, 3), args[2]);
+      const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; throw err;
+    }
+    return real(...args);
+  };
+}
+syncBuiltinESMExports();
+`);
+const seedWith = (preload, args) => spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, SEED, ...args], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+
+for (const which of ['writeFileSync', 'renameSync']) {
+  test(`given the volume fills during ${which}, when cv-write --replace runs, then it fails, keeps cv.md, and leaves no temp file or stray backup (R27-scripts-b-L1-02)`, () => {
+    const d = tmp();
+    const data = path.join(d, 'data');
+    const r = put(path.join(d, 'resume.md'), '# New resume with personal data\n');
+    put(path.join(data, 'cv.md'), 'OLD\n');
+    const res = seedWith(failingFs(d, which), ['cv-write', '--data', data, '--resume', r, '--replace']);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /no space left/);
+    assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'OLD\n');
+    assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'neither the temp copy nor a backup of the untouched cv.md is left');
+  });
+
+  test(`given the volume fills during ${which}, when cv-write seeds an absent cv.md, then it fails and leaves no cv.md or temp file, so a re-run seeds it again (R27-scripts-b-L1-02 review)`, () => {
+    const d = tmp();
+    const data = path.join(d, 'data');
+    const r = put(path.join(d, 'resume.md'), '# New resume with personal data\n');
+    const res = seedWith(failingFs(d, which), ['cv-write', '--data', data, '--resume', r]);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /no space left/);
+    assert.deepEqual(fs.readdirSync(data), []);
+    assert.equal(seed(['cv-write', '--data', data, '--resume', r]).stdout.trim(), 'created');
+  });
+
+  test(`given the volume fills during ${which}, when projects-rule runs, then it fails, keeps _custom.md, and leaves no temp file (R27-scripts-b-L1-02)`, () => {
+    const d = tmp();
+    const data = path.join(d, 'data');
+    assert.equal(seed(['custom-template', '--data', data, '--template', CUSTOM_TEMPLATE]).stdout.trim(), 'created');
+    const before = fs.readFileSync(path.join(data, 'modes', '_custom.md'), 'utf8');
+    const res = seedWith(failingFs(d, which), ['projects-rule', '--data', data, '--template', RULE_TEMPLATE]);
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /no space left/);
+    assert.equal(fs.readFileSync(path.join(data, 'modes', '_custom.md'), 'utf8'), before);
+    assert.deepEqual(fs.readdirSync(path.join(data, 'modes')), ['_custom.md']);
+  });
+}

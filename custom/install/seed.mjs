@@ -115,7 +115,7 @@ function cvWrite(data, resume, replace) {
   const wanted = normalizedResume(resume);
   fs.mkdirSync(data, { recursive: true });
   if (!exists(cv)) {
-    fs.writeFileSync(cv, wanted, { flag: 'wx' });
+    writeAtomic(cv, wanted, () => {}, linkNew);
     return out('created');
   }
   if (fs.readFileSync(cv, 'utf8') === wanted) return out('identical');
@@ -125,17 +125,45 @@ function cvWrite(data, resume, replace) {
   }
   let backup = `${cv}.bak-${stamp()}`;
   for (let n = 1; exists(backup); n++) backup = `${cv}.bak-${stamp()}-${n}`;
-  fs.copyFileSync(cv, backup, fs.constants.COPYFILE_EXCL);
-  const tmp = path.join(data, `.cv.md.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, wanted, { flag: 'wx' });
-  fs.renameSync(tmp, cv);
+  let backedUp = false;
+  try {
+    writeAtomic(cv, wanted, () => {
+      fs.copyFileSync(cv, backup, fs.constants.COPYFILE_EXCL);
+      backedUp = true;
+    });
+  } catch (err) {
+    // cv.md was not replaced, so its backup would only be a stray copy left by every retry.
+    if (backedUp) fs.rmSync(backup, { force: true });
+    throw err;
+  }
   out('replaced', backup);
 }
 
-function writeAtomic(file, text) {
+// Moves a fully written temp file to a name that must not exist yet: a hard link fails with EEXIST rather than
+// replace a file created meanwhile. A volume without hard links gets a rename after a last check instead.
+function linkNew(tmp, file) {
+  try {
+    fs.linkSync(tmp, file);
+  } catch (err) {
+    if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP'].includes(err.code)) throw err;
+    if (exists(file)) throw Object.assign(new Error(`${file} appeared while it was being written`), { code: 'EEXIST' });
+    fs.renameSync(tmp, file);
+    return;
+  }
+  fs.rmSync(tmp, { force: true });
+}
+
+// beforeRename runs once the new copy is fully written, so a failed write leaves nothing behind.
+function writeAtomic(file, text, beforeRename = () => {}, publish = fs.renameSync) {
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}`);
-  fs.writeFileSync(tmp, text, { flag: 'wx' });
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, text, { flag: 'wx' });
+    beforeRename();
+    publish(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 // Unconditional and idempotent: adds the projects-library house rule when its heading is absent.
