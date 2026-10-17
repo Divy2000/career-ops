@@ -133,7 +133,13 @@ function cvWrite(data, resume, replace) {
     });
   } catch (err) {
     // cv.md was not replaced, so its backup would only be a stray copy left by every retry.
-    if (backedUp) fs.rmSync(backup, { force: true });
+    if (backedUp) {
+      try {
+        fs.rmSync(backup, { force: true });
+      } catch {
+        /* a stray backup; the write failure is the one to report */
+      }
+    }
     throw err;
   }
   out('replaced', backup);

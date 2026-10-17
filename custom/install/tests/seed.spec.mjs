@@ -456,3 +456,28 @@ syncBuiltinESMExports();
   assert.match(res.stderr, /no space left/);
   assert.doesNotMatch(res.stderr, /EBUSY/);
 });
+
+test('given the replace fails and the backup it made cannot be removed, when cv-write --replace runs, then it reports the write failure, not the cleanup (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  put(path.join(data, 'cv.md'), 'OLD\n');
+  const preload = put(path.join(d, 'busy-backup.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRename = fs.renameSync, realRm = fs.rmSync;
+fs.renameSync = (...args) => {
+  if (String(args[0]).includes('.tmp-')) { const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; throw err; }
+  return realRename(...args);
+};
+fs.rmSync = (...args) => {
+  if (String(args[0]).includes('.bak-')) { const err = new Error('EBUSY: resource busy'); err.code = 'EBUSY'; throw err; }
+  return realRm(...args);
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['cv-write', '--data', data, '--resume', r, '--replace']);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.doesNotMatch(res.stderr, /EBUSY/);
+  assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), 'OLD\n');
+});
