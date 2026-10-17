@@ -34,8 +34,29 @@ describe('markQueuedRunsLost temp names (R27-srv-core review)', () => {
     vi.spyOn(fs, 'renameSync').mockImplementation(() => {
       throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
     });
-    expect(() => markQueuedRunsLost(dataRoot, 's1')).not.toThrow();
+    expect(markQueuedRunsLost(dataRoot, 's1')).toBe(false);
     expect(temps(dir)).toEqual([]);
+  });
+
+  it('given a second queued run of the session cannot be marked, when marking, then it reports failure and the first is put back to queued (R28-supervisor-X-02)', () => {
+    const dataRoot = tempDir('cc-lost-partial-');
+    const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
+    for (const id of ['r1', 'r2']) {
+      fs.mkdirSync(path.join(runs, id), { recursive: true });
+      fs.writeFileSync(path.join(runs, id, 'meta.json'), JSON.stringify({ id, status: 'queued', params: { sessionId: 's1' } }));
+      fs.writeFileSync(path.join(runs, id, 'request.json'), '{}');
+    }
+    const rename = fs.renameSync;
+    let first: string | null = null;
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      first ??= String(to);
+      if (String(to) !== first) throw Object.assign(new Error('ENOSPC: no space left on device, rename'), { code: 'ENOSPC' });
+      rename(from, to);
+    });
+    expect(markQueuedRunsLost(dataRoot, 's1')).toBe(false);
+    vi.restoreAllMocks();
+    const store = new RunStore(dataRoot, 5);
+    expect([store.read('r1')?.status, store.read('r2')?.status]).toEqual(['queued', 'queued']);
   });
 });
 

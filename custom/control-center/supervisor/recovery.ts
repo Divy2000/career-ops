@@ -515,16 +515,19 @@ export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (
  * A queued run a dead server left behind is over only because no server will start it (runEnded above), but it is still
  * `queued` on disk with its request.json, so the next server's reconcile() would re-adopt and re-run it over the revert
  * it just allowed. Mark each such run of the session lost first. A run with a `starting` file may still have its wrapper
- * running, so its processes decide and it is left alone.
+ * running, so its processes decide and it is left alone. False when such a run could not be marked: it stays queued and
+ * the next server would still run it, so the revert must not go ahead, and the runs marked before it are put back to
+ * queued so the refused revert leaves every run for the next server to run.
  */
-export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
+export function markQueuedRunsLost(dataRoot: string, sessionId: string): boolean {
   const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
   let names: string[];
   try {
     names = fs.readdirSync(runs);
-  } catch {
-    return;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
   }
+  const marked: { file: string; meta: Record<string, unknown> }[] = [];
   for (const name of names) {
     const dir = path.join(runs, name);
     if (fs.existsSync(path.join(dir, 'starting'))) continue;
@@ -538,12 +541,22 @@ export function markQueuedRunsLost(dataRoot: string, sessionId: string): void {
     if ((meta.params as { sessionId?: unknown } | undefined)?.sessionId !== sessionId) continue;
     if (!fs.existsSync(path.join(dir, 'request.json'))) continue;
     const lost = { ...meta, status: 'lost', endedAt: new Date().toISOString(), error: 'the server was down and this queued run was reverted before it started' };
+    const file = path.join(dir, 'meta.json');
     try {
-      replaceFile(path.join(dir, 'meta.json'), JSON.stringify(lost, null, 2));
+      replaceFile(file, JSON.stringify(lost, null, 2));
     } catch {
-      /* Best effort: a run that cannot be marked still does not block the revert (runEnded already said it ended). */
+      for (const m of marked) {
+        try {
+          replaceFile(m.file, JSON.stringify(m.meta, null, 2));
+        } catch {
+          /* A run left lost is only not run again: with the revert refused, that loses its turn but harms no file. */
+        }
+      }
+      return false;
     }
+    marked.push({ file, meta });
   }
+  return true;
 }
 
 /** Writes turn `n`'s post-turn record from the hook's hashes, as the server's finalize would, unless it has one. */
@@ -595,7 +608,9 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     }
     // A queued run is over only because no server will start it: once the revert is sure to go ahead, mark it lost so
     // the next server does not re-run it over the revert. A refused revert leaves it queued for that server to run.
-    if (markLost) markQueuedRunsLost(opts.ctx.dataRoot, meta.id);
+    if (markLost && !markQueuedRunsLost(opts.ctx.dataRoot, meta.id)) {
+      return { status: 500, text: 'revert refused: a queued run of this session could not be marked lost, so the next server would run it over the revert; try again' };
+    }
     const results = applyReverts(plans);
     return { status: 200, text: resultLines(results) || 'nothing to revert' };
   } catch (err) {
