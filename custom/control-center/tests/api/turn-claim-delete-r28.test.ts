@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { copyFixtureRoot, makeTestApp } from '../helpers/app.js';
@@ -29,6 +29,30 @@ describe('deleting a session another server process is starting a turn on (R28-c
       expect(app.sessions.read(meta.id)).toBeNull();
       expect(await app.sessions.delete('no-such-session')).toBe(false);
     } finally {
+      await app.close();
+    }
+  });
+
+  it('given a session another process deletes while a reply claims its turn, when the reply is refused, then no guard folder is left behind', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    try {
+      const meta = await app.sessions.start({ mode: 'advisor', target: { type: 'none', value: null }, prompt: 'What is overdue?' });
+      for (const deadline = Date.now() + 15_000; ['queued', 'running'].includes(app.sessions.read(meta.id)!.status) || (app.sessions as unknown as { active: Map<string, unknown> }).active.has(meta.id); await new Promise((r) => setTimeout(r, 50))) {
+        if (Date.now() > deadline) throw new Error('the first turn never ended');
+      }
+      const guard = app.sessions.store.guardDirOf(meta.id);
+      const manager = app.sessions as unknown as { claimTurn(id: string): () => void };
+      const claim = manager.claimTurn.bind(manager);
+      // The other process deletes the session after this reply read it, just before it takes the turn claim.
+      vi.spyOn(manager, 'claimTurn').mockImplementation((id) => {
+        app.sessions.store.delete(id);
+        return claim(id);
+      });
+      await expect(app.sessions.send(meta.id, 'Next?')).rejects.toThrow();
+      expect(manager.claimTurn).toHaveBeenCalled();
+      expect(fs.existsSync(guard)).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
       await app.close();
     }
   });

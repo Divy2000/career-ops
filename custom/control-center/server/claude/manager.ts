@@ -526,8 +526,19 @@ export class SessionManager {
     const file = path.join(dir, TURN_CLAIM_FILE);
     ownStart ??= processStartTime(process.pid);
     const text = JSON.stringify({ pid: process.pid, start: ownStart, at: Date.now(), nonce: crypto.randomUUID() });
+    const release = () => {
+      removeIf(file, text);
+      // A session another process deleted after it was read leaves no guard folder made only for this claim; one that
+      // holds anything else is left as it is.
+      if (this.store.read(id) !== null) return;
+      try {
+        fs.rmdirSync(dir);
+      } catch (err) {
+        if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
+      }
+    };
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (createWhole(file, text)) return () => removeIf(file, text);
+      if (createWhole(file, text)) return release;
       const seen = readOrNull(file);
       if (seen === null) continue;
       if (!turnClaimGone(file, seen)) break;
@@ -537,7 +548,7 @@ export class SessionManager {
       if (!unlock) break;
       try {
         if (readOrNull(file) === seen) removeIf(file, seen);
-        if (createWhole(file, text)) return () => removeIf(file, text);
+        if (createWhole(file, text)) return release;
       } finally {
         unlock();
       }
