@@ -87,4 +87,25 @@ describe('a reply sent to one session through two server processes at once (R28-
       await app.close();
     }
   });
+
+  it('given a dead process\'s turn claim that a peer is replacing right now, when a reply is sent, then it is refused as busy rather than replacing it too', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-r28-claim-guard-') });
+    try {
+      const meta = await withScenario([INIT, result('Which company is this for?')], () => app.sessions.start({ mode: 'deep', target: { type: 'none', value: null }, prompt: 'Research', reportNum: null }));
+      expect(await settled(app, meta.id)).toBe('awaiting_user');
+      const dir = app.sessions.store.guardDirOf(meta.id);
+      const dead = spawnSync(process.execPath, ['-e', '']).pid;
+      fs.writeFileSync(path.join(dir, 'turn.claim'), JSON.stringify({ pid: dead, start: 1, at: Date.now(), nonce: 'gone' }));
+      const replacing = path.join(dir, 'turn.claim.replace');
+      fs.writeFileSync(replacing, JSON.stringify({ pid: process.pid, nonce: 'peer' }));
+      await expect(app.sessions.send(meta.id, 'Acme')).rejects.toBeInstanceOf(BusyError);
+      // A replacement lock its process left behind is itself replaced once stale.
+      const old = new Date(Date.now() - 60_000);
+      fs.utimesSync(replacing, old, old);
+      const next = await withScenario([INIT, result('Researched Acme.')], () => app.sessions.send(meta.id, 'Acme'));
+      expect(next.turns).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
 });

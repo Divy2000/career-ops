@@ -255,6 +255,28 @@ const TURN_CLAIM_FILE = 'turn.claim';
 /** A claim whose holder cannot be told apart from a later process under its PID (ps cannot answer) is freed this old. */
 const TURN_CLAIM_STALE_MS = 15 * 60_000;
 let ownStart: ProcessStart | undefined;
+/** Held while a process replaces a stale turn claim; it takes milliseconds, so one left this old is a crashed holder's. */
+const TURN_CLAIM_REPLACE_FILE = 'turn.claim.replace';
+
+/** The replacement lock beside a session's turn claim, or null while another process holds it. Returns its release. */
+function lockTurnClaimReplace(dir: string, text: string): (() => void) | null {
+  const file = path.join(dir, TURN_CLAIM_REPLACE_FILE);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (createWhole(file, text)) return () => removeIf(file, text);
+    const seen = readOrNull(file);
+    if (seen === null) continue;
+    let age: number;
+    try {
+      age = Date.now() - fs.statSync(file).mtimeMs;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    if (age < UNREADABLE_LOCK_GRACE_MS) return null;
+    removeIf(file, seen);
+  }
+  return null;
+}
 
 /**
  * Whether the process a turn claim names is gone: dead or a reused PID. A live holder keeps its claim however long it
@@ -493,7 +515,16 @@ export class SessionManager {
       const seen = readOrNull(file);
       if (seen === null) continue;
       if (!turnClaimGone(file, seen)) break;
-      removeIf(file, seen);
+      // Replaced under a lock of its own: two processes replacing one stale claim at once could otherwise move aside the
+      // claim the other just took, and lose it when a third creates one meanwhile.
+      const unlock = lockTurnClaimReplace(dir, text);
+      if (!unlock) break;
+      try {
+        if (readOrNull(file) === seen) removeIf(file, seen);
+        if (createWhole(file, text)) return () => removeIf(file, text);
+      } finally {
+        unlock();
+      }
     }
     throw new BusyError(`session ${id} is starting a turn in another server process`);
   }
