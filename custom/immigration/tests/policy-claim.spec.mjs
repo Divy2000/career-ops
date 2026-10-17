@@ -239,10 +239,12 @@ test('a start claim in the earlier format whose text does not parse holds on its
   assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
 });
 
-test('a start claim in the earlier format on a reused pid is taken over once it is no longer recent (R28-tests-custom-L1-01 review)', () => {
+test('a start claim in the earlier format on a reused pid is taken over, recent or not (R28-tests-custom-L1-01 review)', () => {
   const r = root();
   const old = new Date(Date.now() - 60 * 60_000).toISOString();
   plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
   assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
   // The same format naming this process's start as ps prints it here still holds past the recent window.
   const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim();
