@@ -197,8 +197,9 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const [pickedCover, setPickedCover] = useState<string | null>(null);
   const storedDocs = readDraftDocs(sessionId);
   // A draft that made no choice, or named a file no longer in output/, leaves the choice open, so the listing's
-  // suggestion is preselected rather than a file Fill could not attach.
-  const stored = (v: string | null | undefined, listed: string[] | undefined) => (v === '' || (v && listed?.includes(v)) ? v : null);
+  // suggestion is preselected rather than a file Fill could not attach. Until the listing answers, the draft's own
+  // choice stands.
+  const stored = (v: string | null | undefined, listed: string[] | undefined) => (v === '' || (v && (!listed || listed.includes(v))) ? v : null);
   const storedPdf = stored(storedDocs?.pdf, docs.data?.pdfs);
   const storedCover = stored(storedDocs?.cover, docs.data?.covers);
   const pdf = pickedPdf ?? storedPdf ?? docs.data?.suggestedPdf ?? '';
@@ -215,6 +216,11 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
     },
     [typedUrl, pdf, cover, pickedPdf, pickedCover, rememberSessionId],
   );
+  // A pick made after the draft started is the one Fill attaches, so it is kept for the re-attached draft as well.
+  const pickDoc = (kind: keyof DraftDocs, value: string) => {
+    (kind === 'pdf' ? setPickedPdf : setPickedCover)(value);
+    if (sessionId) writeDraftDocs(sessionId, { pdf, cover, [kind]: value });
+  };
   const [summary, setSummary] = useState<string | null>(null);
   const blockers = prefillBlockers({ url, pdf, cover, pdfCount: docs.data?.pdfs.length ?? 0, company });
   const playwright = engine.data?.playwrightAvailable ?? false;
@@ -235,9 +241,12 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
       setStatus(s);
       rememberStatus(s);
       // Deleted elsewhere (or a stale id): its answers cannot be filled any more, so the form starts over like New draft.
-      if (s === 'gone') onNewDraft();
+      if (s === 'gone') {
+        if (sessionId) writeDraftDocs(sessionId, null);
+        onNewDraft();
+      }
     },
-    [rememberStatus, onNewDraft],
+    [rememberStatus, onNewDraft, sessionId],
   );
   const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
   // The documents picked on this page are the ones the session attaches, not whichever CV the apply mode would resolve.
@@ -355,7 +364,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
               <>
                 <label style={{ display: 'block', marginTop: 8 }}>
                   CV PDF to attach{' '}
-                  <select aria-label="CV PDF to attach" value={pdf} onChange={(e) => setPickedPdf(e.target.value)}>
+                  <select aria-label="CV PDF to attach" value={pdf} onChange={(e) => pickDoc('pdf', e.target.value)}>
                     <option value="">Choose a PDF</option>
                     {docs.data.pdfs.map((p) => (
                       <option key={p} value={p}>
@@ -367,7 +376,7 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
                 {docs.data.covers.length > 0 && (
                   <label style={{ display: 'block', marginTop: 8 }}>
                     Cover letter text{' '}
-                    <select aria-label="Cover letter text" value={cover} onChange={(e) => setPickedCover(e.target.value)}>
+                    <select aria-label="Cover letter text" value={cover} onChange={(e) => pickDoc('cover', e.target.value)}>
                       <option value="">None</option>
                       {docs.data.covers.map((c) => (
                         <option key={c} value={c}>
