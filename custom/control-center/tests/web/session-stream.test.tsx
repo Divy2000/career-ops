@@ -331,6 +331,43 @@ describe('one session across its turns', () => {
     await until(() => latest.transcript.turns[0]?.text === 'abc', 'every event, in order');
   });
 
+  it('an older read answering after a newer one was asked does not take in the frames that wait for the newer one (R29-weblib-L1-01)', async () => {
+    holdMeta = true;
+    state = 'running';
+    events = [TURN_1[0]!, stored(2, { type: 'text.delta', text: 'a' })];
+    await mount();
+    // The mount read is in flight; the session stores 3 and 4 before the app stream opens, so no subscriber gets them.
+    events = [...events, stored(3, { type: 'text.delta', text: 'b' }), stored(4, { type: 'text.delta', text: 'c' })];
+    await act(async () => appStream().open());
+    expect(heldMeta.length).toBe(2);
+    events = [...events, stored(5, { type: 'text.delta', text: 'd' })];
+    await frames([events[4]!]);
+    // The mount read (up to seq 2) answers first, then the read the open asked for (up to seq 4).
+    const [mountRead, openRead] = heldMeta.splice(0);
+    await act(async () => mountRead!());
+    await act(async () => openRead!());
+    holdMeta = false;
+    await until(() => latest.meta?.status === 'running' && latest.transcript.turns[0]?.text === 'abcd', 'every event, in order');
+  });
+
+  it('an older read answering last does not put back the meta it read (R29-weblib-L1-01)', async () => {
+    holdMeta = true;
+    state = 'running';
+    events = [TURN_1[0]!, TURN_1[1]!];
+    await mount();
+    // The turn ends before the stream opens: the open's read sees it done.
+    events = [...TURN_1];
+    state = 'done';
+    await act(async () => appStream().open());
+    const [mountRead, openRead] = heldMeta.splice(0);
+    await act(async () => openRead!());
+    await until(() => latest.meta?.status === 'done', 'the newer meta');
+    await act(async () => mountRead!());
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    expect(latest.meta?.status).toBe('done');
+    expect(latest.transcript.status).toBe('done');
+  });
+
   it('a frame past a gap in the seqs reads the stored events instead of applying over the gap', async () => {
     state = 'running';
     events = [TURN_1[0]!, stored(2, { type: 'text.delta', text: 'a' })];
