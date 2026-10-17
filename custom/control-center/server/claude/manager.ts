@@ -751,25 +751,27 @@ export class SessionManager {
    * write its report under it.
    */
   private keepReservationFresh(id: string): void {
-    const meta = this.store.read(id);
-    const num = meta?.reportNum ?? null;
-    if (!meta || num === null || meta.creditedReport?.num === num) return;
-    const sentinel = this.sentinelPath(num);
+    let num: number | null = null;
     try {
+      // Read inside the try: the tracker tick calling this must never throw (an unreadable record waits for the next tick).
+      const meta = this.store.read(id);
+      num = meta?.reportNum ?? null;
+      if (!meta || num === null || meta.creditedReport?.num === num) return;
+      const sentinel = this.sentinelPath(num);
       if (Date.now() - fs.statSync(sentinel).mtimeMs < RESERVATION_REFRESH_AGE_MS) return;
-      if (!this.refreshReservation(meta, num)) this.warnReservationLost(id, num);
+      if (!this.refreshReservation(meta, num)) this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') this.warnReservationLost(id, num);
-      else console.warn(`[sessions] session ${id}: could not refresh the reservation for report number ${num}: ${(err as Error).message}`);
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' && num !== null) this.warnReservationLost(id, num, 'was collected while its turn runs; the number may be handed out again');
+      else console.warn(`[sessions] session ${id}: could not refresh the reservation for report number ${num ?? '(unknown)'}: ${(err as Error).message}`);
     }
   }
 
   /** Said once per session and number: the tracker ticks again every poll. Finalize then leaves the number alone. */
-  private warnReservationLost(id: string, num: number): void {
+  private warnReservationLost(id: string, num: number, why: string): void {
     const key = `${id}\0${num}`;
     if (this.lostReservationsWarned.has(key)) return;
     this.lostReservationsWarned.add(key);
-    console.warn(`[sessions] session ${id}: its reservation of report number ${num} was collected while its turn runs; the number may be handed out again`);
+    console.warn(`[sessions] session ${id}: its reservation of report number ${num} ${why}`);
   }
 
   private sentinelPath(num: number): string {

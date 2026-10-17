@@ -98,5 +98,44 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
       warn.mockRestore();
     }
   }, 30_000);
+
+  it('given a running Batch evaluate turn whose session record cannot be read for a moment, when the tracker ticks, then nothing is thrown out of the tick and the turn still ends', async () => {
+    const app = await makeTestApp();
+    try {
+      const { id, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-unreadable');
+      const read = app.sessions.store.read.bind(app.sessions.store);
+      let refused = 0;
+      const spy = vi.spyOn(app.sessions.store, 'read').mockImplementation((sid: string) => {
+        if (sid !== id) return read(sid);
+        refused++;
+        throw new Error('EIO: i/o error, read');
+      });
+      await until(() => refused >= 3);
+      spy.mockRestore();
+      go();
+
+      expect((await settleOn(app, id)).meta.status).toBe('error');
+    } finally {
+      await app.close();
+    }
+  }, 30_000);
+
+  it('given a running Batch evaluate turn whose aged sentinel cannot be parsed, when the tracker ticks, then it warns the sentinel is unreadable rather than collected', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-torn');
+      fs.writeFileSync(sentinelPath(app, n), '{ torn');
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
+      fs.utimesSync(sentinelPath(app, n), fiveHoursAgo, fiveHoursAgo);
+      await until(() => warn.mock.calls.flat().join('\n').includes(`reservation of report number ${n} cannot be read`));
+      expect(warn.mock.calls.flat().join('\n')).not.toContain(`reservation of report number ${n} was collected`);
+      go();
+      await settleOn(app, id);
+    } finally {
+      await app.close();
+      warn.mockRestore();
+    }
+  }, 30_000);
 });
 
