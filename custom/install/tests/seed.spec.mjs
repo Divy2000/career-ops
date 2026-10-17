@@ -621,3 +621,15 @@ test('given a clock far from UTC, when cv-write --replace backs up cv.md, then t
   assert.match(stamped, /^\d{8}T\d{6}$/);
   assert.ok(stamped >= before && stamped <= after, `backup stamp ${stamped} is not the local time (${before} to ${after})`);
 });
+
+test('given config/local-paths.txt is a symlink to a shared file, when local-paths adds custom/, then the shared file gets the line and the link is kept (R28-scripts-b-L1-01 review)', () => {
+  const d = tmp();
+  const shared = put(path.join(d, 'shared', 'local-paths.txt'), 'notes/\n');
+  fs.mkdirSync(path.join(d, 'config'));
+  const link = path.join(d, 'config', 'local-paths.txt');
+  fs.symlinkSync(path.relative(path.dirname(link), shared), link);
+  assert.equal(seed(['local-paths', '--dir', d]).stdout.trim(), 'added');
+  assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link was replaced by a regular file');
+  assert.equal(fs.readFileSync(shared, 'utf8'), 'notes/\ncustom/\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(link)), ['local-paths.txt']);
+});

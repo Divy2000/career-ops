@@ -25,8 +25,24 @@ function localPaths(dir) {
   const merged = mergeLocalPaths(exists(file) ? fs.readFileSync(file, 'utf8') : '');
   if (merged === null) return out('present');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeAtomic(file, merged);
+  writeAtomic(linkTarget(file), merged);
   out('added');
+}
+
+// The file a chain of symlinks at `file` ends at, so a rename into place updates a linked file instead of replacing the link.
+function linkTarget(file) {
+  let target = file;
+  for (let hops = 0; hops < 40; hops++) {
+    let link;
+    try {
+      link = fs.readlinkSync(target);
+    } catch (err) {
+      if (err.code === 'EINVAL' || err.code === 'ENOENT') return target;
+      throw err;
+    }
+    target = path.resolve(path.dirname(target), link);
+  }
+  throw new Error(`${file} is a symlink loop`);
 }
 
 function customTemplate(data, template) {
