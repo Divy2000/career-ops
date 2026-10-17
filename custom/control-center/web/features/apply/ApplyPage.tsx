@@ -121,6 +121,30 @@ function writeTypedUrl(sid: string, url: string | null): void {
   }
 }
 
+// The CV PDF and cover letter a draft's prompt named, by its session id, so a re-attached draft fills with the documents
+// its answers were drafted for, not the row's suggested ones.
+type DraftDocs = { pdf: string; cover: string };
+const draftDocsKey = (sid: string) => `cc.apply.docs.${sid}`;
+function readDraftDocs(sid: string | null): DraftDocs | null {
+  if (!sid) return null;
+  try {
+    const raw = sessionStorage.getItem(draftDocsKey(sid));
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as Partial<DraftDocs>;
+    return typeof parsed.pdf === 'string' && typeof parsed.cover === 'string' ? { pdf: parsed.pdf, cover: parsed.cover } : null;
+  } catch {
+    return null;
+  }
+}
+function writeDraftDocs(sid: string, docs: DraftDocs | null): void {
+  try {
+    if (docs === null) sessionStorage.removeItem(draftDocsKey(sid));
+    else sessionStorage.setItem(draftDocsKey(sid), JSON.stringify(docs));
+  } catch {
+    // storage refused: only the documents' re-attaching is lost
+  }
+}
+
 function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
   const navigate = useNavigate();
   const engine = useEngine();
@@ -129,16 +153,6 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const remembered = useRememberedSession(applyKey(n));
   const sessionId = remembered.panel.sessionId;
   const [typedUrl, setUrl] = useState<string | null>(null);
-  // The panel's start holds the callback of the render it was sent from, so the link kept is the one its prompt used,
-  // also when the id comes back after this form unmounted.
-  const rememberSessionId = remembered.panel.onSessionId;
-  const onSessionId = useCallback(
-    (sid: string) => {
-      if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
-      rememberSessionId(sid);
-    },
-    [typedUrl, rememberSessionId],
-  );
   const storedUrl = readTypedUrl(sessionId);
   // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings
   // back its posting URL, which it carries as its target. One started from a typed URL already shows it.
@@ -166,7 +180,10 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const newDraftAsked = async () => {
     if (edited && !(await confirm({ title: 'Discard the edited answers?', body: 'A new draft starts from an empty form. The current draft stays on the Sessions page with the answers as it drafted them.', confirmLabel: 'Discard changes', danger: true }))) return;
     lastSession(applyKey(n)).write(null);
-    if (sessionId) writeTypedUrl(sessionId, null);
+    if (sessionId) {
+      writeTypedUrl(sessionId, null);
+      writeDraftDocs(sessionId, null);
+    }
     onNewDraft();
   };
   const [status, setStatus] = useState('queued');
@@ -176,8 +193,20 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   // null until the user picks, so the row's tailored CV and cover letter are preselected once the listing arrives.
   const [pickedPdf, setPickedPdf] = useState<string | null>(null);
   const [pickedCover, setPickedCover] = useState<string | null>(null);
-  const pdf = pickedPdf ?? docs.data?.suggestedPdf ?? '';
-  const cover = pickedCover ?? docs.data?.suggestedCover ?? '';
+  const storedDocs = readDraftDocs(sessionId);
+  const pdf = pickedPdf ?? storedDocs?.pdf ?? docs.data?.suggestedPdf ?? '';
+  const cover = pickedCover ?? storedDocs?.cover ?? docs.data?.suggestedCover ?? '';
+  // The panel's start holds the callback of the render it was sent from, so the link and documents kept are the ones its
+  // prompt used, also when the id comes back after this form unmounted.
+  const rememberSessionId = remembered.panel.onSessionId;
+  const onSessionId = useCallback(
+    (sid: string) => {
+      if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
+      writeDraftDocs(sid, { pdf, cover });
+      rememberSessionId(sid);
+    },
+    [typedUrl, pdf, cover, rememberSessionId],
+  );
   const [summary, setSummary] = useState<string | null>(null);
   const blockers = prefillBlockers({ url, pdf, cover, pdfCount: docs.data?.pdfs.length ?? 0, company });
   const playwright = engine.data?.playwrightAvailable ?? false;
