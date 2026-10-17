@@ -12,6 +12,17 @@ const SYNC = path.join(HERE, '..', 'sync.sh');
 const LIB = path.join(HERE, '..', 'lib.sh');
 const CONFINEMENT = path.join(HERE, '..', '..', 'control-center', 'server', 'claude', 'confinement.mjs');
 
+// A folder holding only this node, for test PATHs: node's own folder often holds a real claude too (nvm or Homebrew
+// with Claude Code installed globally), which would turn a "no claude on PATH" world into the user's claude.
+let nodeOnly;
+function nodeDir() {
+  if (!nodeOnly) {
+    nodeOnly = tempDir('sync-node-only-');
+    fs.symlinkSync(process.execPath, path.join(nodeOnly, 'node'));
+  }
+  return nodeOnly;
+}
+
 function stub(dir, name, body) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, name), `#!/bin/bash\n${body}\n`);
@@ -55,9 +66,12 @@ test('a report left by an earlier run the same day never reaches this run\'s PR 
   const bodyTo = lines.findIndex((l, i) => i > bodyFrom && l.startsWith('} > "$BODY"'));
   assert.ok(from > -1 && to > from && bodyFrom > to && bodyTo > bodyFrom, 'no Claude or PR body block in sync.sh');
   const vars = `LIVE="${path.resolve(HERE, '../../..')}" STATE_DIR="${dir}" TODAY=${today} BEHIND=2 CONFLICTS= BASELINE_FAILURES= TOKEN=t MODEL=m CLAUDE_BIN=claude LOG="${dir}/log" CUSTOM_OK=1 CC_OK=1 KEPT_README=0`;
-  const script = `${vars}\n${lines.slice(from, to + 1).join('\n')}\n${lines.slice(bodyFrom, bodyTo + 1).join('\n')}`;
+  // The handoff re-gate approves the stub here and stops the run loudly if it ever refuses it.
+  const gate = 'sync_claude_bin() { printf \'%s\' "$CC_CLAUDE_BIN"; }\nfail() { echo "!!! $1"; exit 1; }';
+  const script = `${gate}\n${vars}\n${lines.slice(from, to + 1).join('\n')}\n${lines.slice(bodyFrom, bodyTo + 1).join('\n')}`;
   const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stderr, '', 'every command in the block exists');
   const body = readFileSync(path.join(dir, `${today}.pr-body.md`), 'utf8');
   assert.match(body, /## Claude report\n\(no report written\)\n$/, body);
   assert.doesNotMatch(body, /an earlier run/);
@@ -103,7 +117,7 @@ function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion, dailyC
   // HOME is the test's own, so the daily job installed on this machine (if any) is never read.
   const home = path.join(dir, 'home');
   mkdirSync(home, { recursive: true });
-  const env = { PATH: [...dirs, path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: home };
+  const env = { PATH: [...dirs, nodeDir(), '/usr/bin', '/bin'].join(':'), HOME: home };
   // The sync runs sync_claude_bin from its live checkout, whose confinement gate and contract it asks.
   const checkout = path.join(dir, 'checkout');
   mkdirSync(checkout);
@@ -137,7 +151,7 @@ function claudeBin({ onPath = [], pinned, pinnedVersion, dailyPinVersion, dailyC
   }
   const r = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: checkout, env, encoding: 'utf8' });
   // sync.sh reads it through $(...), which drops the trailing newline.
-  return { ...r, stdout: r.stdout.replace(/\n$/, ''), dir, dirs };
+  return { ...r, stdout: r.stdout.replace(/\n$/, ''), dir, dirs, env };
 }
 
 test('sync_claude_bin picks the first claude on PATH when it keeps the token out of hooks and tools', () => {
@@ -197,7 +211,7 @@ test('given node writes a warning to stderr, when the sync picks its claude, the
   const r = claudeBin({ onPath: ['2.1.289'] });
   const noise = path.join(r.dir, 'noise.mjs');
   writeFileSync(noise, "process.stderr.write('(node) Warning: noise on stderr\\n');\n");
-  const res = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: path.join(r.dir, 'checkout'), env: { PATH: [r.dirs[0], path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: path.join(r.dir, 'home'), NODE_OPTIONS: `--import=${noise}` }, encoding: 'utf8' });
+  const res = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: path.join(r.dir, 'checkout'), env: { PATH: [r.dirs[0], nodeDir(), '/usr/bin', '/bin'].join(':'), HOME: path.join(r.dir, 'home'), NODE_OPTIONS: `--import=${noise}` }, encoding: 'utf8' });
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.equal(res.stdout, real(path.join(r.dirs[0], 'claude')));
   assert.doesNotMatch(res.stderr, /noise on stderr/, 'the gate\'s node warnings are dropped, not passed on to the sync log');
@@ -214,13 +228,15 @@ test('given claude on PATH is a symlink, when the sync picks its claude, then it
   const link = path.join(r.dir, 'link');
   mkdirSync(link);
   fs.symlinkSync(path.join(r.dirs[0], 'claude'), path.join(link, 'claude'));
-  const res = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: path.join(r.dir, 'checkout'), env: { PATH: [link, path.dirname(process.execPath), '/usr/bin', '/bin'].join(':'), HOME: path.join(r.dir, 'home') }, encoding: 'utf8' });
+  const res = spawnSync('bash', ['-c', `source "${LIB}"\nsync_claude_bin 2.1.288`], { cwd: path.join(r.dir, 'checkout'), env: { PATH: [link, nodeDir(), '/usr/bin', '/bin'].join(':'), HOME: path.join(r.dir, 'home') }, encoding: 'utf8' });
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.equal(res.stdout, fs.realpathSync.native(path.join(r.dirs[0], 'claude')));
 });
 
 test('sync_claude_bin refuses when no claude is found or its version cannot be read', () => {
   const none = claudeBin();
+  const found = spawnSync('bash', ['-c', 'command -v claude'], { env: none.env, encoding: 'utf8' });
+  assert.equal(found.stdout, '', 'the test PATH holds no claude, whatever sits next to node on this host');
   assert.equal(none.status, 1);
   assert.equal(none.stdout, 'no claude found on PATH; install Claude Code or pin one with CC_CLAUDE_BIN');
   const broken = claudeBin({ onPath: [null] });
@@ -229,6 +245,53 @@ test('sync_claude_bin refuses when no claude is found or its version cannot be r
   const gone = claudeBin({ pinned: '/nonexistent/claude' });
   assert.equal(gone.status, 1);
   assert.equal(gone.stdout, 'claude /nonexistent/claude is not an executable');
+});
+
+/**
+ * sync.sh's own lines from the headless Claude step through the claude call, run against a live checkout approving
+ * `approved` with CLAUDE_BIN set to a stub that now reports `version` (it was approved when the run started). The
+ * stub records the environment of any call that gets the token.
+ */
+function handoff({ version, approved = ['2.1.300'] }) {
+  const dir = tempDir('sync-handoff-');
+  const live = path.join(dir, 'live');
+  const claudeDir = path.join(live, 'custom', 'control-center', 'server', 'claude');
+  mkdirSync(claudeDir, { recursive: true });
+  fs.copyFileSync(CONFINEMENT, path.join(claudeDir, 'confinement.mjs'));
+  mkdirSync(path.join(live, 'custom', 'control-center', 'server', 'core'));
+  writeFileSync(path.join(live, 'custom', 'control-center', 'server', 'core', 'contract.json'), JSON.stringify({ claude: { approvedVersions: approved } }));
+  mkdirSync(path.join(live, 'custom', 'upstream-sync'), { recursive: true });
+  fs.copyFileSync(path.join(HERE, '..', 'sync-prompt.md'), path.join(live, 'custom', 'upstream-sync', 'sync-prompt.md'));
+  const seen = path.join(dir, 'token-env.txt');
+  stub(path.join(dir, 'bin'), 'claude', `if [ "$1" = --version ]; then echo "${version} (Claude Code)"; exit 0; fi\nenv > "${seen}"\necho "SYNC: ok"`);
+  const claude = real(path.join(dir, 'bin', 'claude'));
+  const wt = path.join(dir, 'wt');
+  mkdirSync(wt);
+  const vars = `LIVE="${live}" STATE_DIR="${dir}" TODAY=2026-10-17 BEHIND=1 CONFLICTS= BASELINE_FAILURES= TOKEN=tok-123 MODEL=m CLAUDE_BIN="${claude}" LOG="${dir}/log"`;
+  const script = `set -uo pipefail\nsource "${LIB}"\nfail() { echo "!!! $1"; exit 1; }\n${vars}\ncd "${wt}"\n${block('echo "--- headless Claude', /--output-format text/)}\necho "handed off"`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${nodeDir()}:/usr/bin:/bin`, HOME: path.join(dir, 'home') }, encoding: 'utf8' });
+  return { ...r, claude, gotToken: fs.existsSync(seen) };
+}
+
+test('a claude approved at the start but no longer approved when the baseline suite ends never gets the token (R27-scrb-rev-01)', () => {
+  const r = handoff({ version: '2.1.301' });
+  assert.equal(r.gotToken, false, r.stdout + r.stderr);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^!!! .*Claude Code 2\.1\.301 is not approved/m);
+});
+
+test('a claude whose approval the live checkout withdrew during the baseline suite never gets the token (R27-scrb-rev-01)', () => {
+  const r = handoff({ version: '2.1.300', approved: ['2.1.302'] });
+  assert.equal(r.gotToken, false, r.stdout + r.stderr);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^!!! claude .* is no longer approved at the token handoff: Claude Code 2\.1\.300 is not approved/m);
+});
+
+test('a claude still approved at the handoff gets the token as before (R27-scrb-rev-01)', () => {
+  const r = handoff({ version: '2.1.300' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.gotToken, true, r.stdout + r.stderr);
+  assert.match(r.stdout, /handed off/);
 });
 
 // npm stub: logs each call's arguments; `npm ... test` prints what vitest prints, or fails when told to.

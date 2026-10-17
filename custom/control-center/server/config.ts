@@ -59,8 +59,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
   if (!Number.isInteger(publicPort) || publicPort <= 0) throw new Error('CC_PUBLIC_PORT must be a port number');
   const client = (env.CC_CLIENT ?? 'vite') as ClientMode;
   if (!['vite', 'dist', 'none'].includes(client)) throw new Error(`CC_CLIENT must be vite, dist or none (got ${client})`);
+  const codeRoot = env.CC_CODE_ROOT ?? DEFAULT_CODE_ROOT;
   return {
-    codeRoot: env.CC_CODE_ROOT ?? DEFAULT_CODE_ROOT,
+    codeRoot,
     dataRoot: requireEnv('CC_DATA_ROOT'),
     dataRootFromEnv: env.CC_DATA_ROOT_FROM_ENV !== '0',
     guardRoot: requireEnv('CC_GUARD_DIR'),
@@ -69,11 +70,13 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): ServerConfi
     sessionSecret: requireEnv('CC_SESSION_SECRET'),
     client,
     // Absolute once, here: sessions, the daily plist and Run the daily job now all run this path.
-    claudeBin: resolveClaudeBin(env.CC_CLAUDE_BIN ?? 'claude', { env }),
+    claudeBin: resolveClaudeBin(env.CC_CLAUDE_BIN?.trim() || 'claude', { env }),
     nodeEnv: env.NODE_ENV ?? 'development',
     watch: env.CC_WATCH !== '0',
     launchAgentsDir: env.CC_LAUNCH_AGENTS_DIR ?? path.join(os.homedir(), 'Library', 'LaunchAgents'),
-    claudeProjectsDir: env.CC_CLAUDE_PROJECTS_DIR ?? path.join(os.homedir(), '.claude', 'projects'),
+    // Where the claude child keeps transcripts and tool-results: it inherits CLAUDE_CONFIG_DIR (childEnv keeps it)
+    // and runs in the code root, so a relative one resolves there.
+    claudeProjectsDir: env.CC_CLAUDE_PROJECTS_DIR ?? path.resolve(codeRoot, env.CLAUDE_CONFIG_DIR?.trim() || path.join(os.homedir(), '.claude'), 'projects'),
     ...(env.NODE_ENV === 'test' && env.CC_H1B_CHECK_SCRIPT ? { h1bCheckScript: env.CC_H1B_CHECK_SCRIPT } : {}),
     ...(env.NODE_ENV === 'test' && env.CC_PLUGINS_LOCAL_DIR ? { pluginsLocalDir: env.CC_PLUGINS_LOCAL_DIR } : {}),
     ...fakeDailyFromEnv(env),

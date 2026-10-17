@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -53,6 +53,16 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
     for (const lines of calls.filter((l) => l[0] === 'ARG1=-p')) expect(lines).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${FAKE_TOKEN}`);
   });
 
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and runs the claude on PATH (R27-sup1-rev-01)', () => {
+    for (const value of ['', '  ']) {
+      const box = sandbox();
+      fs.writeFileSync(path.join(box.bin, 'claude'), '#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+      const r = runProbe('claude-probe.mjs', box, value);
+      expect(r.status, r.stderr).toBe(0);
+      expect(JSON.parse(r.stdout).claudeVersion, JSON.stringify(value)).toMatch(/9\.9\.9/);
+    }
+  });
+
   it('prints the summary with the spawn error instead of crashing when the CLI cannot be spawned', () => {
     const box = sandbox();
     const r = runProbe('claude-probe.mjs', box, path.join(box.bin, 'no-such-claude'));
@@ -64,9 +74,34 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
     expect(summary.probeA.stderrTail).toMatch(/ENOENT/);
     expect(summary.probeB.stderrTail).toMatch(/ENOENT/);
   });
+
+  it('refuses a blank Keychain token before running the CLI, as probe:reads does (R28-supervisor-L2-01)', () => {
+    for (const stored of ['', '   ']) {
+      const box = sandbox();
+      fs.writeFileSync(path.join(box.bin, 'security'), `#!/bin/sh\necho '${stored}'\n`, { mode: 0o755 });
+      const claude = path.join(box.bin, 'claude');
+      fs.writeFileSync(claude, '#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\necho "$1" > "$f"\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+      const r = runProbe('claude-probe.mjs', box, claude);
+      expect(r.status, JSON.stringify(stored) + r.stdout).toBe(1);
+      expect(r.stderr).toMatch(/Keychain item career-ops-claude-token not found/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+      expect(fs.readdirSync(box.tmp), 'a refused run leaves no temp dir').toEqual([]);
+    }
+  });
 });
 
 describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and runs the claude on PATH (R27-sup1-rev-01)', () => {
+    for (const value of ['', '  ']) {
+      const box = sandbox();
+      // Answers --version and fails every other call: only the version read matters here. It must not delete itself,
+      // because a bare `claude` would then resolve to the real CLI further down PATH and make network calls.
+      fs.writeFileSync(path.join(box.bin, 'claude'), '#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nexit 1\n', { mode: 0o755 });
+      const r = runProbe('claude-probe-reads.mjs', box, value);
+      expect(JSON.parse(r.stdout).version, JSON.stringify(value) + r.stderr).toBe('9.9.9');
+    }
+  });
+
   it('still removes the home and ~/.claude canaries and prints the summary when the CLI cannot be spawned', () => {
     const box = sandbox();
     const claude = path.join(box.bin, 'claude');
@@ -131,4 +166,109 @@ syncBuiltinESMExports();
     expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
     expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
   });
+  // The calls lead their own process groups, so a terminal hang-up reaches only the probe, which must pass it on.
+  for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
+    it(`on ${signal} mid-run stops the running CLI calls, removes every canary and the temp layout, and exits ${exitCode} (R28-supervisor-L1-01)`, async () => {
+      const box = sandbox();
+      const claude = path.join(box.bin, 'claude');
+      // Answers --version; every case call starts a child of its own (a hook, a Bash-tool command), records both pids
+      // and hangs, as a real call does for minutes.
+      // The real CLI creates its project folder (named after the cwd) before any hook runs, so no hook log names it.
+      fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nmkdir -p "$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"\nsleep 60 &\n: > "${box.calls}/$!"\n: > "${box.calls}/$$"\nwait\n`, { mode: 0o755 });
+      const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
+        env: { ...process.env, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (d) => (stderr += d));
+      const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+      const deadline = Date.now() + 20_000;
+      while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      expect(fs.readdirSync(box.calls).length, stderr).toBeGreaterThan(0);
+      child.kill(signal);
+      const code = await exited;
+      // A killed process can linger as a zombie until it is reaped, so give the stub's processes a moment to go.
+      const stubAlive = () => fs.readdirSync(box.calls).filter((pid) => {
+        const ps = spawnSync('ps', ['-o', 'stat=,command=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
+        return ps !== '' && !ps.startsWith('Z') && (ps.includes('sleep 60') || ps.includes(claude));
+      });
+      const until = Date.now() + 2_000;
+      let alive = stubAlive();
+      while (alive.length && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 100));
+        alive = stubAlive();
+      }
+      for (const pid of alive) process.kill(Number(pid), 'SIGKILL');
+      expect(code, stderr).toBe(exitCode);
+      expect(alive).toEqual([]);
+      expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
+      expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
+      expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+      expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+    }, 40_000);
+  }
+
+  /** A preload under which removing the home canary dir fails with EBUSY. */
+  function homeRmFails(box: ReturnType<typeof sandbox>) {
+    const preload = path.join(box.root, 'rm-fails.mjs');
+    fs.writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realRm = fs.rmSync;
+fs.rmSync = (target, ...rest) => {
+  if (String(target).includes('.cc-probe-')) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' });
+  return realRm(target, ...rest);
+};
+syncBuiltinESMExports();
+`,
+    );
+    return preload;
+  }
+
+  /** The cleanup steps after the failing one still ran: the summary is out and the other canaries are gone. */
+  function expectRestCleaned(box: ReturnType<typeof sandbox>, stdout: string) {
+    expect(JSON.parse(stdout).version).toBe('9.9.9');
+    expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+    expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+  }
+
+  it('finishes the rest of the cleanup and says which canaries may remain when a step fails at the end of a run (R28-supervisor-L1-01 review)', () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, '#!/bin/sh\nrm -f "$0"\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
+    const r = runProbe('claude-probe-reads.mjs', box, claude, { NODE_OPTIONS: `--import=${pathToFileURL(homeRmFails(box)).href}` });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/cleanup failed: .*EBUSY/);
+    expect(r.stderr).toContain(path.join(box.home, '.cc-probe-'));
+    expect(r.stderr).not.toMatch(/\n\s+at /);
+    expectRestCleaned(box, r.stdout);
+    fs.rmSync(box.home, { recursive: true, force: true });
+  });
+
+  it('says which canaries may remain when the cleanup after a signal fails (R28-supervisor-L1-01 review)', async () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const preload = homeRmFails(box);
+    const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
+      env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    let stdout = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    child.stdout.on('data', (d) => (stdout += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    child.kill('SIGINT');
+    expect(await exited, stderr).toBe(130);
+    expect(stderr).toMatch(/cleanup failed: .*EBUSY/);
+    expect(stderr).toContain(path.join(box.home, '.cc-probe-'));
+    expect(stderr).not.toContain(FAKE_TOKEN);
+    expectRestCleaned(box, stdout);
+    fs.rmSync(box.home, { recursive: true, force: true });
+  }, 40_000);
 });

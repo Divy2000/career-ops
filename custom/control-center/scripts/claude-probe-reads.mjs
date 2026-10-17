@@ -27,7 +27,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..');
 const GUARD_HOOK = path.join(PACKAGE_ROOT, 'server', 'claude', 'guard-hook.mjs');
 const CONTRACT_FILE = path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json');
-const claudeBin = process.env.CC_CLAUDE_BIN ?? 'claude';
+const claudeBin = process.env.CC_CLAUDE_BIN?.trim() || 'claude';
 const args = process.argv.slice(2);
 const only = (() => {
   const i = args.indexOf('--only');
@@ -178,6 +178,16 @@ function prepare(name, opts, sessionId) {
 }
 
 // Production starts the server from a plain shell: no nested-session or provider variables reach the CLI.
+// The CLI calls still running, which a SIGINT or SIGTERM stops before the cleanup.
+const running = new Set();
+// Each call leads its own process group, so its hooks and Bash-tool commands die with it.
+function killCall(child) {
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    child.kill('SIGKILL');
+  }
+}
 const BASE_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
 
 function runClaude(name, opts) {
@@ -205,13 +215,15 @@ function runClaude(name, opts) {
     ...(opts.configDir ? { CLAUDE_CONFIG_DIR: opts.configDir } : {}),
   };
   return new Promise((resolve) => {
-    const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    running.add(child);
+    child.on('close', () => running.delete(child));
     let stdout = '';
     let stderr = '';
     // On EMFILE/ENFILE Node reports the spawn failure before it creates the pipes, so they can be null.
     child.stdout?.on('data', (d) => (stdout += d));
     child.stderr?.on('data', (d) => (stderr += d));
-    const timer = setTimeout(() => child.kill('SIGKILL'), 300_000);
+    const timer = setTimeout(() => killCall(child), 300_000);
     let settled = false;
     // A spawn failure (ENOENT, EAGAIN, EMFILE) emits 'error'; unheard it would crash the probe past its cleanup.
     // An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' still settles that case.
@@ -496,13 +508,13 @@ groups.push({ ids: ['C16'], run: async () => {
 
 /**
  * The CLI keeps each probe conversation under <config dir>/projects/<this layout's code dir>/. Only directories
- * a hook payload of this run named, under a projects/ folder and carrying this layout's unique name, are removed.
+ * carrying this layout's unique name are removed: those a hook payload of this run named under a projects/ folder,
+ * and those in the default config dir's projects/.
  */
 function cleanTranscripts() {
-  if (!fs.existsSync(GUARD)) return;
   const unique = path.basename(T);
   const dirs = new Set();
-  for (const d of fs.readdirSync(GUARD)) {
+  for (const d of fs.existsSync(GUARD) ? fs.readdirSync(GUARD) : []) {
     const log = path.join(GUARD, d, 'hook-log.ndjson');
     if (!fs.existsSync(log)) continue;
     for (const line of fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)) {
@@ -517,6 +529,12 @@ function cleanTranscripts() {
   for (const dir of dirs) {
     if (path.basename(path.dirname(dir)) === 'projects' && path.basename(dir).includes(unique)) fs.rmSync(dir, { recursive: true, force: true });
     else console.error(`left in place (not this probe's project dir): ${dir}`);
+  }
+  // A call stopped before its first hook ran has a project folder no hook log names; the default config dir is the
+  // only one outside T (BASE_ENV drops CLAUDE_CONFIG_DIR, and the per-case config dirs live in T).
+  const projects = path.join(CONFIG_HOME, 'projects');
+  if (fs.existsSync(projects)) {
+    for (const d of fs.readdirSync(projects)) if (d.includes(unique)) fs.rmSync(path.join(projects, d), { recursive: true, force: true });
   }
 }
 
@@ -538,6 +556,53 @@ groups.push({ ids: ['C20'], run: async () => {
 // ---- main ----
 const summary = { version: null, probedAt: new Date().toISOString(), model: MODEL, shape: SHAPE, cases: {}, details: {}, info: {}, runs: 0 };
 let exitCode;
+let cleaned = false;
+/** Runs every step even when one fails; returns the failures, each naming what may remain. */
+function cleanup() {
+  if (cleaned) return [];
+  cleaned = true;
+  const failures = [];
+  const step = (what, fn) => {
+    try {
+      fn();
+    } catch (err) {
+      failures.push(`${what}: ${err?.message ?? err}`);
+    }
+  };
+  step(HOME_DIR, () => fs.rmSync(HOME_DIR, { recursive: true, force: true }));
+  step(OTHER_PROJECT, () => fs.rmSync(OTHER_PROJECT, { recursive: true, force: true }));
+  step(CONFIG_FILE, () => fs.rmSync(CONFIG_FILE, { force: true }));
+  if (!KEEP) step(`this probe's transcripts under ${path.join(CONFIG_HOME, 'projects')}`, cleanTranscripts);
+  const out = redact(JSON.stringify(summary, null, 2));
+  step(path.join(T, 'probe-summary.json'), () => {
+    fs.mkdirSync(T, { recursive: true });
+    fs.writeFileSync(path.join(T, 'probe-summary.json'), out);
+  });
+  console.log(out);
+  if (KEEP) console.error(`probe dir kept: ${T}`);
+  else {
+    const summaryCopy = path.join(os.tmpdir(), `cc-reads-probe-summary-${R}.json`);
+    step(summaryCopy, () => fs.writeFileSync(summaryCopy, out));
+    step(T, () => fs.rmSync(T, { recursive: true, force: true }));
+    console.error(`summary: ${summaryCopy}`);
+  }
+  return failures;
+}
+function reportCleanup(failures) {
+  if (failures.length) console.error(redact(`${failures.map((f) => `cleanup failed: ${f}`).join('\n')}\nremove those by hand if they remain`));
+  return failures.length === 0;
+}
+// Node's default SIGINT/SIGTERM/SIGHUP action exits without running the finally below, leaving the canaries behind,
+// and the calls, in their own process groups, get no terminal signal of their own. They are killed outright so
+// none writes a transcript after cleanTranscripts has run.
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+  process.on(signal, () => {
+    for (const child of running) killCall(child);
+    console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);
+    reportCleanup(cleanup());
+    process.exit(code);
+  });
+}
 try {
   buildLayout();
   const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: { ...BASE_ENV, DISABLE_AUTOUPDATER: '1' } });
@@ -585,20 +650,6 @@ try {
   console.error(redact(err?.stack ?? err));
   exitCode = 1;
 } finally {
-  fs.rmSync(HOME_DIR, { recursive: true, force: true });
-  fs.rmSync(OTHER_PROJECT, { recursive: true, force: true });
-  fs.rmSync(CONFIG_FILE, { force: true });
-  if (!KEEP) cleanTranscripts();
-  const out = redact(JSON.stringify(summary, null, 2));
-  fs.mkdirSync(T, { recursive: true });
-  fs.writeFileSync(path.join(T, 'probe-summary.json'), out);
-  console.log(out);
-  if (KEEP) console.error(`probe dir kept: ${T}`);
-  else {
-    const summaryCopy = path.join(os.tmpdir(), `cc-reads-probe-summary-${R}.json`);
-    fs.writeFileSync(summaryCopy, out);
-    fs.rmSync(T, { recursive: true, force: true });
-    console.error(`summary: ${summaryCopy}`);
-  }
+  if (!reportCleanup(cleanup())) exitCode = 1;
 }
 process.exit(exitCode);

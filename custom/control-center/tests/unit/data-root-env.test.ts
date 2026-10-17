@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { dataRootFromEnv } from '../../supervisor/data-root.js';
 import { configFromEnv } from '../../server/config.js';
 
@@ -43,6 +46,17 @@ describe('configFromEnv claudeBin', () => {
     expect(configFromEnv({ ...base, CC_CLAUDE_BIN: './bin/claude', INIT_CWD: '/work/here' }).claudeBin).toBe('/work/here/bin/claude');
     expect(configFromEnv({ ...base, CC_CLAUDE_BIN: '/opt/custom/claude' }).claudeBin).toBe('/opt/custom/claude');
   });
+  it('treats an empty or blank CC_CLAUDE_BIN as unset and finds claude on PATH (R27-sup1-rev-01)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-config-claude-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+      for (const value of ['', '   ', '\t\n']) {
+        expect(configFromEnv({ ...base, PATH: dir, CC_CLAUDE_BIN: value }).claudeBin, JSON.stringify(value)).toBe(path.join(dir, 'claude'));
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('configFromEnv pluginsLocalDir', () => {
@@ -55,5 +69,27 @@ describe('configFromEnv pluginsLocalDir', () => {
     expect(configFromEnv({ ...base, NODE_ENV: 'test', CC_PLUGINS_LOCAL_DIR: '/tmp/plugins-local' }).pluginsLocalDir).toBe('/tmp/plugins-local');
     expect(configFromEnv({ ...base, NODE_ENV: 'production', CC_PLUGINS_LOCAL_DIR: '/tmp/plugins-local' }).pluginsLocalDir).toBeUndefined();
     expect(configFromEnv({ ...base, NODE_ENV: 'test' }).pluginsLocalDir).toBeUndefined();
+  });
+});
+
+describe('configFromEnv claudeProjectsDir', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => {
+    for (const [k, v] of Object.entries({ CC_DATA_ROOT: '/d', CC_GUARD_DIR: '/g', CC_TOKEN: 't', CC_SESSION_SECRET: 's' })) vi.stubEnv(k, v);
+  });
+  const base = { CC_PUBLIC_PORT: '4999' };
+  it('follows the CLAUDE_CONFIG_DIR the claude child inherits, so tool-results and transcripts are looked up where the CLI writes them (R28-claude-L2-03)', () => {
+    expect(configFromEnv({ ...base, CLAUDE_CONFIG_DIR: '/Users/me/.claude-work' }).claudeProjectsDir).toBe('/Users/me/.claude-work/projects');
+  });
+  it('defaults to ~/.claude/projects when CLAUDE_CONFIG_DIR is unset, empty or blank', () => {
+    for (const value of [undefined, '', '  ']) {
+      expect(configFromEnv({ ...base, CLAUDE_CONFIG_DIR: value }).claudeProjectsDir, JSON.stringify(value)).toBe(path.join(os.homedir(), '.claude', 'projects'));
+    }
+  });
+  it('resolves a relative CLAUDE_CONFIG_DIR against the code root, the claude child\'s cwd, not the server\'s (R28-claude-L2-03 review)', () => {
+    expect(configFromEnv({ ...base, CC_CODE_ROOT: '/code', CLAUDE_CONFIG_DIR: 'cfg' }).claudeProjectsDir).toBe('/code/cfg/projects');
+  });
+  it('lets CC_CLAUDE_PROJECTS_DIR override both', () => {
+    expect(configFromEnv({ ...base, CLAUDE_CONFIG_DIR: '/x', CC_CLAUDE_PROJECTS_DIR: '/p' }).claudeProjectsDir).toBe('/p');
   });
 });
