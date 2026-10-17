@@ -210,17 +210,18 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
   const onSessionId = useCallback(
     (sid: string) => {
       if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
-      // An empty value the user did not pick is no choice, so it is kept as null. A reply reports the draft it runs in:
-      // its prompt named no documents, so the draft's own are left as they are.
-      if (sid !== sessionId) writeDraftDocs(sid, { pdf: pdf || (pickedPdf === '' ? '' : null), cover: cover || (pickedCover === '' ? '' : null) });
+      // Only the user's picks are kept: a preselected suggestion is no choice, so a newer tailored file is preselected
+      // when the page comes back. A reply reports the draft it runs in: its prompt named no documents, so the draft's
+      // own are left as they are.
+      if (sid !== sessionId) writeDraftDocs(sid, { pdf: pickedPdf, cover: pickedCover });
       rememberSessionId(sid);
     },
-    [typedUrl, sessionId, pdf, cover, pickedPdf, pickedCover, rememberSessionId],
+    [typedUrl, sessionId, pickedPdf, pickedCover, rememberSessionId],
   );
   // A pick made after the draft started is the one Fill attaches, so it is kept for the re-attached draft as well.
   const pickDoc = (kind: keyof DraftDocs, value: string) => {
     (kind === 'pdf' ? setPickedPdf : setPickedCover)(value);
-    if (sessionId) writeDraftDocs(sessionId, { pdf, cover, [kind]: value });
+    if (sessionId) writeDraftDocs(sessionId, { pdf: pickedPdf ?? storedPdf, cover: pickedCover ?? storedCover, [kind]: value });
   };
   const [summary, setSummary] = useState<string | null>(null);
   const blockers = prefillBlockers({ url, pdf, cover, pdfCount: docs.data?.pdfs.length ?? 0, company });

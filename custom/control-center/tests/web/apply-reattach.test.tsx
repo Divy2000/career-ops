@@ -359,6 +359,40 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme-v2.pdf', 'the newer CV preselected');
   });
 
+  it('Given a draft that named no CV PDF, When only a cover letter is picked and a newer CV arrives, Then the newer one is preselected (R28-feat-a-L2-01 review)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: null, cover: null }));
+    docs = { pdfs: ['output/cv-acme.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: null };
+    await openApply();
+    const select = await until(() => host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]'), 'the cover letter select');
+    await act(async () => {
+      select.value = 'output/cover-acme.md';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-v2.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme-v2.pdf', suggestedCover: null };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme-v2.pdf', 'the newer CV preselected');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('output/cover-acme.md');
+  });
+
+  it('Given a draft started with the suggested CV PDF untouched, When a newer tailored CV becomes the suggestion, Then the newer one is preselected (R28-fa-rev-01)', async () => {
+    docs = { pdfs: ['output/cv-old.pdf'], covers: ['output/cover-old.md'], suggestedPdf: 'output/cv-old.pdf', suggestedCover: 'output/cover-old.md' };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-old.pdf', 'the suggested CV preselected');
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = { pdfs: ['output/cv-old.pdf', 'output/cv-new.pdf'], covers: ['output/cover-old.md', 'output/cover-new.md'], suggestedPdf: 'output/cv-new.pdf', suggestedCover: 'output/cover-new.md' };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-new.pdf', 'the newer CV preselected');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('output/cover-new.md');
+  });
+
   it('Given a draft deleted elsewhere, When it reports gone, Then its kept documents are let go too (R28-feat-a-L2-01 review)', async () => {
     sessionStorage.setItem('cc.apply.12', 's-apply-12');
     sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-acme.pdf', cover: null }));
