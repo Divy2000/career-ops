@@ -657,8 +657,28 @@ test('given another installer holding the local-paths.txt lock, when it adds cus
   const d = tmp();
   const f = put(path.join(d, 'config', 'local-paths.txt'), 'notes/\n');
   fs.mkdirSync(`${f}.lock`);
-  const run = seedAsync(['local-paths', '--dir', d]);
-  await new Promise((r) => setTimeout(r, 500));
+  // The child marks the moment it finds the lock taken, so the test lets go only once it is really waiting on it: a
+  // seed slow to start (a loaded host) would otherwise first look after the lock is gone and pass without waiting.
+  const seen = path.join(d, 'contended');
+  const preload = put(path.join(d, 'contended.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realMkdir = fs.mkdirSync;
+fs.mkdirSync = (p, ...rest) => {
+  try {
+    return realMkdir(p, ...rest);
+  } catch (err) {
+    if (err.code === 'EEXIST' && String(p) === ${JSON.stringify(`${f}.lock`)} && !fs.existsSync(${JSON.stringify(seen)})) fs.writeFileSync(${JSON.stringify(seen)}, '');
+    throw err;
+  }
+};
+syncBuiltinESMExports();
+`);
+  let finished = false;
+  const run = seedAsync(['local-paths', '--dir', d], preload).then((r) => { finished = true; return r; });
+  const deadline = Date.now() + 30_000;
+  while (!fs.existsSync(seen) && !finished && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(fs.existsSync(seen), `local-paths never found the lock taken: ${JSON.stringify(finished ? await run : 'still running')}`);
+  assert.equal(finished, false, 'local-paths must still be waiting on the held lock');
   fs.appendFileSync(f, 'custom/\n');
   fs.rmdirSync(`${f}.lock`);
   const res = await run;
