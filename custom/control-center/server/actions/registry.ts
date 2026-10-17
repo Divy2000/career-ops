@@ -5,9 +5,10 @@ import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 import type { Cost, ExitMeaning } from '../runner/store.js';
-import { cliScriptPath } from '../core/adapter.js';
+import { cliScriptPath, importCore } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
+import { resolveTrackerFile } from '../domains/trackerPath.js';
 import { listReportFiles } from '../domains/reports.js';
 import { companyHistoryInputs } from '../domains/insightsCache.js';
 import { containedTarget, OutsideRootsError } from '../lib/atomic-write.js';
@@ -222,6 +223,39 @@ const RUN_DAILY = 'custom/immigration/run-daily.sh';
 const CONTACTS_VCF = 'custom/control-center/server/actions/contacts-vcf.mjs';
 const PLUGIN_AUDIT_ALL = 'custom/control-center/server/actions/plugin-audit-all.mjs';
 
+interface DeleteParse {
+  resolveColumns: (lines: string[]) => Record<string, number>;
+  parseTrackerRow: (line: string, colmap: Record<string, number>) => (Record<string, string> & { num: number }) | null;
+  extractTrackerReportNumbers: (reportCell: string, notesCell?: string) => number[];
+}
+
+/**
+ * The rows tracker.mjs delete --num n removes, matched as its removeRowByNum does (a trimmed table line whose number
+ * cell is exactly n), each as the page shows it, or null for one too malformed to parse.
+ */
+async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<{ rows: Array<{ company: string; role: string; report: number | null } | null>; respelled: string | null }> {
+  const [tp, file] = await Promise.all([importCore<DeleteParse>(ctx.codeRoot, 'tracker-parse.mjs'), resolveTrackerFile(ctx.codeRoot, ctx.dataRoot)]);
+  let text: string;
+  try {
+    text = fs.readFileSync(file.canonical, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { rows: [], respelled: null };
+    throw err;
+  }
+  const lines = text.split('\n').map((l) => l.trim());
+  const colmap = tp.resolveColumns(lines);
+  const numCell = (l: string) => (l.startsWith('|') ? (l.split('|').map((c) => c.trim())[colmap.num!] ?? '') : '');
+  const rows = lines
+    .filter((l) => numCell(l) === String(n))
+    .map((l) => {
+      const raw = tp.parseTrackerRow(l, colmap);
+      return raw ? { company: raw.company ?? '', role: raw.role ?? '', report: tp.extractTrackerReportNumbers(raw.report ?? '', raw.notes ?? '')[0] ?? null } : null;
+    });
+  // The page reads a number cell as parseInt does, so it can show a row written "024" as #24, which this delete skips.
+  const respelled = lines.map(numCell).find((c) => c !== String(n) && parseInt(c, 10) === n) ?? null;
+  return { rows, respelled };
+}
+
 export const ACTIONS: ActionDef[] = [
   // ---- tracker ----
   define({
@@ -243,8 +277,33 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: true,
-    params: z.object({ n: positive, dryRun: z.boolean().default(false) }),
+    // expectCompany/expectRole/expectReport: the row the page previewed. A number freed by a delete can be reused by a
+    // later merge, so a confirm naming a row that is no longer under n is refused rather than deleting an unseen one.
+    // Scalars, so the palette's params dialog can ask for them too.
+    params: z.object({
+      n: positive,
+      dryRun: z.boolean().default(false),
+      // Uncapped: they echo a hand-editable tracker cell, and the request body limit already bounds them.
+      expectCompany: z.string().trim().optional(),
+      expectRole: z.string().trim().optional(),
+      // The palette types a nullable number as text, so a typed report number is read as the number.
+      expectReport: z.preprocess((v) => (typeof v === 'string' && /^\s*\d+\s*$/.test(v) ? Number(v) : v), positive.nullable()).optional(),
+    }),
     preview: (p) => p.dryRun,
+    check: async (p, ctx) => {
+      if (p.dryRun || (p.expectCompany === undefined && p.expectRole === undefined && p.expectReport === undefined)) return null;
+      const { rows, respelled } = await rowsDeletedUnder(ctx, p.n);
+      const matches = (r: (typeof rows)[number]) =>
+        r !== null && (p.expectCompany === undefined || r.company === p.expectCompany) && (p.expectRole === undefined || r.role === p.expectRole) && (p.expectReport === undefined || r.report === p.expectReport);
+      // tracker.mjs deletes every row numbered n, so each of them must be the previewed one.
+      const other = rows.find((r) => !matches(r));
+      if (other === undefined) return null;
+      const named = other === null ? 'a row this page cannot read' : `${other.company} (${other.role})`;
+      if (respelled !== null) return { status: 409, error: `Row #${p.n} is also written "${respelled}" in applications.md, and this delete would remove ${named} instead of that row. Fix the number cell there first.` };
+      // The page previews one row, so a number shared with a matching row stays refused however often it is previewed.
+      if (rows.some(matches)) return { status: 409, error: `Row #${p.n} numbers more than one row (also ${named}), and deleting it would remove them all. Renumber the duplicate in applications.md (or run Deduplicate tracker) first.` };
+      return { status: 409, error: `Row #${p.n} now holds ${named}, not only the row you previewed. Preview the delete again.` };
+    },
     build: (p, ctx) => node(ctx, 'tracker', ['delete', '--num', String(p.n), ...flag(p.dryRun, '--dry-run')]),
   }),
   define({ id: 'tracker.verify', label: 'Verify tracker and pipeline', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'verifyPipeline', []) }),
@@ -744,7 +803,7 @@ export const ACTIONS: ActionDef[] = [
     // it skipped and exits 75, so this run ends failed with that line instead of done with an empty log.
     build: (_p, ctx) => ({ bin: '/bin/bash', args: [path.join(ctx.codeRoot, RUN_DAILY)], cwd: ctx.codeRoot, env: { CC_RUN_DAILY_SKIP_EXIT: '75', ...(ctx.claudeBin && path.isAbsolute(ctx.claudeBin) ? { CC_CLAUDE_BIN: ctx.claudeBin } : {}), ...(ctx.nodeBin && path.isAbsolute(ctx.nodeBin) ? { CC_NODE_BIN: ctx.nodeBin } : {}) } }),
   }),
-  define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
+  define({ id: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', confirm: 'Runs npm install for custom/control-center. Continue?', resources: [], claude: false, sync: false, params: none, single: (mine) => `Skipped: an install is already ${mine.status === 'queued' ? 'queued' : 'running'} from here (run ${mine.id}). Watch it on Runs & Schedule.`, build: (_p, ctx) => ({ bin: 'npm', args: ['--prefix', path.join(ctx.codeRoot, 'custom', 'control-center'), 'install'], cwd: ctx.codeRoot }) }),
 ];
 
 export function findAction(id: string): ActionDef | undefined {

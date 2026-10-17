@@ -1,17 +1,32 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
+import type { ApplicationDetail } from '@shared/api';
 import { apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 
+type RowIdentity = { company: string; role: string; report: number | null };
+const sameRow = (a: RowIdentity | null, b: RowIdentity | null) => a?.company === b?.company && a?.role === b?.role && a?.report === b?.report;
+
 /** Two-step delete: dry-run preview first, then the real tracker.mjs delete. */
 export function DangerZone({ n }: { n: number }) {
-  const [preview, setPreview] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
   const qc = useQueryClient();
   const router = useRouter();
+  // The row the page shows under n. A number a delete frees can be reused by a later merge, so a preview belongs to the
+  // row it was taken for and the confirm names that row for the server to check. Read from the page's cache without an
+  // observer of its own, which would rebuild the row query the delete removes. The page keys it by its URL's spelling
+  // of n (/tracker/04 is row 4), so it is found by the row it holds.
+  const rowQueries = () => qc.getQueriesData<ApplicationDetail>({ queryKey: ['tracker', 'row'] }).filter(([key, data]) => key.length === 3 && (data?.row?.num === n || key[2] === String(n)));
+  const shown = useSyncExternalStore(
+    (onChange) => qc.getQueryCache().subscribe(onChange),
+    () => rowQueries().find(([, data]) => data?.row?.num === n)?.[1]?.row,
+  );
+  const identity: RowIdentity | null = shown ? { company: shown.company, role: shown.role, report: shown.report } : null;
+  const [taken, setPreview] = useState<{ text: string; of: RowIdentity | null } | null>(null);
+  const preview = taken && sameRow(taken.of, identity) ? taken.text : null;
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const call = async (dryRun: boolean) => {
     setBusy(true);
     setError(null);
@@ -20,13 +35,17 @@ export function DangerZone({ n }: { n: number }) {
     const page = router.state.location.pathname;
     try {
       // "Confirm delete" is the user's confirmation, which the real delete must carry; the dry run needs none.
-      const r = await apiSend<{ result: unknown; stderr?: string }>('POST', '/api/actions/tracker.delete', dryRun ? { params: { n, dryRun } } : { params: { n, dryRun }, confirmed: true });
+      const expected = dryRun ? null : (taken?.of ?? null);
+      const params = expected
+        ? { n, dryRun, expectCompany: expected.company, expectRole: expected.role, expectReport: expected.report }
+        : { n, dryRun };
+      const r = await apiSend<{ result: unknown; stderr?: string }>('POST', '/api/actions/tracker.delete', dryRun ? { params } : { params, confirmed: true });
       const text = `${typeof r.result === 'string' ? r.result : JSON.stringify(r.result, null, 2)}\n${r.stderr ?? ''}`.trim();
-      if (dryRun) setPreview(text || 'Dry run produced no output.');
+      if (dryRun) setPreview({ text: text || 'Dry run produced no output.', of: identity });
       else {
         // The row is gone: its own queries would refetch into a 404 and hold the page on their retries. Drop them,
         // leave, then refresh the tracker lists.
-        qc.removeQueries({ queryKey: ['tracker', 'row', String(n)] });
+        for (const [key] of rowQueries()) qc.removeQueries({ queryKey: key, exact: true });
         qc.removeQueries({ queryKey: ['tracker', 'documents', n] });
         if (router.state.location.pathname === page) await navigate({ to: '/tracker' });
         await qc.invalidateQueries({ queryKey: ['tracker'] });

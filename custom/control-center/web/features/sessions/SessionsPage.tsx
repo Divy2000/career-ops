@@ -173,13 +173,17 @@ function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['
   );
 }
 
-/** projects-ingest reads a document under documents/, which the route takes as a text target. */
+/**
+ * projects-ingest reads a document under documents/, which the route takes as a text target. A saved JD
+ * (local:jds/...) is a text target too, as the Evaluate entry points send it, so the route's duplicate guard keys it.
+ */
 export function targetFor(value: string, mode?: string): SessionMeta['target'] {
   const v = value.trim();
   if (!v) return { type: 'none', value: null };
   if (mode === 'projects-ingest') return { type: 'text', value: v };
   if (/^\d+$/.test(v)) return { type: 'app', value: v };
   if (/^https?:\/\//i.test(v)) return { type: 'url', value: v };
+  if (localJdPath(v) !== null) return { type: 'text', value: v };
   return { type: 'company', value: v };
 }
 

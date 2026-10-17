@@ -85,6 +85,59 @@ describe('Danger zone delete', () => {
     expect(navigations).toEqual([{ to: '/tracker' }]);
   });
 
+  describe('when the page holds the row it shows (R28-feat-c-L1-01)', () => {
+    const initech = { num: 4, company: 'Initech Cloud', role: 'Backend Engineer II', report: 4 };
+    let qc: QueryClient;
+    beforeEach(async () => {
+      qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      qc.setQueryData(['tracker', 'row', '4'], { row: initech });
+      await act(async () => root.unmount());
+      root = createRoot(host);
+      const { DangerZone } = await import('@web/features/tracker/DangerZone');
+      await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(DangerZone, { n: 4 }))));
+    });
+
+    it('the confirmed delete names the previewed row, so the server can refuse a different one', async () => {
+      await click('Preview delete (dry run)');
+      await click('Confirm delete #4');
+      expect(posts).toEqual([
+        { n: 4, dryRun: true },
+        { n: 4, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 },
+      ]);
+    });
+
+    it('drops the preview and its confirm once a different application is under that number', async () => {
+      await click('Preview delete (dry run)');
+      expect(button('Confirm delete #4')).toBeDefined();
+      await act(async () => qc.setQueryData(['tracker', 'row', '4'], { row: { num: 4, company: 'Hooli', role: 'SRE', report: 9 } }));
+      expect(button('Confirm delete #4')).toBeUndefined();
+      expect(host.querySelector('[aria-label="Delete preview"]')).toBeNull();
+    });
+
+    it('a previewed row without a report says so, so a re-added row that has one is not taken for it', async () => {
+      await act(async () => qc.setQueryData(['tracker', 'row', '4'], { row: { ...initech, report: null } }));
+      await click('Preview delete (dry run)');
+      await click('Confirm delete #4');
+      expect(posts[1]).toEqual({ n: 4, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: null });
+    });
+
+    it('keeps the preview when the same row is refetched', async () => {
+      await click('Preview delete (dry run)');
+      await act(async () => qc.setQueryData(['tracker', 'row', '4'], { row: { ...initech } }));
+      expect(button('Confirm delete #4')).toBeDefined();
+    });
+
+    it('given the page was opened as /tracker/04, when the delete is confirmed, then it still names the row the page shows', async () => {
+      qc.removeQueries({ queryKey: ['tracker', 'row', '4'] });
+      await act(async () => qc.setQueryData(['tracker', 'row', '04'], { row: initech }));
+      await click('Preview delete (dry run)');
+      await click('Confirm delete #4');
+      expect(posts[1]).toEqual({ n: 4, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 });
+      // The page's own row query is dropped too, so it does not refetch into a 404.
+      expect(qc.getQueryState(['tracker', 'row', '04'])).toBeUndefined();
+    });
+  });
+
   it('a failed delete stays on the page and says why', async () => {
     // A tracker lock that stays busy: tracker.mjs exits 1 with "Fatal: ...", and the action has no exit map, so a 500.
     realDelete = () => json(500, { error: 'tracker.delete exited 1', exit: 1, result: '', stderr: 'Fatal: Timed out waiting for tracker lock at /data/applications.md.lock\n' });

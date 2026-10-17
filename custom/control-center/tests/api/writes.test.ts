@@ -410,6 +410,112 @@ describe('tracker delete', () => {
     expect(real.statusCode, real.body).toBe(200);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(false);
   });
+
+  it('refuses a confirmed delete whose previewed row is no longer the row under that number (R28-feat-c-L1-01)', async () => {
+    // The page previewed #3 as some other application; #3 is now Globex Payments, which the user never approved deleting.
+    const stale = await post('/api/actions/tracker.delete', { params: { n: 3, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 }, confirmed: true });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json().error).toMatch(/#3 now holds Globex Payments/);
+    expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 3)).toBe(true);
+    const current = await post('/api/actions/tracker.delete', { params: { n: 3, dryRun: false, expectCompany: 'Globex Payments', expectRole: 'Staff Software Engineer', expectReport: 3 }, confirmed: true });
+    expect(current.statusCode, current.body).toBe(200);
+    expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 3)).toBe(false);
+  });
+});
+
+describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
+  let d: TestApp;
+  const tracker = () => fs.readFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), 'utf8');
+  beforeAll(async () => {
+    d = await makeTestApp();
+    fs.appendFileSync(
+      path.join(d.cfg.dataRoot, 'data', 'applications.md'),
+      [
+        // Two rows share #20: tracker.mjs delete --num 20 removes both, so naming one of them does not approve the other.
+        '| 20 | 2026-10-01 | Hooli | - | SRE | 3.0/5 | Evaluated | ❌ | [9](../reports/009-hooli.md) | |',
+        '| 20 | 2026-10-01 | Initech Cloud | - | Backend Engineer II | 3.0/5 | Evaluated | ❌ | [4](../reports/004-initech-cloud.md) | |',
+        // #21 is a re-added row that now carries a report; the page previewed it without one.
+        '| 21 | 2026-10-02 | Acme Robotics | - | Engineer | 3.0/5 | Evaluated | ❌ | [12](../reports/012-acme.md) | |',
+        // tracker.mjs matches a trimmed line, so an indented row under #22 goes with it; so does a row too short to parse (#23).
+        '| 22 | 2026-10-03 | Umbrella Labs | - | Engineer | 3.0/5 | Evaluated | ❌ | [13](../reports/013-umbrella.md) | |',
+        '  | 22 | 2026-10-03 | Indented Corp | - | SRE | 3.0/5 | Evaluated | ❌ | [14](../reports/014-indented.md) | |',
+        '| 23 | 2026-10-04 | Umbrella Labs | - | Analyst | 3.0/5 | Evaluated | ❌ | [15](../reports/015-umbrella.md) | |',
+        '| 23 | Shortrow Inc |',
+        // tracker.mjs deletes a number cell that is exactly "24", so a "024" row is neither deleted nor a second #24.
+        '| 24 | 2026-10-05 | Vandelay Industries | - | Importer | 3.0/5 | Evaluated | ❌ | [16](../reports/016-vandelay.md) | |',
+        '| 024 | 2026-10-05 | Zeropad Systems | - | Exporter | 3.0/5 | Evaluated | ❌ | [17](../reports/017-zeropad.md) | |',
+        '',
+      ].join('\n'),
+    );
+  });
+  afterAll(async () => {
+    await d.close();
+  });
+  const confirmDelete = (params: Record<string, unknown>) => d.app.inject({ method: 'POST', url: '/api/actions/tracker.delete', headers: d.authedWrite, payload: { params: { dryRun: false, ...params }, confirmed: true } });
+
+  it('refuses when the number holds another row besides the previewed one', async () => {
+    const r = await confirmDelete({ n: 20, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 });
+    expect(r.statusCode, r.body).toBe(409);
+    // A fresh preview names the same one row and is refused again, so the refusal does not send the user back to it.
+    expect(r.json().error).toMatch(/#20 numbers more than one row/);
+    expect(r.json().error).not.toMatch(/Preview the delete again/);
+    expect(tracker()).toContain('| 20 | 2026-10-01 | Hooli |');
+  });
+
+  it('refuses when the previewed row had no report and the row under that number now has one', async () => {
+    const r = await confirmDelete({ n: 21, expectCompany: 'Acme Robotics', expectRole: 'Engineer', expectReport: null });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(tracker()).toContain('| 21 | 2026-10-02 | Acme Robotics |');
+  });
+
+  it('given an indented row shares the number, when the other row is confirmed, then it is refused and both stay', async () => {
+    const r = await confirmDelete({ n: 22, expectCompany: 'Umbrella Labs', expectRole: 'Engineer', expectReport: 13 });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(tracker()).toContain('Indented Corp');
+    expect(tracker()).toContain('[13](../reports/013-umbrella.md)');
+  });
+
+  it('given a row too short to read shares the number, when the other row is confirmed, then it is refused and both stay', async () => {
+    const r = await confirmDelete({ n: 23, expectCompany: 'Umbrella Labs', expectRole: 'Analyst', expectReport: 15 });
+    expect(r.statusCode, r.body).toBe(409);
+    expect(tracker()).toContain('| 23 | Shortrow Inc |');
+    expect(tracker()).toContain('[15](../reports/015-umbrella.md)');
+  });
+
+  it('given a "024" row beside #24, when #24 is confirmed, then only #24 is deleted', async () => {
+    const r = await confirmDelete({ n: 24, expectCompany: 'Vandelay Industries', expectRole: 'Importer', expectReport: 16 });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(tracker()).not.toContain('Vandelay Industries');
+    expect(tracker()).toContain('Zeropad Systems');
+  });
+
+  it('given the palette sends the expectations as typed text, when it names the row, then the delete goes through', async () => {
+    fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), '| 30 | 2026-10-06 | Palette Typed Co | - | Engineer | 3.0/5 | Evaluated | ❌ | [18](../reports/018-palette.md) | |\n');
+    const r = await confirmDelete({ n: 30, expectCompany: 'Palette Typed Co ', expectRole: ' Engineer', expectReport: '18' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(tracker()).not.toContain('Palette Typed Co');
+  });
+
+  it('given a hand-edited company cell longer than 500 characters, when the page confirms that row, then it is deleted', async () => {
+    const company = `Longname ${'x'.repeat(600)}`;
+    fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), `| 31 | 2026-10-07 | ${company} | - | Engineer | 3.0/5 | Evaluated | ❌ | [19](../reports/019-long.md) | |\n`);
+    const r = await confirmDelete({ n: 31, expectCompany: company, expectRole: 'Engineer', expectReport: 19 });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(tracker()).not.toContain('Longname');
+  });
+
+  it('given a "025" row ahead of #25 that the page shows as #25, when it is confirmed, then the refusal names the spelling to fix', async () => {
+    fs.appendFileSync(
+      path.join(d.cfg.dataRoot, 'data', 'applications.md'),
+      ['| 025 | 2026-10-08 | Spelled Corp | - | Engineer | 3.0/5 | Evaluated | ❌ | [20](../reports/020-spelled.md) | |', '| 25 | 2026-10-08 | Exact Corp | - | Engineer | 3.0/5 | Evaluated | ❌ | [21](../reports/021-exact.md) | |', ''].join('\n'),
+    );
+    const r = await confirmDelete({ n: 25, expectCompany: 'Spelled Corp', expectRole: 'Engineer', expectReport: 20 });
+    expect(r.statusCode, r.body).toBe(409);
+    // A fresh preview shows the same row, so the refusal points at the number cell instead.
+    expect(r.json().error).toMatch(/written "025"/);
+    expect(r.json().error).not.toMatch(/Preview the delete again/);
+    expect(tracker()).toContain('Exact Corp');
+  });
 });
 
 describe('documents', () => {

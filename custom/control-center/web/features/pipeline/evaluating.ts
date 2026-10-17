@@ -24,6 +24,9 @@ function targetKey(ref: string): string {
   return jd !== null ? `jds\0${jd}` : `url\0${dedupUrlKey(ref)}`;
 }
 
+/** GET /api/sessions marks a session whose status ended while its process is still stopping. */
+type ListedSession = SessionMeta & { stopping?: true };
+
 function sessionKey(target: SessionMeta['target']): string | null {
   if (!target.value) return null;
   if (target.type === 'url') return `url\0${dedupUrlKey(target.value)}`;
@@ -34,9 +37,10 @@ function sessionKey(target: SessionMeta['target']): string | null {
 /**
  * The posting URLs and saved-JD references a report-gated session is evaluating right now. The server refuses a second
  * evaluation of the same posting, and a row stays pending until its evaluation is done, so pages leave these out of a
- * new start. `has` takes a row's reference as written.
+ * new start. A cancelled one still stopping counts too: the server refuses its target until it exits. `has` takes a
+ * row's reference as written.
  */
-export function evaluatingTargets(sessions: SessionMeta[] | undefined): { has: (ref: string) => boolean } {
-  const keys = new Set((sessions ?? []).filter((s) => isReportGatedMode(s.mode) && LIVE.has(s.status)).map((s) => sessionKey(s.target)));
+export function evaluatingTargets(sessions: ListedSession[] | undefined): { has: (ref: string) => boolean } {
+  const keys = new Set((sessions ?? []).filter((s) => isReportGatedMode(s.mode) && (LIVE.has(s.status) || s.stopping === true)).map((s) => sessionKey(s.target)));
   return { has: (ref) => keys.has(targetKey(ref)) };
 }

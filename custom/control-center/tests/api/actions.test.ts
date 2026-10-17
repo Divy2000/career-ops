@@ -382,6 +382,22 @@ describe('action registry', () => {
     }
   });
 
+  it('a second Install Control Center dependencies while this app\'s install is still running is refused, so two npm installs never write one node_modules (R28-srv-core-L1-01)', async () => {
+    const app = await makeTestApp();
+    const live = app.runner.start({ actionId: 'devchat.installDeps', label: 'Install Control Center dependencies', cost: 'network', resources: [], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
+    try {
+      const res = await app.app.inject({ method: 'POST', url: '/api/actions/devchat.installDeps', headers: app.authedWrite, payload: { params: {}, confirmed: true } });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toMatch(/^Skipped: an install is already running/);
+      expect(res.json().error).toContain(live.id);
+      expect(app.runner.pending('devchat.installDeps').map((m) => m.id)).toEqual([live.id]);
+    } finally {
+      app.runner.cancel(live.id);
+      for (let i = 0; i < 200 && !app.runner.store.readExit(live.id); i++) await new Promise((r) => setTimeout(r, 50));
+      await app.close();
+    }
+  });
+
   it('Run the daily job now while this app\'s own daily run is still queued is refused, and only one daily run is queued (SW6-server-03)', async () => {
     const app = await makeTestApp();
     // A scan holds the pipeline resource, so the first daily run waits behind it, with no pidfile yet.
