@@ -256,6 +256,20 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(String(call![1]!.body)).toContain('attach the CV PDF output/cv-acme-short.pdf and use the cover letter text in output/cover-acme.md');
   });
 
+  it('Given a draft started before any CV PDF existed, When the tailored CV arrives and the page comes back, Then it is preselected (R28-feat-a-L2-01 review)', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    await openApply();
+    await until(() => host.querySelector('[aria-label="CV PDF to attach"]'), 'the CV PDF select');
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = DOCS;
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme.pdf', 'the tailored CV preselected');
+  });
+
   it('Given New draft after picking documents, When the next draft starts, Then the earlier draft\'s picks are let go with it (R28-feat-a-L2-01)', async () => {
     sessionStorage.setItem('cc.apply.12', 's-apply-12');
     sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-old.pdf', cover: '' }));
