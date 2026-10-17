@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pill } from './ui';
 import { useConfirm } from './ConfirmDialog';
+import { watchActionPosts } from '../lib/actions';
 import type { ActionMeta } from '@shared/api';
 
 export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
@@ -9,12 +10,22 @@ export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
 }
 
 // A run's promise can outlast its POST (useRunAction waits on a runs refetch that has no limit of its own). The lock
-// ends once the server's 30 s sync timeout has surely answered the POST, so a stalled refetch cannot lock the button for good.
+// lasts until the POST is answered, however long that takes, then at most REFETCH_GRACE_MS more for the rest of the run.
+// A run whose POST this cannot see (onRun sends it after an await) is locked until the server's 30 s sync timeout has
+// surely answered it, so a stalled refetch cannot lock the button for good either way.
 const RUN_LOCK_LIMIT_MS = 35_000;
-async function withinRunLockLimit(run: void | Promise<unknown>): Promise<void> {
+const REFETCH_GRACE_MS = 5_000;
+async function withinRunLockLimit(start: () => void | Promise<unknown>): Promise<void> {
+  const { value: run, posts } = watchActionPosts(start);
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = (ms: number) => new Promise<void>((resolve) => (timer = setTimeout(resolve, ms)));
   try {
-    await Promise.race([run, new Promise<void>((resolve) => (timer = setTimeout(resolve, RUN_LOCK_LIMIT_MS)))]);
+    if (posts.length === 0) {
+      await Promise.race([run, limit(RUN_LOCK_LIMIT_MS)]);
+      return;
+    }
+    await Promise.race([run, Promise.all(posts)]);
+    await Promise.race([run, limit(REFETCH_GRACE_MS)]);
   } finally {
     clearTimeout(timer);
   }
@@ -23,7 +34,7 @@ async function withinRunLockLimit(run: void | Promise<unknown>): Promise<void> {
 /**
  * Button for a registry action: shows the cost badge and asks (Radix dialog) when the action declares a confirm text.
  * onRun gets `confirmed: true` once the user confirmed, which the request must carry (the server refuses otherwise).
- * An onRun that returns its run's promise keeps the button from starting the run again until it settles (at most RUN_LOCK_LIMIT_MS).
+ * An onRun that returns its run's promise keeps the button from starting the run again until it settles (see withinRunLockLimit).
  */
 export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>, opts: { confirmed: boolean }) => void | Promise<unknown>; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
   const confirm = useConfirm();
@@ -94,7 +105,7 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
             started = true;
             if (hadFocus) remember();
             setRunning(true);
-            await withinRunLockLimit(onRun(params ?? {}, { confirmed: Boolean(meta.confirm) }));
+            await withinRunLockLimit(() => onRun(params ?? {}, { confirmed: Boolean(meta.confirm) }));
           } catch (err) {
             console.error(`${meta.id} failed:`, err);
           } finally {
