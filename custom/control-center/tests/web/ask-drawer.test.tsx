@@ -981,24 +981,30 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     const calls: string[] = [];
     let answerFanout!: () => void;
     const answer = vi.mocked(fetch).getMockImplementation()!;
-    // Whether Process inbox was still held back when each sessions read after the fan-out POST was sent.
-    const heldAtRefresh: boolean[] = [];
+    // The first sessions read after the fan-out answered is held open, to check the hold outlasts it.
+    let fanoutAnswered = false;
+    let answerRefresh: (() => void) | undefined;
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
       calls.push(`${init?.method ?? 'GET'} ${String(url)}`);
-      if (String(url) === '/api/sessions' && calls.includes('POST /api/sessions/fanout')) heldAtRefresh.push(seen.at(-1)!);
+      if (String(url) === '/api/sessions' && !init?.method && fanoutAnswered && !answerRefresh) await new Promise<void>((r) => (answerRefresh = r));
       if (String(url) === '/api/sessions/fanout') await new Promise<void>((r) => (answerFanout = r));
       return answer(url as string, init);
     });
     try {
       const item = await runProposal('Acme');
       expect(seen.at(-1)).toBe(true);
-      await act(async () => answerFanout());
+      await act(async () => {
+        fanoutAnswered = true;
+        answerFanout();
+      });
+      await until(() => answerRefresh, 'the sessions refresh');
       await act(async () => new Promise((r) => setTimeout(r, 20)));
-      expect(item.dataset.proposalState).toBe('done');
+      expect(seen.at(-1)).toBe(true);
+      await act(async () => answerRefresh!());
+      await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
       expect(seen.at(-1)).toBe(false);
       expect(calls).toContain('POST /api/sessions/fanout');
       expect(calls.slice(calls.indexOf('POST /api/sessions/fanout'))).toContain('GET /api/sessions');
-      expect(heldAtRefresh).toContain(true);
     } finally {
       // A failed run must not leave the shared mark set for the next test.
       if (seen.at(-1)) markBatchStarting(false);
