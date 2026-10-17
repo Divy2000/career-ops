@@ -272,8 +272,7 @@ export function recordTurnAfter(sessionDir: string, n: number, fromLine: number)
   const turnDir = path.join(sessionDir, 'turns', String(n));
   fs.mkdirSync(turnDir, { recursive: true });
   const file = path.join(turnDir, 'after.json');
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify({ files, at: new Date().toISOString() }, null, 2));
-  fs.renameSync(`${file}.tmp`, file);
+  replaceFile(file, JSON.stringify({ files, at: new Date().toISOString() }, null, 2));
 }
 
 function readJson<T>(file: string): T | null {

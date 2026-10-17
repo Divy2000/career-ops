@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { markQueuedRunsLost } from '../../supervisor/recovery.js';
+import { markQueuedRunsLost, recordTurnAfter } from '../../supervisor/recovery.js';
 import { RunStore } from '../../server/runner/store.js';
 import { tempDir } from '../helpers/tmp.js';
 
@@ -36,5 +36,28 @@ describe('markQueuedRunsLost temp names (R27-srv-core review)', () => {
     });
     expect(() => markQueuedRunsLost(dataRoot, 's1')).not.toThrow();
     expect(temps(dir)).toEqual([]);
+  });
+});
+
+describe('recordTurnAfter temp names (R27-srv-core review)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('given another writer has its temp for after.json in flight, when finalizing a turn, then that temp is left untouched', () => {
+    const sessionDir = tempDir('cc-after-race-');
+    const turnDir = path.join(sessionDir, 'turns', '1');
+    fs.mkdirSync(turnDir, { recursive: true });
+    fs.writeFileSync(path.join(turnDir, 'after.json.tmp'), 'in flight');
+    recordTurnAfter(sessionDir, 1, 0);
+    expect(JSON.parse(fs.readFileSync(path.join(turnDir, 'after.json'), 'utf8')).files).toEqual({});
+    expect(fs.readFileSync(path.join(turnDir, 'after.json.tmp'), 'utf8')).toBe('in flight');
+  });
+
+  it('given the rename fails, when finalizing a turn, then it throws and leaves no temp file', () => {
+    const sessionDir = tempDir('cc-after-fail-');
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+    });
+    expect(() => recordTurnAfter(sessionDir, 1, 0)).toThrow(/EIO/);
+    expect(temps(path.join(sessionDir, 'turns', '1'))).toEqual([]);
   });
 });
