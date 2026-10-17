@@ -212,8 +212,11 @@ describe('claude shim: running the real binary', () => {
     };
     let realPid = 0;
     try {
-      for (let i = 0; i < 800 && !fs.existsSync(pidFile); i++) await new Promise((r) => setTimeout(r, 25));
-      realPid = Number(fs.readFileSync(pidFile, 'utf8'));
+      // writeFileSync creates the file before it writes the pid, and a pid of 0 would probe the whole process group.
+      const readPid = () => (fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : 0);
+      for (let i = 0; i < 800 && !(readPid() > 0); i++) await new Promise((r) => setTimeout(r, 25));
+      realPid = readPid();
+      expect(realPid).toBeGreaterThan(0);
       expect(alive(realPid)).toBe(true);
       // What execFileSync's timeout does (SIGTERM) or a caller's quit does: a signal to its direct child, the shim.
       child.kill(stop);
