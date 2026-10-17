@@ -124,6 +124,54 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     expect(document.activeElement).toBe(button);
   });
 
+  async function settleWhileCallerKeepsItOff() {
+    const { onRun, releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: true }))));
+    await act(async () => releases[0]!(true));
+    await settle();
+    const turnOn = async () => {
+      await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: false }))));
+      await settle();
+    };
+    return { button, turnOn };
+  }
+
+  it('given the user clicked a non-focusable part of the page after the run settled while the caller kept the button off, then turning it on does not pull focus back (R27-comp-rev-01)', async () => {
+    const { turnOn } = await settleWhileCallerKeepsItOff();
+    await act(async () => document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })));
+    await turnOn();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('given the user focused something after the run settled while the caller kept the button off, then turning it on does not pull focus back even once that element is gone (R27-comp-rev-01)', async () => {
+    const { turnOn } = await settleWhileCallerKeepsItOff();
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    await turnOn();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('given focus goes back to the button, then the page does not scroll to it (R27-comp-rev-01)', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      const { button, turnOn } = await settleWhileCallerKeepsItOff();
+      focus.mockClear();
+      await turnOn();
+      expect(document.activeElement).toBe(button);
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
   it('given the button did not have focus when its run started (a mouse click in Safari), then the settled run does not focus it', async () => {
     const { releases, button } = await renderPending();
     expect(document.activeElement).toBe(document.body);
