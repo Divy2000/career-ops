@@ -279,8 +279,9 @@ export const ACTIONS: ActionDef[] = [
     params: z.object({
       n: positive,
       dryRun: z.boolean().default(false),
-      expectCompany: z.string().trim().max(500).optional(),
-      expectRole: z.string().trim().max(500).optional(),
+      // Uncapped: they echo a hand-editable tracker cell, and the request body limit already bounds them.
+      expectCompany: z.string().trim().optional(),
+      expectRole: z.string().trim().optional(),
       // The palette types a nullable number as text, so a typed report number is read as the number.
       expectReport: z.preprocess((v) => (typeof v === 'string' && /^\s*\d+\s*$/.test(v) ? Number(v) : v), positive.nullable()).optional(),
     }),

@@ -495,6 +495,14 @@ describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
     expect(r.statusCode, r.body).toBe(200);
     expect(tracker()).not.toContain('Palette Typed Co');
   });
+
+  it('given a hand-edited company cell longer than 500 characters, when the page confirms that row, then it is deleted', async () => {
+    const company = `Longname ${'x'.repeat(600)}`;
+    fs.appendFileSync(path.join(d.cfg.dataRoot, 'data', 'applications.md'), `| 31 | 2026-10-07 | ${company} | - | Engineer | 3.0/5 | Evaluated | ❌ | [19](../reports/019-long.md) | |\n`);
+    const r = await confirmDelete({ n: 31, expectCompany: company, expectRole: 'Engineer', expectReport: 19 });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(tracker()).not.toContain('Longname');
+  });
 });
 
 describe('documents', () => {
