@@ -24,6 +24,11 @@ async function withinRunLockLimit(start: () => void | Promise<unknown>): Promise
       await Promise.race([run, limit(RUN_LOCK_LIMIT_MS)]);
       return;
     }
+    // An onRun that returns nothing leaves only its POSTs to wait on: racing its undefined would unlock at once.
+    if (!(run instanceof Promise)) {
+      await Promise.all(posts);
+      return;
+    }
     await Promise.race([run, Promise.all(posts)]);
     await Promise.race([run, limit(REFETCH_GRACE_MS)]);
   } finally {

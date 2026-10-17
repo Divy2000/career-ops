@@ -15,11 +15,12 @@ import type { ActionMeta } from '@shared/api';
 const meta: ActionMeta = { id: 'plugins.audit', label: 'Audit plugins', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} };
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
-/** The Plugins tab's composition: a runs list on the page, and a button whose onRun returns run's promise. */
+/** The Plugins tab's composition: a runs list on the page, and a button whose onRun returns run's promise (or, as onRun may, nothing). */
+let returnsRun: boolean;
 function Page() {
   const { run } = useRunAction();
   useQuery({ queryKey: ['runs'], queryFn: () => fetch('/api/runs').then((r) => r.json()) });
-  return createElement(ActionButton, { meta, onRun: () => run('plugins.audit', {}) });
+  return createElement(ActionButton, { meta, onRun: returnsRun ? () => run('plugins.audit', {}) : () => void run('plugins.audit', {}) });
 }
 
 let host: HTMLElement;
@@ -27,7 +28,12 @@ let root: Root;
 let posts: Array<(r: Response) => void>;
 let runsFetches: number;
 let stallRuns: boolean;
+const mount = async () => {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(Page)))));
+};
 beforeEach(async () => {
+  returnsRun = true;
   posts = [];
   runsFetches = 0;
   stallRuns = false;
@@ -43,8 +49,7 @@ beforeEach(async () => {
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(ConfirmProvider, null, createElement(Page)))));
+  await mount();
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -84,6 +89,19 @@ describe('ActionButton running a registry action through useRunAction (R27-comp-
     await settle();
     expect(runsFetches).toBeGreaterThan(1);
     await act(async () => vi.advanceTimersByTime(10_000));
+    await settle();
+    expect(button().disabled).toBe(false);
+  });
+
+  it('given an onRun that returns nothing, then the button still stays locked until its POST is answered', async () => {
+    returnsRun = false;
+    await mount();
+    await press();
+    expect(posts).toHaveLength(1);
+    expect(button().disabled).toBe(true);
+    await press();
+    expect(posts).toHaveLength(1);
+    await act(async () => posts[0]!(json({ result: 'ok' })));
     await settle();
     expect(button().disabled).toBe(false);
   });
