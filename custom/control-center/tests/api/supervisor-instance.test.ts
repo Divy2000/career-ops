@@ -857,6 +857,37 @@ describe('stopping the supervisor holds the data-root lock until every server ch
     }
   }, 90_000);
 
+  /** Every live server child of `pkg`, wherever it is parented (an orphan of an exited supervisor included). */
+  const childrenOfPackage = (pkg: string) =>
+    execFileSync('/bin/ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8' })
+      .split('\n')
+      .filter((line) => line.includes(path.join(pkg, 'server', 'index.ts')))
+      .map((line) => Number(line.trim().split(/\s+/)[0]));
+
+  it('a reload asked for while stopping starts no server child that outlives the supervisor', async () => {
+    const root = copyFixtureRoot();
+    const pkg = packageWhoseCloseHangs();
+    const s = startSupervisor(await freePort(), root, { packageRoot: pkg, reload: true });
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      // The watcher is up once a change reloads; then stop, and change a server file while the stuck child is waited for.
+      for (let i = 0; !/reload ok/.test(s.output()); i++) {
+        fs.writeFileSync(path.join(pkg, 'server', `touch-${i}.ts`), 'export {};\n');
+        await until(() => /reload ok/.test(s.output()), 'the reload', 3000).catch(() => undefined);
+      }
+      s.proc.kill('SIGTERM');
+      await new Promise((r) => setTimeout(r, 300));
+      fs.writeFileSync(path.join(pkg, 'server', 'touch-after-stop.ts'), 'export {};\n');
+      expect(await s.exited).toBe(0);
+      // A child spawned late would still be starting: give it the time a start takes before looking.
+      await new Promise((r) => setTimeout(r, 3000));
+      expect(childrenOfPackage(pkg), s.output()).toEqual([]);
+    } finally {
+      await stop(s);
+      await reap(childrenOfPackage(pkg), pkg);
+    }
+  }, 90_000);
+
   it('a child still draining after a reload is killed too, not only the active one', async () => {
     const root = copyFixtureRoot();
     const pkg = packageWhoseCloseHangs();

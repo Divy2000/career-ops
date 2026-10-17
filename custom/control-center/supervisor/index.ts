@@ -65,6 +65,8 @@ interface Child extends ChildHandle {
  * The supervisor releases the data-root lock only once all of them are gone.
  */
 const liveChildren = new Map<ChildProcess, Promise<void>>();
+/** Set once the supervisor stops: no child is started or activated after that, so none outlives it or reconciles. */
+let stopping = false;
 
 function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
   return new Promise((resolve, reject) => {
@@ -117,6 +119,7 @@ function spawnChild(env: NodeJS.ProcessEnv): Promise<Child> {
             }
           },
           activate: () => {
+            if (stopping) return;
             try {
               proc.send({ type: 'activate' });
             } catch {
@@ -240,13 +243,13 @@ async function main(): Promise<void> {
     if (process.env.CC_NO_RELOAD) process.exit(1);
     console.error('Only /__recovery is served until a reload brings the server up (a revert or Restart there, or a fix under server/ or shared/).');
   }
-  const bg = new BlueGreen(first, () => spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' }), (port) => waitHealthy(port, 20_000, `127.0.0.1:${PORT}`), { drainMs: 2000 });
+  // A reload asked for while stopping (a debounced change, a queued run, a Restart) starts nothing.
+  const bg = new BlueGreen(first, () => (stopping ? Promise.reject(new Error('the supervisor is stopping')) : spawnChild({ ...childEnv, CC_DEFER_RECONCILE: '1' })), (port) => waitHealthy(port, 20_000, `127.0.0.1:${PORT}`), { drainMs: 2000 });
   if (startError) bg.status = { state: 'failed', at: new Date().toISOString(), ...startError };
 
   // Drained children exit on purpose, and so does the active one when the supervisor stops. An active child that exits on
   // its own (a Dev Chat edit that throws in activate(), say) leaves no server, but the supervisor stays up with /__recovery,
   // where a revert or Restart brings it back. Without reloads nothing could, so then the supervisor stops, as before.
-  let stopping = false;
   const watchExit = (c: Child) =>
     c.proc.on('exit', (code, signal) => {
       if (bg.active !== c || stopping) return;
