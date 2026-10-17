@@ -893,6 +893,13 @@ describe('Runner', () => {
     expect(childEnv({ CAREER_OPS_REPORTS_DIR: '/explicit' }, shell).CAREER_OPS_REPORTS_DIR).toBe('/explicit');
   });
 
+  it('drops a blank CLAUDE_CONFIG_DIR and trims a padded one, so the claude child uses the config dir the server reads tool-results from (R28-misc-rev-02)', () => {
+    for (const value of ['', '   ', '\t\n']) expect(Object.hasOwn(childEnv({}, { CLAUDE_CONFIG_DIR: value, PATH: '/bin' }), 'CLAUDE_CONFIG_DIR'), JSON.stringify(value)).toBe(false);
+    expect(childEnv({}, { CLAUDE_CONFIG_DIR: '  /Users/me/.claude-work\n' }).CLAUDE_CONFIG_DIR).toBe('/Users/me/.claude-work');
+    expect(childEnv({}, { CLAUDE_CONFIG_DIR: '/Users/me/.claude-work' }).CLAUDE_CONFIG_DIR).toBe('/Users/me/.claude-work');
+    expect(Object.hasOwn(childEnv({}, { PATH: '/bin' }), 'CLAUDE_CONFIG_DIR')).toBe(false);
+  });
+
   it('children never inherit CC_TOKEN, CC_SESSION_SECRET or any other internal CC_ variable', async () => {
     const saved = { ...process.env };
     Object.assign(process.env, { CC_TOKEN: 'leak-token', CC_SESSION_SECRET: 'leak-secret', CC_DATA_ROOT: '/x', CC_GUARD_DIR: '/g' });
