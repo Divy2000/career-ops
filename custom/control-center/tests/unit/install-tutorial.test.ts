@@ -278,6 +278,13 @@ describe('installTutorial with a quick guide', () => {
     expect(fs.existsSync(dest('guided'))).toBe(false);
   });
 
+  it('installs a guide that is the tutorial.json itself, which the manifest write leaves byte for byte', () => {
+    const both = { ...manifest, guide: 'tutorial.json', sections: [GUIDE.sections[0]] };
+    folder({ manifest: both, guide: null });
+    installTutorial({ source: src(), dataRoot });
+    expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'tutorial.json'), 'utf8'))).toEqual(both);
+  });
+
   it.each([
     ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
     ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],

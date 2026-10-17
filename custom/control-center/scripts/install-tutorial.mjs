@@ -369,6 +369,8 @@ export function installTutorial(opts) {
   if (manifest.guide !== undefined) {
     for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true)) {
       // Staging may sit on a case-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
+      // A guide that is the manifest file itself is written back unchanged.
+      if (c.to === 'tutorial.json' && !built && sameFile(c.from, manifestPath)) continue;
       if (c.to.toLowerCase() === 'tutorial.json') throw new Error(`"${c.to}" is used by both the manifest and the ${c.kind} file, so the manifest would overwrite it`);
       const same = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase());
       if (same && !sameFile(same.from, c.from)) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
