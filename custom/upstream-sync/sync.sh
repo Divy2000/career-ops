@@ -199,6 +199,10 @@ let t = fs.readFileSync(process.argv[1], "utf8");
 for (const k of ["CONFLICTS", "BASELINE", "TODAY", "BEHIND", "REPORT"]) t = t.replaceAll(`{{${k}}}`, () => process.env[k] || "(none)");
 process.stdout.write(t);
 ' "$LIVE/custom/upstream-sync/sync-prompt.md")"
+# Gated again right before the token is handed over: the baseline suite runs for a long time, during which an update
+# can replace the approved binary at CLAUDE_BIN or a pull can change the live checkout's approved versions.
+REGATE="$(cd "$LIVE" && CC_CLAUDE_BIN="$CLAUDE_BIN" sync_claude_bin 2.1.288)" || fail "claude $CLAUDE_BIN is no longer approved at the token handoff: $REGATE"
+[ "$REGATE" = "$CLAUDE_BIN" ] || fail "claude $CLAUDE_BIN now resolves to $REGATE at the token handoff; not handing it the token"
 # Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
 # Its reply streams to the day log as before (tee) and is kept in memory, where its closing verdict is read.
 # --strict-mcp-config starts none of the user's or the project's MCP servers, which would inherit the token.

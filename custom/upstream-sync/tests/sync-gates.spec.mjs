@@ -231,6 +231,52 @@ test('sync_claude_bin refuses when no claude is found or its version cannot be r
   assert.equal(gone.stdout, 'claude /nonexistent/claude is not an executable');
 });
 
+/**
+ * sync.sh's own lines from the headless Claude step through the claude call, run against a live checkout approving
+ * `approved` with CLAUDE_BIN set to a stub that now reports `version` (it was approved when the run started). The
+ * stub records the environment of any call that gets the token.
+ */
+function handoff({ version, approved = ['2.1.300'] }) {
+  const dir = tempDir('sync-handoff-');
+  const live = path.join(dir, 'live');
+  const claudeDir = path.join(live, 'custom', 'control-center', 'server', 'claude');
+  mkdirSync(claudeDir, { recursive: true });
+  fs.copyFileSync(CONFINEMENT, path.join(claudeDir, 'confinement.mjs'));
+  mkdirSync(path.join(live, 'custom', 'control-center', 'server', 'core'));
+  writeFileSync(path.join(live, 'custom', 'control-center', 'server', 'core', 'contract.json'), JSON.stringify({ claude: { approvedVersions: approved } }));
+  mkdirSync(path.join(live, 'custom', 'upstream-sync'), { recursive: true });
+  fs.copyFileSync(path.join(HERE, '..', 'sync-prompt.md'), path.join(live, 'custom', 'upstream-sync', 'sync-prompt.md'));
+  const seen = path.join(dir, 'token-env.txt');
+  stub(path.join(dir, 'bin'), 'claude', `if [ "$1" = --version ]; then echo "${version} (Claude Code)"; exit 0; fi\nenv > "${seen}"\necho "SYNC: ok"`);
+  const claude = real(path.join(dir, 'bin', 'claude'));
+  const wt = path.join(dir, 'wt');
+  mkdirSync(wt);
+  const vars = `LIVE="${live}" STATE_DIR="${dir}" TODAY=2026-10-17 BEHIND=1 CONFLICTS= BASELINE_FAILURES= TOKEN=tok-123 MODEL=m CLAUDE_BIN="${claude}" LOG="${dir}/log"`;
+  const script = `set -uo pipefail\nsource "${LIB}"\nfail() { echo "!!! $1"; exit 1; }\n${vars}\ncd "${wt}"\n${block('echo "--- headless Claude', /--output-format text/)}\necho "handed off"`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: path.join(dir, 'home') }, encoding: 'utf8' });
+  return { ...r, claude, gotToken: fs.existsSync(seen) };
+}
+
+test('a claude approved at the start but no longer approved when the baseline suite ends never gets the token (R27-scrb-rev-01)', () => {
+  const r = handoff({ version: '2.1.301' });
+  assert.equal(r.gotToken, false, r.stdout + r.stderr);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^!!! .*Claude Code 2\.1\.301 is not approved/m);
+});
+
+test('a claude whose approval the live checkout withdrew during the baseline suite never gets the token (R27-scrb-rev-01)', () => {
+  const r = handoff({ version: '2.1.300', approved: ['2.1.302'] });
+  assert.equal(r.gotToken, false, r.stdout + r.stderr);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+});
+
+test('a claude still approved at the handoff gets the token as before (R27-scrb-rev-01)', () => {
+  const r = handoff({ version: '2.1.300' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(r.gotToken, true, r.stdout + r.stderr);
+  assert.match(r.stdout, /handed off/);
+});
+
 // npm stub: logs each call's arguments; `npm ... test` prints what vitest prints, or fails when told to.
 function npmWorld({ testExit = 0, testOutput = ' Test Files  3 passed (3)\n      Tests  42 passed (42)' } = {}) {
   const dir = tempDir('sync-cc-');
