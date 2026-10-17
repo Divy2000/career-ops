@@ -7,13 +7,12 @@ import { pathToFileURL } from 'node:url';
 const { intakePath, abs, probed } = workerData;
 // pdftotext inherits this thread's environment (intake calls execFileSync without env), which starts as a copy of the
 // server's, credentials included. The extractor needs only a search path, locale, temp dir and home, and intake reads
-// its CAREER_OPS_* paths at import, so every other variable is dropped here. That covers the server internals
-// (CC_TOKEN, CC_SESSION_SECRET) and Claude credentials childEnv drops (server/system/child-env.ts) and also any other
-// key or token the shell exported (OpenAI, GitHub, cloud providers).
-const NEEDED = /^(PATH|PATHEXT|HOME|USERPROFILE|USER|LOGNAME|LANG|LANGUAGE|LC_[A-Z]+|TZ|TMPDIR|TMP|TEMP|SYSTEMROOT|WINDIR|COMSPEC|FONTCONFIG_(FILE|PATH)|CAREER_OPS_[A-Z0-9_]+)$/i;
-const SECRET_SEGMENT = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?|AUTH)(_|$)/i;
+// the data root and its own paths at import (path-resolver.mjs, intake.mjs), so every other variable is dropped: the
+// server internals (CC_TOKEN, CC_SESSION_SECRET), the Claude credentials childEnv drops (server/system/child-env.ts),
+// and any other key or token the shell exported (OpenAI, GitHub, cloud providers).
+const NEEDED = /^(PATH|PATHEXT|HOME|USERPROFILE|USER|LOGNAME|LANG|LANGUAGE|LC_[A-Z]+|TZ|TMPDIR|TMP|TEMP|SYSTEMROOT|WINDIR|COMSPEC|FONTCONFIG_(FILE|PATH)|CAREER_OPS_(ROOT|DATA_DIR|DOCUMENTS_DIR|INTAKE_STATE))$/i;
 for (const name of Object.keys(process.env)) {
-  if (!NEEDED.test(name) || SECRET_SEGMENT.test(name)) delete process.env[name];
+  if (!NEEDED.test(name)) delete process.env[name];
 }
 try {
   const intake = await import(pathToFileURL(intakePath).href);
