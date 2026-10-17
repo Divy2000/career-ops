@@ -297,6 +297,13 @@ function partCopies(manifest) {
   });
 }
 
+/** One file on disk, whatever the path spelling: on a case-insensitive disk "Poster.jpg" and "poster.jpg" are. */
+function sameFile(a, b) {
+  const x = fs.statSync(a);
+  const y = fs.statSync(b);
+  return x.dev === y.dev && x.ino === y.ino;
+}
+
 /** guide.json and the files it names, from `guideRoot`: validated like the server does, before anything is copied. */
 function planGuide(guideRoot, name, chapterCount, strictDims) {
   const guideFrom = path.join(guideRoot, name);
@@ -363,8 +370,8 @@ export function installTutorial(opts) {
     for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true)) {
       // Staging may sit on a case-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
       const same = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase());
-      if (same && same.from !== c.from) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
-      if (!same) copies.push(c);
+      if (same && !sameFile(same.from, c.from)) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
+      if (!same || same.to !== c.to) copies.push(c);
     }
   }
 

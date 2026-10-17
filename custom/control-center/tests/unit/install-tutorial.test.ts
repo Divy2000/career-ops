@@ -259,6 +259,16 @@ describe('installTutorial with a quick guide', () => {
     expect(fs.existsSync(dest('guided'))).toBe(false);
   });
 
+  it('installs a guide poster that names a tutorial poster in another case when both names are the same file', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg' }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }) });
+    write('poster.jpg', 'POSTER');
+    // On a case-insensitive disk Poster.jpg already is poster.jpg; elsewhere a hard link makes it the same file.
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) fs.linkSync(path.join(src(), 'poster.jpg'), path.join(src(), 'Poster.jpg'));
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readFileSync(path.join(dest('guided'), 'poster.jpg'), 'utf8')).toBe('POSTER');
+    expect(fs.readFileSync(path.join(dest('guided'), 'Poster.jpg'), 'utf8')).toBe('POSTER');
+  });
+
   it.each([
     ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
     ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],
