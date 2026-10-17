@@ -836,6 +836,14 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
     expect(item.textContent).toContain('No pending Inbox posting at Initech');
   });
 
+  it('given an unsendable spelling of a posting whose plain twin is evaluated, does not say that posting is left out (R27-shared-comp-X-01 review)', async () => {
+    rows.push(row('https://jobs.acme.example/1 ', 'Acme'));
+    const item = await runProposal('Acme');
+    expect(posts).toEqual([{ url: '/api/sessions/fanout', body: { mode: 'oferta', urls: ['https://jobs.acme.example/1', 'https://jobs.acme.example/2'] } }]);
+    await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+    expect(item.textContent).not.toContain('left out');
+  });
+
   it('given two spellings of one posting pending at the company, starts one evaluation for it and reports done (R27-shared-comp-L2-01)', async () => {
     rows.push(row('https://jobs.acme.example/1?gh_src=abc', 'Acme'));
     const item = await runProposal('Acme');

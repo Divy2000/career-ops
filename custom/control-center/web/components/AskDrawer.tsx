@@ -76,12 +76,13 @@ async function pendingUrlsAt(company: string): Promise<{ urls: string[]; leftOut
   const pipeline = await apiGet<PipelineRead>('/api/pipeline');
   const names = new Set([company.toLowerCase(), unescapeMarkdownCell(company).toLowerCase()]);
   const evaluable = (pipeline.kind === 'ok' ? pipeline.rows : []).filter((r) => !r.done && !r.needsJd && localJdPath(r.url) === null && names.has(r.company.trim().toLowerCase()));
-  // The fan-out refuses a whole body over one URL that is not a plain posting address, so such a row is left out and counted.
-  const unsendable = evaluable.filter((r) => !plainPostingUrl(r.url)).length;
-  const leftOut = unsendable === 0 ? null : `${unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and is left out.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and are left out.`} Fix it in data/pipeline.md.`;
   // One URL per posting, as the fan-out counts them: a second spelling (a tracking param) would be refused as its twin.
   const byKey = new Map<string, string>();
   for (const r of evaluable) if (plainPostingUrl(r.url) && !byKey.has(dedupUrlKey(r.url))) byKey.set(dedupUrlKey(r.url), r.url);
+  // The fan-out refuses a whole body over one URL that is not a plain posting address, so such a row is left out and
+  // counted, unless a plain spelling of the same posting is evaluated.
+  const unsendable = evaluable.filter((r) => !plainPostingUrl(r.url) && !byKey.has(dedupUrlKey(r.url))).length;
+  const leftOut = unsendable === 0 ? null : `${unsendable === 1 ? '1 row has a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and is left out.' : `${unsendable} rows have a URL that is not a plain http(s) posting address (credentials, spaces or another scheme) and are left out.`} Fix it in data/pipeline.md.`;
   const urls = [...byKey.values()];
   if (urls.length === 0) throw new Error(leftOut ? `No pending Inbox posting at ${company} can be evaluated. ${leftOut}` : `No pending Inbox posting at ${company}.`);
   if (urls.length > BATCH_MAX_URLS) throw new Error(`${urls.length} pending postings at ${company}: at most ${BATCH_MAX_URLS} evaluations start at a time. Use the Inbox filter and Evaluate visible.`);
