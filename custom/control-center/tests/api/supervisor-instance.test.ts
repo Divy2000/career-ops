@@ -1034,3 +1034,52 @@ describe('stopping the supervisor holds the data-root lock until every server ch
     }
   }, 90_000);
 });
+
+describe('an error on the listening proxy after it is bound (R29-supervisor-L1-01)', () => {
+  const get = (port: number, url: string, cookie = '') =>
+    new Promise<{ status: number; setCookie: string }>((resolve, reject) => {
+      const req = http.get({ host: '127.0.0.1', port, path: url, headers: { host: `127.0.0.1:${port}`, ...(cookie ? { cookie } : {}) } }, (res) => {
+        res.resume();
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, setCookie: String(res.headers['set-cookie'] ?? '') }));
+      });
+      req.on('error', reject);
+    });
+
+  it('given the supervisor is serving, when the listener reports accept EMFILE, then the app and /__recovery keep serving', async () => {
+    const port = await freePort();
+    // net.Server emits accept errors (EMFILE when descriptors run out) as 'error' on the listener; this preload raises one
+    // on the supervisor's own listener once it is bound, the way onconnection does.
+    const preload = path.join(tempDir('cc-sup-preload-'), 'accept-error.mjs');
+    fs.writeFileSync(
+      preload,
+      [
+        "import net from 'node:net';",
+        'const listen = net.Server.prototype.listen;',
+        'net.Server.prototype.listen = function (...args) {',
+        "  this.once('listening', () => {",
+        '    const addr = this.address();',
+        '    if (!addr || typeof addr !== "object" || addr.port !== Number(process.env.CC_PORT)) return;',
+        '    setTimeout(() => {',
+        "      this.emit('error', Object.assign(new Error('accept EMFILE'), { code: 'EMFILE', errno: -24, syscall: 'accept' }));",
+        "      process.stderr.write('[test] accept EMFILE raised\\n');",
+        '    }, 200);',
+        '  });',
+        '  return listen.apply(this, args);',
+        '};',
+        '',
+      ].join('\n'),
+    );
+    const s = startSupervisor(port, copyFixtureRoot(), { env: { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import ${preload}`.trim() } });
+    try {
+      expect(await settled(s), s.output()).toBe('ready');
+      await until(() => s.output().includes('[test] accept EMFILE raised') || s.proc.exitCode !== null, 'the accept error to be raised');
+      await new Promise((r) => setTimeout(r, 500));
+      expect(s.proc.exitCode, s.output()).toBeNull();
+      const cookie = (await get(port, '/__recovery?t=supervisor-instance-test-token')).setCookie.split(';')[0]!;
+      expect((await get(port, '/__recovery', cookie)).status).toBe(200);
+      expect((await get(port, '/healthz')).status).toBe(200);
+    } finally {
+      await stop(s);
+    }
+  }, 70_000);
+});
