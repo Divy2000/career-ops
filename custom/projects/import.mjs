@@ -143,7 +143,7 @@ async function importInto({ entries, blocks, wholeText, write, merge }) {
   try {
     await writeFile(tmp, next);
   } catch (err) {
-    rmSync(tmp, { force: true });
+    removeQuietly(tmp, 'temp library');
     throw err;
   }
   publish(tmp, base, merge);
@@ -176,7 +176,7 @@ function publish(tmp, base, merge) {
         try {
           renameSync(tmp, TARGET);
         } catch (e) {
-          rmSync(TARGET, { force: true });
+          removeQuietly(TARGET, 'placeholder library');
           throw e;
         }
       }
@@ -187,7 +187,17 @@ function publish(tmp, base, merge) {
     }
     renameSync(tmp, TARGET);
   } finally {
-    rmSync(tmp, { force: true });
+    removeQuietly(tmp, 'temp library');
+  }
+}
+
+// Cleanup after a failure (or a finished rename) must not replace the error the user needs to see, so a removal that
+// fails too is only noted.
+function removeQuietly(file, what) {
+  try {
+    rmSync(file, { force: true });
+  } catch (err) {
+    process.stderr.write(`note: could not remove the ${what} ${file}: ${err.message}\n`);
   }
 }
 
