@@ -203,8 +203,39 @@ test('a start whose process has exited, or whose pid now names another process, 
   assert.equal(readClaim(r).pid, child.pid);
   assert.deepEqual(tryClaim(r, { owner: 'starting:next', batch: null }), { ok: true });
   // This process's pid, but a process that started at another time: the pid was reused.
-  plant(r, { owner: 'starting:reused', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  plant(r, { owner: 'starting:reused', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 0 });
   assert.deepEqual(tryClaim(r, { owner: 'starting:next', batch: null }), { ok: true });
+});
+
+test('a start taken in one time zone holds against a claimant in another (R28-tests-custom-L1-01)', async () => {
+  const r = root();
+  // The Control Center server runs in the user's shell TZ, the launchd daily job in the system zone.
+  const holderCode = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:cc', batch: null }).ok)); process.stdin.resume();`;
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', holderCode], { env: { ...process.env, TZ: 'Pacific/Kiritimati' } });
+  try {
+    const out = await new Promise((resolve, reject) => {
+      holder.stdout.once('data', (d) => resolve(String(d)));
+      holder.on('error', reject);
+      holder.on('close', () => resolve(''));
+    });
+    assert.equal(out, 'true');
+    const contendCode = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(JSON.stringify(tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null })));`;
+    const contender = spawnSync(process.execPath, ['--input-type=module', '-e', contendCode], { env: { ...process.env, TZ: 'Pacific/Pago_Pago' }, encoding: 'utf8' });
+    assert.equal(contender.status, 0, contender.stderr);
+    const answer = JSON.parse(contender.stdout);
+    assert.equal(answer.ok, false);
+    assert.equal(answer.holder.owner, 'starting:cc');
+    assert.equal(typeof readClaim(r).pidStart, 'number');
+  } finally {
+    holder.stdin.end();
+  }
+});
+
+test('a start claim in the earlier format (pidStart as ps text) is judged by its pid alone (R28-tests-custom-L1-01)', () => {
+  const r = root();
+  // ps text in the writer's TZ cannot be compared with another zone's, so a live pid holds.
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
 });
 
 test('many processes claiming at once: exactly one gets it', async () => {

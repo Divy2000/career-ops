@@ -3,7 +3,9 @@
 // acknowledged only when a pass ends done, and both append the same rows to policy-changes.tsv and company-alerts.tsv
 // and a digest section. A pass takes the queue by holding data/immigration/.policy-pass.claim:
 //   { owner, batch, at }  owner is session:<id>, daily:<pid>, or starting:<nonce> while a session is being created;
-//   a starting claim also names the process creating it: { pid, pidStart } (its pid and ps start time).
+//   a starting claim also names the process creating it: { pid, pidStart } (its pid and start time in seconds since the
+//   epoch, read under a pinned TZ and locale: ps text depends on the caller's zone, and the Control Center and the
+//   launchd daily job run in different ones; an earlier claim's string pidStart cannot be compared, so its pid decides).
 // A claim whose owner is gone is stale and taken over: a session that no longer exists or has a final status
 // (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead, no longer the one
 // .run-daily.pid names or no longer bash running run-daily.sh, or a start whose process has exited (a start can wait on a Keychain prompt
@@ -85,7 +87,7 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
     if (!Number.isSafeInteger(claim.pid) || claim.pid <= 0 || !pidAlive(claim.pid)) return false;
     const started = processStart(claim.pid);
     // Only ps naming another start time is proof the pid was reused; a ps that cannot run says nothing.
-    return started === undefined || typeof claim.pidStart !== 'string' || started === claim.pidStart;
+    return started === undefined || typeof claim.pidStart !== 'number' || started === claim.pidStart;
   }
   return false;
 }
@@ -108,14 +110,24 @@ function isDailyJob(pid) {
   return DAILY_JOB_RE.test(out.trim());
 }
 
-/** pid's start time as ps prints it; null when no process has the pid, undefined when ps cannot tell. */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
+
+/**
+ * pid's start time in seconds since the epoch, from ps run with LC_ALL=C and TZ=UTC whatever this process's environment
+ * is (as supervisor/instance-lock.ts reads it); null when no process has the pid, undefined when ps cannot tell.
+ */
 function processStart(pid) {
+  let out;
   try {
-    const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { ...process.env, LC_ALL: 'C' } }).trim();
-    return out || undefined;
+    out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).trim();
   } catch (err) {
     return err.status === 1 && !String(err.stdout ?? '').trim() ? null : undefined;
   }
+  const m = LSTART.exec(out);
+  const month = m ? MONTHS.indexOf(m[1]) : -1;
+  if (!m || month === -1) return undefined;
+  return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
 }
 
 let ownStart;
