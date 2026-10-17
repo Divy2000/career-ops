@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
 import { pidAlive, type Runner } from '../runner/runner.js';
@@ -37,6 +38,8 @@ const RELEASE_RETRY_MS = 250;
 const RUN_END_WAIT_MS = 10_000;
 /** A running turn's reservation sentinel older than this is refreshed: well inside the stale GC's four hours. */
 const RESERVATION_REFRESH_AGE_MS = 60 * 60_000;
+/** Releases or refreshes a sentinel only while it is still the session's, under the tracker lock (run as a child, never loaded here). */
+const RESERVATION_SENTINEL_SCRIPT = fileURLToPath(new URL('./reservation-sentinel.mjs', import.meta.url));
 /** A done pass whose ack failed is acknowledged again after this delay, doubling up to the cap while it keeps failing. */
 const POLICY_ACK_RETRY_MS = 60_000;
 const POLICY_ACK_RETRY_CAP_MS = 30 * 60_000;
@@ -527,7 +530,7 @@ export class SessionManager {
     const credited = num !== null && this.creditedHolds(meta!, num);
     // Taken before the delete removes the record of when the session got the number. A credited report still there
     // holds the number, so no other reservation can have claimed it.
-    const owns = num !== null && !credited ? this.reservationOwnership(meta!, num) : undefined;
+    const since = num !== null && !credited ? this.ownedSince(meta!, num) : undefined;
     // Claimed before the delete and the await, as finalize does, so the number is released once.
     if (num !== null) this.store.setReportNum(id, null);
     let deleted: boolean;
@@ -535,7 +538,7 @@ export class SessionManager {
       deleted = this.store.delete(id);
     } finally {
       if (num !== null) {
-        const released = await this.releaseReportNum(num, credited, owns);
+        const released = await this.releaseReportNum(num, credited, since);
         if (released.startsWith('could not') || released.includes('already lost')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
     }
@@ -577,9 +580,9 @@ export class SessionManager {
         this.store.setStatus(meta.id, 'error', reason);
         // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
         if (meta.reportNum !== null) {
-          const owns = this.reservationOwnership(meta, meta.reportNum);
+          const since = this.ownedSince(meta, meta.reportNum);
           this.store.setReportNum(meta.id, null);
-          void this.releaseReportNum(meta.reportNum, false, owns);
+          void this.releaseReportNum(meta.reportNum, false, since);
         }
         this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
         continue;
@@ -854,27 +857,32 @@ export class SessionManager {
   }
 
   /**
-   * Tells whether `num`'s sentinel is still the session's: written no later than the session got the number. A sentinel
-   * the stale GC collected is gone, or belongs to whichever reservation claimed the number next, and is not the
-   * session's to release. One that cannot be read is not released either: a release removes whatever is there.
+   * When the session got `num`, taken before anything removes that record (a delete); null when it cannot be read, and
+   * then no sentinel reads as the session's.
    */
-  private reservationOwnership(meta: SessionMeta, num: number): () => boolean {
-    let since: number;
+  private ownedSince(meta: SessionMeta, num: number): number | null {
     try {
-      since = this.reservedAt(meta, num);
+      return this.reservedAt(meta, num);
     } catch (err) {
       console.warn(`[sessions] session ${meta.id}: could not read when it got report number ${num}: ${(err as Error).message}`);
-      return () => false;
+      return null;
     }
-    return () => {
-      try {
-        const createdAt = readSentinelCreatedAt(this.sentinelPath(num));
-        return createdAt !== null && createdAt <= since;
-      } catch (err) {
-        console.warn(`[sessions] session ${meta.id}: could not read the reservation for report number ${num}: ${(err as Error).message}`);
-        return false;
-      }
-    };
+  }
+
+  /**
+   * Tells whether `num`'s sentinel is still the session's: written no later than `since`, when the session got the
+   * number. A sentinel the stale GC collected is gone, or belongs to whichever reservation claimed the number next, and
+   * is not the session's to release. One that cannot be read is not released either.
+   */
+  private sentinelOwned(num: number, since: number | null): boolean {
+    if (since === null) return false;
+    try {
+      const createdAt = readSentinelCreatedAt(this.sentinelPath(num));
+      return createdAt !== null && createdAt <= since;
+    } catch (err) {
+      console.warn(`[sessions] could not read the reservation for report number ${num}: ${(err as Error).message}`);
+      return false;
+    }
   }
 
   private reservationPath(id: string): string {
@@ -1172,9 +1180,9 @@ export class SessionManager {
       const num = meta.reportNum;
       if (num !== null && r.keepReservation !== true) {
         // Claimed before the await, as finalize does, so the number is released once, and only while it is still the session's.
-        const owns = this.creditedHolds(meta, num) ? undefined : this.reservationOwnership(meta, num);
+        const since = this.creditedHolds(meta, num) ? undefined : this.ownedSince(meta, num);
         this.store.setReportNum(id, null);
-        reason += `; ${await this.releaseReportNum(num, null, owns)}`;
+        reason += `; ${await this.releaseReportNum(num, null, since)}`;
       }
       if (this.turnEnded(id, n)) return;
       const status = cancelled ? 'cancelled' : 'error';
@@ -1283,10 +1291,10 @@ export class SessionManager {
       const used = newReports.some((x) => x.num === num) || creditedHeld;
       // A report holding the number means no other reservation can have claimed it; otherwise the stale GC may have, and
       // the sentinel now there (or the one a reservation writes before the release runs) is someone else's.
-      const owns = used ? undefined : this.reservationOwnership(meta, num);
+      const since = used ? undefined : this.ownedSince(meta, num);
       // Claimed before the await, so no other finalize of this turn can release the number again.
       this.store.setReportNum(id, null);
-      reason += `; ${await this.releaseReportNum(num, used, owns)}`;
+      reason += `; ${await this.releaseReportNum(num, used, since)}`;
     }
     // Only a pass that ends done acknowledges the items it was given; any other outcome leaves them queued for the next run.
     const batch = meta.policyBatch ?? null;
@@ -1360,13 +1368,24 @@ export class SessionManager {
   /** Releases the reservation sentinel; the caller has already cleared (claimed) the session's reportNum. */
   /** `used`: a report holds the number now (true), none does (false), or it is not known (null: a finalize that failed). */
   /** A failed attempt is tried again (the tracker lock may be busy): nothing else would drop the RESERVED file before a gc. */
-  /** `owns`, when given, is asked before every attempt: a sentinel lost to the stale GC in between is not released. */
-  private async releaseReportNum(num: number, used: boolean | null, owns?: () => boolean): Promise<string> {
+  /**
+   * `since`, when given (when the session got the number), makes the release ownership-checked: a sentinel lost to the
+   * stale GC is not released, checked before every attempt and again under the tracker lock as the sentinel goes.
+   * Without it (a report holds the number, so no other reservation can have claimed it) the sentinel goes as it is.
+   */
+  private async releaseReportNum(num: number, used: boolean | null, since?: number | null): Promise<string> {
+    const lost = `report number ${num} was already lost (its reservation was collected), so it is not released`;
     let failure = '';
     for (let attempt = 1; attempt <= RELEASE_ATTEMPTS; attempt++) {
       if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, RELEASE_RETRY_MS * (attempt - 1)));
-      if (owns && !owns()) return `report number ${num} was already lost (its reservation was collected), so it is not released`;
-      failure = await this.tryReleaseReportNum(num);
+      if (since !== undefined && !this.sentinelOwned(num, since)) return lost;
+      if (since === undefined) {
+        failure = await this.tryReleaseReportNum(num);
+      } else {
+        const r = await this.settleSentinel('release', num, since!);
+        if (r.outcome && r.outcome !== 'released') return lost;
+        failure = r.failure;
+      }
       if (!failure) break;
     }
     if (failure) return `could not release the reservation for ${num}: ${failure}`;
@@ -1382,6 +1401,22 @@ export class SessionManager {
     } catch (err) {
       // The number is already let go on the session: a rejection is reported as a failed release is, not thrown.
       return (err as Error).message;
+    }
+  }
+
+  /**
+   * One ownership-checked release or refresh of `num`'s sentinel under the tracker lock (reservation-sentinel.mjs):
+   * its outcome, or why it could not be run (the lock busy, the command failing), never thrown.
+   */
+  private async settleSentinel(action: 'release' | 'refresh', num: number, since: number): Promise<{ outcome: string | null; failure: string }> {
+    try {
+      const r = await this.deps.exec(process.execPath, [RESERVATION_SENTINEL_SCRIPT, `--${action}`, String(num), '--since', String(since)], { cwd: this.cfg.codeRoot, timeoutMs: 20_000, env: { CAREER_OPS_ROOT: this.cfg.dataRoot, NO_COLOR: '1' } });
+      if (r.code !== 0) return { outcome: null, failure: (r.stderr || r.stdout).trim().slice(-200) || `exit ${r.code}` };
+      const outcome = (JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '') as { outcome?: unknown }).outcome;
+      if (typeof outcome !== 'string') return { outcome: null, failure: `no outcome in: ${r.stdout.trim().slice(-200)}` };
+      return { outcome, failure: '' };
+    } catch (err) {
+      return { outcome: null, failure: (err as Error).message };
     }
   }
 }
