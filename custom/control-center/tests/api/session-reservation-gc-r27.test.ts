@@ -226,11 +226,13 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const app = await makeTestApp();
     try {
-      const { id, n } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-run-gone');
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-run-gone');
       const runId = app.sessions.read(id)!.turns[0]!.runId!;
       fs.writeFileSync(sentinelPath(app, n), JSON.stringify({ pid: process.pid, token: 'someone-else', created_at: new Date(Date.now() + 1000).toISOString() }));
       const read = app.runner.store.read.bind(app.runner.store);
       vi.spyOn(app.runner.store, 'read').mockImplementation((other) => (other === runId ? null : read(other)));
+      // The stop never reaches a process whose record reads as gone: the run is let go so the turn ends promptly.
+      go();
 
       const { meta } = await settleOn(app, id);
       expect(meta).toMatchObject({ status: 'error', reportNum: null });
