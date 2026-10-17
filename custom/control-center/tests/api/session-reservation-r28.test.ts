@@ -58,6 +58,21 @@ const reportPath = (app: App, file: string) => path.join(app.cfg.dataRoot, 'repo
 const reclaim = (app: App, n: number, at: number) =>
   fs.writeFileSync(sentinelPath(app, n), JSON.stringify({ pid: process.pid, token: 'someone-else', created_at: new Date(at).toISOString() }));
 
+/** Starts a held Batch evaluate turn, then makes its run record unreadable until it ends in error keeping its number. */
+async function keptAfterError(app: App, url: string): Promise<{ id: string; n: number; runId: string; go: () => void }> {
+  const { id, n, go } = await startHeld(app, url);
+  const runId = app.sessions.read(id)!.turns[0]!.runId!;
+  const read = app.runner.store.read.bind(app.runner.store);
+  const spy = vi.spyOn(app.runner.store, 'read').mockImplementation((rid: string) => {
+    if (rid === runId) throw new Error('EIO: i/o error, read');
+    return read(rid);
+  });
+  await until(() => app.sessions.read(id)?.status === 'error');
+  expect(app.sessions.read(id)!.reportNum).toBe(n);
+  spy.mockRestore();
+  return { id, n, runId, go };
+}
+
 describe('a credited report that holds its number (R27-mgr-rev-01)', () => {
   it('given a waiting session credited a report that was renamed since and whose sentinel is gone, when the user deletes it, then nothing claims the number was lost', async () => {
     const app = await makeTestApp();
@@ -155,3 +170,63 @@ describe('a running turn refreshing its sentinel (R27-mgr-rev-04)', () => {
     }
   }, 40_000);
 });
+describe('a number a turn kept while its stopped run could still write (R27-mgr-rev-02)', () => {
+  it('given a Batch evaluate turn that ended in error keeping its number, when its process stops without a report, then the number is released', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, runId, go } = await keptAfterError(app, 'https://jobs.example.com/synthetic/r28-kept-released');
+      go();
+
+      await until(() => !app.runner.ending(runId), 20_000);
+      await until(() => app.sessions.read(id)!.reportNum === null && !fs.existsSync(sentinelPath(app, n)));
+      expect(app.sessions.read(id)!.creditedReport).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+    }
+  }, 40_000);
+
+  it('given a Batch evaluate turn that ended in error keeping its number, when its process writes its report before it stops, then the report is credited and the sentinel goes', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, runId, go } = await keptAfterError(app, 'https://jobs.example.com/synthetic/r28-kept-credited');
+      const file = `${String(n).padStart(3, '0')}-acme-2026-10-17.md`;
+      fs.writeFileSync(reportPath(app, file), '# Evaluation: Acme\n\n**Score:** 4.2/5\n');
+      go();
+
+      await until(() => !app.runner.ending(runId), 20_000);
+      await until(() => app.sessions.read(id)!.reportNum === null);
+      expect(app.sessions.read(id)!.creditedReport).toMatchObject({ num: n, file });
+      await until(() => !fs.existsSync(sentinelPath(app, n)));
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+    }
+  }, 40_000);
+
+  it('given a kept number the stale GC collected and another reservation claimed and wrote its report under, when the process stops, then that report is not credited and the other reservation is left alone', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const app = await makeTestApp();
+    try {
+      const { id, n, runId, go } = await keptAfterError(app, 'https://jobs.example.com/synthetic/r28-kept-lost');
+      reclaim(app, n, Date.now() + 1000);
+      fs.writeFileSync(reportPath(app, `${String(n).padStart(3, '0')}-other-2026-10-17.md`), '# Evaluation: Other\n\n**Score:** 3.1/5\n');
+      go();
+
+      await until(() => !app.runner.ending(runId), 20_000);
+      await until(() => app.sessions.read(id)!.reportNum === null);
+      expect(app.sessions.read(id)!.creditedReport).toBeUndefined();
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+      expect(warn.mock.calls.flat().join('\n')).toMatch(new RegExp(`report number ${n} was already lost`));
+    } finally {
+      vi.restoreAllMocks();
+      await app.close();
+    }
+  }, 40_000);
+});
+

@@ -1140,7 +1140,7 @@ export class SessionManager {
         fail(err);
         clearInterval(timer);
         // Still tracked until the runner stops following its process: the duplicate checks count it live until then.
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.untilRunStops(id, runId));
+        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.untilRunStops(id, runId, state.beforeReports));
         return;
       }
       // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
@@ -1214,10 +1214,11 @@ export class SessionManager {
   }
 
   /**
-   * Keeps the session in `active` while the runner still follows the run's process, then drops it. Meanwhile the stop
-   * that failed while the record could not be read is tried again, and the number the session kept stays reserved.
+   * Keeps the session in `active` while the runner still follows the run's process, then settles the number it kept and
+   * drops it. Meanwhile the stop that failed while the record could not be read is tried again, and the number the
+   * session kept stays reserved.
    */
-  private untilRunStops(id: string, runId: string): void {
+  private untilRunStops(id: string, runId: string, beforeReports: string[]): void {
     if (this.closed) return;
     let stopped = false;
     const following = () => {
@@ -1236,18 +1237,48 @@ export class SessionManager {
         return false;
       }
     };
+    const settle = () => void this.settleKeptReservation(id, beforeReports).finally(() => this.active.delete(id));
     if (!following()) {
-      this.active.delete(id);
+      settle();
       return;
     }
     const timer = setInterval(() => {
       this.keepReservationFresh(id);
       if (following()) return;
       clearInterval(timer);
-      this.active.delete(id);
+      settle();
     }, this.deps.pollMs ?? 250);
     timer.unref();
     this.active.set(id, { timer });
+  }
+
+  /**
+   * The number a turn that ended in error kept while its process could still write, settled once that process stopped.
+   * Only while the sentinel is still the session's is a report the turn wrote under the number (one not there before
+   * the turn) credited, and the sentinel released; a number the stale GC collected may be another reservation's, with
+   * that reservation's report, so it is let go without touching either.
+   */
+  private async settleKeptReservation(id: string, beforeReports: string[]): Promise<void> {
+    try {
+      const meta = this.store.read(id);
+      const num = meta?.reportNum ?? null;
+      if (!meta || num === null) return;
+      const credited = this.creditedHolds(meta, num);
+      const since = credited ? undefined : this.ownedSince(meta, num);
+      const found = credited ? null : (detectNewReports(this.cfg.dataRoot, new Set(beforeReports)).find((x) => x.num === num) ?? null);
+      // Asked after the scan: a sentinel still the session's now was its own when that report was written.
+      const written = found !== null && this.sentinelOwned(num, since ?? null) ? found : null;
+      // Claimed before the await, as finalize does, so the number is released once.
+      this.store.setReportNum(id, null);
+      if (written) {
+        this.store.setCreditedReport(id, written);
+        this.emit(id, { type: 'evaluation', reports: [written] });
+        this.bus.publish('data.changed', { domain: 'reports' });
+      }
+      console.warn(`[sessions] session ${id}: its stopped run left report number ${num} behind: ${await this.releaseReportNum(num, credited || written !== null, since)}`);
+    } catch (err) {
+      console.error(`[sessions] session ${id}: could not settle the report number its stopped run kept: ${(err as Error).message}`);
+    }
   }
 
   private turnEnded(id: string, n: number): boolean {
