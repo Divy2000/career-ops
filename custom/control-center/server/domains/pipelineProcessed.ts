@@ -15,7 +15,9 @@ import { WRITTEN_SEGMENT } from './pipeline.js';
 const HEADING_RE = /^##\s+(.+?)\s*$/;
 const headingTitle = (line: string): string | null => line.match(HEADING_RE)?.[1] ?? null;
 const SECTION_RE = /^##\s+/;
-const PENDING_ITEM_RE = /^- \[ \]\s+/;
+// An open row as parsePipeline reads one (indented or loosely spaced): `[ ]`, or `[!]` for a URL that waits for its JD
+// text, which a completed evaluation also moves (modes/pipeline.md, Workflow 2f).
+const OPEN_ITEM_RE = /^\s*-\s*\[[ !]\]\s*/;
 
 export interface EvaluatedPosting {
   /** The report number as its file name writes it ("042"). */
@@ -50,10 +52,9 @@ export function pdfGenerated(header: string | null, dataRoot: string): boolean {
   return false;
 }
 
-/** "{url} | company | role" to "{url}". */
+/** "{url} | company | role" to "{url}": the first cell's first word, since a `[!]` row notes its error after it. */
 function lineUrl(body: string): string {
-  const i = body.indexOf(' |');
-  return (i >= 0 ? body.slice(0, i) : body).trim();
+  return body.split('|')[0]!.trim().split(/\s+/)[0] ?? '';
 }
 
 function scoreCell(score: number | null): string {
@@ -111,8 +112,8 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
       continue;
     }
     if (section === 'done') continue;
-    if (!PENDING_ITEM_RE.test(lines[i]!)) continue;
-    const body = lines[i]!.replace(PENDING_ITEM_RE, '');
+    if (!OPEN_ITEM_RE.test(lines[i]!)) continue;
+    const body = lines[i]!.replace(OPEN_ITEM_RE, '');
     const cell = lineUrl(body);
     if (unescapeMarkdownUrl(cell) !== target) continue;
     remove.add(i);

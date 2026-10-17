@@ -148,8 +148,24 @@ describe('moving an evaluated posting to Processed', () => {
   });
 
   it('leaves the file alone when the URL is not pending: skipped, flagged, another URL, or no Pending section', () => {
-    for (const md of [`## Pending\n- [x] ${URL} | Acme | Eng\n`, `## Pending\n- [!] ${URL} - Error: login required\n`, `## Pending\n- [ ] ${URL}?gh_src=x | Acme | Eng\n`, `- [ ] ${URL}\n`]) {
+    for (const md of [`## Pending\n- [x] ${URL} | Acme | Eng\n`, `## Pending\n- [ ] ${URL}?gh_src=x | Acme | Eng\n`, `## Pending\n- [!] ${URL}?gh_src=x \u2014 Error: login required\n`, `- [ ] ${URL}\n`]) {
       expect(moveToProcessed(md, URL, POSTING)).toEqual({ text: md, moved: false });
+    }
+  });
+
+  it('moves a needs-JD [!] row once its evaluation completes, with the report\'s company and role (R28-srv-dom-b-L2-01)', () => {
+    for (const note of ['\u2014 Error: login required', '-- Fehler: Login erforderlich', '- Error: login required']) {
+      const r = moveToProcessed(`## Pending\n- [!] ${URL} ${note}\n## Processed\n`, URL, POSTING);
+      expect(r).toEqual({ text: `## Pending\n## Processed\n\n- [x] #042 | ${URL} | Acme (report) | Engineer (report) | 4.2/5 | PDF ❌\n`, moved: true });
+    }
+  });
+
+  it('moves an indented or loosely spaced Pending row the Pipeline page lists as pending (R28-srv-dom-b-L1-01)', () => {
+    for (const row of [`  - [ ] ${URL} | Acme | Eng`, `-[ ] ${URL} | Acme | Eng`, `- [ ]${URL} | Acme | Eng`, `\t- [!] ${URL} \u2014 Error: login required`]) {
+      const r = moveToProcessed(`## Pending\n${row}\n- [ ] https://jobs.example.com/other | Other | Role\n## Processed\n`, URL, POSTING);
+      expect(r.moved).toBe(true);
+      expect(r.text.split('\n').slice(0, 2)).toEqual(['## Pending', '- [ ] https://jobs.example.com/other | Other | Role']);
+      expect(r.text).toContain(`- [x] #042 | ${URL} | `);
     }
   });
 
