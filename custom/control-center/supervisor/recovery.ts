@@ -490,12 +490,22 @@ export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (
     return (err as NodeJS.ErrnoException).code === 'ENOENT';
   }
   return names.every((name) => {
+    const dir = path.join(runs, name);
+    let isDir: boolean;
+    try {
+      isDir = fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory() ?? false;
+    } catch {
+      return false;
+    }
+    // A stray file (Finder's .DS_Store) is not a run.
+    if (!isDir) return true;
     let run: { params?: { sessionId?: unknown } } | null;
     try {
-      run = readJson(path.join(runs, name, 'meta.json'));
+      run = readJson(path.join(dir, 'meta.json'));
     } catch {
-      // Not readable as a run (a stray file, a torn write): nothing ties it to this session.
-      return true;
+      // A run whose meta cannot be read (a torn write, an I/O error) may be this session's and its command may still
+      // write: only its exit record shows it has ended.
+      return fs.existsSync(path.join(dir, 'exit.json'));
     }
     return run?.params?.sessionId !== sessionId || runEnded(dataRoot, name, startOf, serverRunning);
   });
