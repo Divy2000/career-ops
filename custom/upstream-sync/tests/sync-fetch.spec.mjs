@@ -9,6 +9,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitTestEnv } from '../../test-support/git-env.mjs';
+// The real lock writer's start time, so a running-Control-Center lock carries what acquireInstanceLock writes.
+import { processStartTime } from '../../control-center/supervisor/instance-lock.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC_DIR = path.resolve(HERE, '..');
@@ -927,6 +929,24 @@ test('a running Control Center leaves the live update to skip its npm ci, so the
     assert.match(res.stdout, /Control Center is running/);
     assert.match(res.stdout, /npm --prefix custom\/control-center ci/, 'the deferred message names the npm ci command, not a restart');
     assert.doesNotMatch(res.stdout, /restart it to pick them up/, 'a restart does not install dependencies');
+  } finally {
+    child.kill('SIGKILL');
+    rmSync(w.base, { recursive: true, force: true });
+  }
+});
+
+test('given a running Control Center\'s lock carries its real start time, as acquireInstanceLock writes it, the live update skips its npm ci (R27-tests-custom-L2-01)', () => {
+  const w = liveWorld({ ccChange: true });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const start = processStartTime(child.pid);
+  assert.equal(typeof start, 'number', `the writer must read a start, or the lock is the legacy null format: ${start}`);
+  holdRunningControlCenter(w, child, start);
+  try {
+    const res = w.update();
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(w.head(), w.target, 'the fast-forward still happens');
+    assert.equal(w.npm(), '', 'npm ci must not run under a running Control Center');
+    assert.match(res.stdout, /Control Center is running/);
   } finally {
     child.kill('SIGKILL');
     rmSync(w.base, { recursive: true, force: true });

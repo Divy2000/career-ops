@@ -5,6 +5,8 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
+// The real lock writer's start time, so a running-Control-Center lock carries what acquireInstanceLock writes.
+import { processStartTime } from '../../control-center/supervisor/instance-lock.ts';
 import { makeWorld, installLogs, INSTALL_SH, INSTALL_DIR, FORK_URL, linkSystemCommands, pythonPtyMissing, PTY_PROBE_OK, SYSTEM_DIRS } from './harness.mjs';
 
 const SECRET = 'FAKE-SECRET-123';
@@ -1678,6 +1680,27 @@ test('a re-run with the Control Center already running skips its npm ci and does
     assert.doesNotMatch(r.out, /^Done\.$/m);
     assert.match(r.out, /npm --prefix custom\/control-center ci/, 'the skip message names the npm ci command, not a restart');
     assert.doesNotMatch(r.out, /restart it to pick up changes/, 'a restart does not install dependencies');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('given a running Control Center\'s lock carries its real start time, as acquireInstanceLock writes it, a re-run treats it as running: no npm ci, no second instance (R27-tests-custom-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+  const lock = path.join(D, 'data', 'control-center', 'supervisor.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const start = processStartTime(child.pid);
+  assert.equal(typeof start, 'number', `the writer must read a start, or the lock is the legacy null format: ${start}`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: child.pid, start, port: 4317, nonce: 'test' }));
+  try {
+    const r = w.run(['--dir', D, '--non-interactive', '--no-launchd', '--no-h1b-index', '--onboard', 'none']);
+    assert.equal(r.status, 3, `the skipped npm ci is a pending action\n${r.out}`);
+    assert.match(r.out, /\d+\. The Control Center was running, so its dependencies were not reinstalled: stop it/);
+    assert.ok(!w.log().some((l) => l.startsWith('npm --prefix custom/control-center ci')), `npm ci must not run under a running Control Center\n${r.out}`);
+    assert.equal(w.calls('cc').length, 0, 'a second Control Center must not start');
+    assert.match(r.out, /already running/);
   } finally {
     child.kill('SIGKILL');
   }
