@@ -410,6 +410,17 @@ describe('tracker delete', () => {
     expect(real.statusCode, real.body).toBe(200);
     expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 4)).toBe(false);
   });
+
+  it('refuses a confirmed delete whose previewed row is no longer the row under that number (R28-feat-c-L1-01)', async () => {
+    // The page previewed #3 as some other application; #3 is now Globex Payments, which the user never approved deleting.
+    const stale = await post('/api/actions/tracker.delete', { params: { n: 3, dryRun: false, expectCompany: 'Initech Cloud', expectRole: 'Backend Engineer II', expectReport: 4 }, confirmed: true });
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json().error).toMatch(/#3 is now Globex Payments/);
+    expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 3)).toBe(true);
+    const current = await post('/api/actions/tracker.delete', { params: { n: 3, dryRun: false, expectCompany: 'Globex Payments', expectRole: 'Staff Software Engineer', expectReport: 3 }, confirmed: true });
+    expect(current.statusCode, current.body).toBe(200);
+    expect((await get('/api/tracker')).json().rows.some((r: { num: number }) => r.num === 3)).toBe(false);
+  });
 });
 
 describe('documents', () => {

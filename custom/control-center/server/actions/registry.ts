@@ -243,8 +243,27 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: true,
-    params: z.object({ n: positive, dryRun: z.boolean().default(false) }),
+    // expectCompany/expectRole/expectReport: the row the page previewed. A number freed by a delete can be reused by a
+    // later merge, so a confirm naming a row that is no longer under n is refused rather than deleting an unseen one.
+    // Scalars, so the palette's params dialog can ask for them too.
+    params: z.object({
+      n: positive,
+      dryRun: z.boolean().default(false),
+      expectCompany: z.string().max(500).optional(),
+      expectRole: z.string().max(500).optional(),
+      expectReport: positive.optional(),
+    }),
     preview: (p) => p.dryRun,
+    check: async (p, ctx) => {
+      if (p.dryRun || (p.expectCompany === undefined && p.expectRole === undefined && p.expectReport === undefined)) return null;
+      const tracker = await readTracker(ctx.codeRoot, ctx.dataRoot);
+      const rows = tracker.kind === 'ok' ? tracker.rows.filter((r) => r.num === p.n) : [];
+      const matches = (r: (typeof rows)[number]) =>
+        (p.expectCompany === undefined || r.company === p.expectCompany) && (p.expectRole === undefined || r.role === p.expectRole) && (p.expectReport === undefined || r.report === p.expectReport);
+      const now = rows[0];
+      if (!now || rows.some(matches)) return null;
+      return { status: 409, error: `Row #${p.n} is now ${now.company} (${now.role}), not the row you previewed. Preview the delete again.` };
+    },
     build: (p, ctx) => node(ctx, 'tracker', ['delete', '--num', String(p.n), ...flag(p.dryRun, '--dry-run')]),
   }),
   define({ id: 'tracker.verify', label: 'Verify tracker and pipeline', cost: 'free', resources: [], claude: false, sync: false, params: none, build: (_p, ctx) => node(ctx, 'verifyPipeline', []) }),
