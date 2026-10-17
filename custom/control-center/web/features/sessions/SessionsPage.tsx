@@ -189,10 +189,11 @@ export function targetFor(value: string, mode?: string): SessionMeta['target'] {
 
 export function SessionDetailPage() {
   const { id } = detailRoute.useParams();
-  const q = useQuery({ queryKey: ['sessions', id], queryFn: () => apiGet<{ meta: SessionMeta }>(`/api/sessions/${id}`) });
   // The route keeps this page mounted when only $id changes, so the flag names the session it is about.
   const [deletedId, setDeletedId] = useState<string | null>(null);
   const deleted = deletedId === id;
+  // Off once deleted: any turn ending invalidates the ['sessions'] prefix, and the refetch would 404 over "Session deleted.".
+  const q = useQuery({ queryKey: ['sessions', id], queryFn: () => apiGet<{ meta: SessionMeta }>(`/api/sessions/${id}`), enabled: !deleted });
   const confirm = useConfirm();
   const navigate = useNavigate();
   // A fork is a new session: the page follows it instead of showing the source.
@@ -231,60 +232,64 @@ export function SessionDetailPage() {
       <p>
         <Link to="/sessions">Back to sessions</Link>
       </p>
-      <DataState query={q}>
-        {q.data && !deleted && (
-          <>
-            <div className="page-header">
-              <div>
-                <h1 id="page-title">
-                  {q.data.meta.mode} <span className="faint mono small">{q.data.meta.id}</span>
-                </h1>
-                <p className="muted" style={{ margin: 0 }}>
-                  {describeTarget(q.data.meta.target)} {q.data.meta.forkedFrom && <span className="faint">forked from {q.data.meta.forkedFrom}</span>}
-                </p>
+      {/* Outside DataState: a 404 already on its way when the delete lands must not replace this. */}
+      {deleted ? (
+        <Empty>Session deleted.</Empty>
+      ) : (
+        <DataState query={q}>
+          {q.data && (
+            <>
+              <div className="page-header">
+                <div>
+                  <h1 id="page-title">
+                    {q.data.meta.mode} <span className="faint mono small">{q.data.meta.id}</span>
+                  </h1>
+                  <p className="muted" style={{ margin: 0 }}>
+                    {describeTarget(q.data.meta.target)} {q.data.meta.forkedFrom && <span className="faint">forked from {q.data.meta.forkedFrom}</span>}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={q.data.meta.status === 'running' || q.data.meta.status === 'queued' || liveStatus === 'running'}
+                  onClick={() => void remove()}
+                >
+                  Delete
+                </button>
               </div>
-              <button
-                type="button"
-                disabled={q.data.meta.status === 'running' || q.data.meta.status === 'queued' || liveStatus === 'running'}
-                onClick={() => void remove()}
-              >
-                Delete
-              </button>
-            </div>
-            <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} onSessionId={openSession} onStatus={onStatus} />
-            <div className="card">
-              <h2>Turns</h2>
-              <TableScroll label="Turns">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      <th scope="col">Prompt</th>
-                      <th scope="col">Cost</th>
-                      <th scope="col">Tokens</th>
-                      <th scope="col">Denials</th>
-                      <th scope="col">Run</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {q.data.meta.turns.map((t) => (
-                      <tr key={t.n}>
-                        <td className="mono">{t.n}</td>
-                        <td>{t.userText.slice(0, 160)}</td>
-                        <td className="mono">${t.costUsd.toFixed(4)}</td>
-                        <td className="mono">{t.tokens}</td>
-                        <td className="mono">{t.permissionDenials}</td>
-                        <td className="mono faint">{t.runId}</td>
+              <SessionPanel key={id} mode={q.data.meta.mode} sessionId={id} target={q.data.meta.target} onSessionId={openSession} onStatus={onStatus} />
+              <div className="card">
+                <h2>Turns</h2>
+                <TableScroll label="Turns">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">#</th>
+                        <th scope="col">Prompt</th>
+                        <th scope="col">Cost</th>
+                        <th scope="col">Tokens</th>
+                        <th scope="col">Denials</th>
+                        <th scope="col">Run</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableScroll>
-            </div>
-          </>
-        )}
-        {deleted && <Empty>Session deleted.</Empty>}
-      </DataState>
+                    </thead>
+                    <tbody>
+                      {q.data.meta.turns.map((t) => (
+                        <tr key={t.n}>
+                          <td className="mono">{t.n}</td>
+                          <td>{t.userText.slice(0, 160)}</td>
+                          <td className="mono">${t.costUsd.toFixed(4)}</td>
+                          <td className="mono">{t.tokens}</td>
+                          <td className="mono">{t.permissionDenials}</td>
+                          <td className="mono faint">{t.runId}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </TableScroll>
+              </div>
+            </>
+          )}
+        </DataState>
+      )}
     </section>
   );
 }
