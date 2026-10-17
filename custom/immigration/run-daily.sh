@@ -10,6 +10,20 @@ set -uo pipefail
 # This script's own name for the Keychain token, read later: an inherited copy is dropped before any child runs, and
 # unsetting it also drops the export a later assignment would keep, so only the claude calls ever hold the token.
 unset CC_OAUTH_TOKEN
+# Every other Anthropic credential a manual or launchd start may carry goes too, before the data-root resolver and the
+# lock re-exec run: every ANTHROPIC_* variable, and every CLAUDE_CODE_* one with a credential name segment (the rule the
+# Control Center server applies to its children).
+for var in $(compgen -e); do
+  case "$var" in
+    ANTHROPIC_*) unset "$var" ;;
+    CLAUDE_CODE_*)
+      case "_${var}_" in
+        *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
+      esac
+      ;;
+  esac
+done
+unset var
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
@@ -109,20 +123,7 @@ cd "$ROOT"
 
 # The subscription token goes only to the claude calls (the policy pass, and the rank through the shim), never into
 # this shell's environment: scan.mjs loads third-party provider plugins into its own process, and every other step is
-# upstream code that has no use for it. An inherited copy is dropped too, with every other Anthropic credential a manual
-# or launchd start may carry: every ANTHROPIC_* variable, and every CLAUDE_CODE_* one with a credential name segment
-# (the rule the Control Center server applies to its children).
-for var in $(compgen -e); do
-  case "$var" in
-    ANTHROPIC_*) unset "$var" ;;
-    CLAUDE_CODE_*)
-      case "_${var}_" in
-        *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
-      esac
-      ;;
-  esac
-done
-unset var
+# upstream code that has no use for it. The inherited credentials are dropped at the top, before the first child runs.
 # Only an absent (exit 44, errSecItemNotFound) or empty token asks for a new one, as the Control Center reads it
 # (server/claude/manager.ts): any other failure (a locked keychain, no UI to prompt) leaves a stored token that is fine.
 if ! command -v security >/dev/null 2>&1; then
