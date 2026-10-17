@@ -160,6 +160,8 @@ interface PlistJson {
 
 // One save per plist at a time, across every ScheduleService in this process: two saves at once (a double click, Save
 // then Disable) would otherwise share the temp plist and interleave their launchctl steps.
+/** launchctl print's exit status for a service launchd does not have loaded ("Could not find service"). */
+const LAUNCHCTL_NO_SUCH_SERVICE = 113;
 const writeLocks = new Map<string, Promise<unknown>>();
 
 function withWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
@@ -253,14 +255,11 @@ export class ScheduleService {
       return { ok: false, status: 409, error: `${job.title} is running now, and changing its schedule would stop it. Try again once it finishes.`, stderr: '' };
     }
     const target = `gui/${this.deps.uid}/${job.label}`;
-    // What a failed save puts back: the installed plist, whether launchd had the job loaded, and (when this save
-    // enables it) whether it was disabled.
+    // What a failed save puts back: the installed plist, whether launchd had the job loaded, and whether it was disabled.
     const wasLoaded = print.code === 0;
-    let wasDisabled = false;
-    if (input.enabled) {
-      const disabled = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
-      wasDisabled = disabled.code === 0 && parsePrintDisabled(disabled.stdout, job.label);
-    }
+    const disabledBefore = await this.deps.exec('launchctl', ['print-disabled', `gui/${this.deps.uid}`], { timeoutMs: 10_000 });
+    const disabledKnown = disabledBefore.code === 0;
+    const wasDisabled = disabledKnown && parsePrintDisabled(disabledBefore.stdout, job.label);
     let previous: Buffer | null = null;
     try {
       previous = fs.readFileSync(plistPath);
@@ -282,8 +281,13 @@ export class ScheduleService {
     fs.mkdirSync(path.join(this.deps.dataRoot, job.logDir), { recursive: true });
     fs.renameSync(tmp, plistPath);
     let enabledNow = false;
+    let disabledNow = false;
+    let bootstrapped = false;
     const failed = async (error: string, stderr: string): Promise<ScheduleWriteResult> => {
-      const restored = await this.restore({ plistPath, target, previous, wasLoaded, reDisable: enabledNow && wasDisabled });
+      // A flag this save changed without knowing its prior value cannot be put back, so the restore does not claim it was.
+      const flagUnknown = (enabledNow || disabledNow) && !disabledKnown;
+      const disabledAfterSave = disabledNow || (!enabledNow && wasDisabled);
+      const restored = (await this.restore({ plistPath, target, previous, wasLoaded, bootstrapped, disabledAfterSave, disabledBefore: disabledKnown ? wasDisabled : disabledAfterSave })) && !flagUnknown;
       return { ok: false, status: 502, error: `${error}; ${restored ? 'the previous schedule was restored' : 'restoring the previous schedule also failed'}`, stderr };
     };
     if (input.enabled) {
@@ -293,10 +297,17 @@ export class ScheduleService {
     } else {
       const disable = await this.deps.exec('launchctl', ['disable', target], { timeoutMs: 20_000 });
       if (disable.code !== 0) return failed(`launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, disable.stderr.trim());
+      disabledNow = true;
     }
-    // bootout fails when the job is not loaded; that is the expected state before the first install.
-    await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
+    // bootout fails when the job is not loaded; that is the expected state before the first install. So a failed bootout
+    // is fine only if print now says the job is gone (no such service): one still loaded, or whose state print could not
+    // read, may keep firing on its old schedule, so that is a failed save.
+    const bootout = await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
+    if (bootout.code !== 0 && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code !== LAUNCHCTL_NO_SUCH_SERVICE) {
+      return failed(`launchctl bootout failed (exit ${bootout.code}) and the job may still be loaded`, bootout.stderr.trim());
+    }
     if (input.enabled) {
+      bootstrapped = true;
       const boot = await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, plistPath], { timeoutMs: 20_000 });
       if (boot.code !== 0) return failed(`launchctl bootstrap failed (exit ${boot.code})`, boot.stderr.trim());
     }
@@ -304,10 +315,10 @@ export class ScheduleService {
   }
 
   /**
-   * Puts back what a save changed before a launchctl step failed: the previous plist (or none), the disabled flag the
-   * save cleared, and the loaded job the save booted out. Answers whether every step worked.
+   * Puts back what a save changed before a launchctl step failed: the previous plist (or none), the loaded job the save
+   * booted out or the job it loaded, and the disabled flag the save cleared or set. Answers whether every step worked.
    */
-  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; reDisable: boolean }): Promise<boolean> {
+  private async restore(s: { plistPath: string; target: string; previous: Buffer | null; wasLoaded: boolean; bootstrapped: boolean; disabledAfterSave: boolean; disabledBefore: boolean }): Promise<boolean> {
     if (s.previous === null) fs.rmSync(s.plistPath, { force: true });
     else {
       const tmp = `${s.plistPath}.restore-${process.pid}`;
@@ -315,13 +326,23 @@ export class ScheduleService {
       fs.renameSync(tmp, s.plistPath);
     }
     let ok = true;
+    let disabled = s.disabledAfterSave;
+    const setDisabled = async (want: boolean) => {
+      if (disabled === want) return;
+      ok = (await this.deps.exec('launchctl', [want ? 'disable' : 'enable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+      disabled = want;
+    };
     const loaded = (await this.deps.exec('launchctl', ['print', s.target], { timeoutMs: 10_000 })).code === 0;
     if (s.wasLoaded && !loaded && s.previous !== null) {
+      // launchd refuses to bootstrap a disabled job, so the flag is cleared first; a job that was loaded while disabled
+      // gets its flag back below.
+      await setDisabled(false);
       ok = (await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, s.plistPath], { timeoutMs: 20_000 })).code === 0 && ok;
-    } else if (!s.wasLoaded && loaded) {
+    } else if (!s.wasLoaded && loaded && s.bootstrapped) {
+      // Only a job this save loaded is booted out; one another client loaded meanwhile is not this save's to undo.
       ok = (await this.deps.exec('launchctl', ['bootout', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     }
-    if (s.reDisable) ok = (await this.deps.exec('launchctl', ['disable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
+    await setDisabled(s.disabledBefore);
     return ok;
   }
 }

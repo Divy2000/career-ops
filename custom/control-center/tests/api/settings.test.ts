@@ -496,6 +496,8 @@ describe('launchd schedule through the injectable executor (never the real launc
       expect.stringMatching(new RegExp(`^plutil -lint ${plist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.tmp-\\d+$`)),
       `launchctl enable gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootout gui/${uid}/com.career-ops.upstream-sync`,
+      // Nothing was loaded, so bootout failed; a print then confirms the job is gone (R28-srv-core-X-01).
+      `launchctl print gui/${uid}/com.career-ops.upstream-sync`,
       `launchctl bootstrap gui/${uid} ${plist}`,
       `plutil -convert json -o - ${plist}`,
       `launchctl print gui/${uid}/com.career-ops.upstream-sync`,
@@ -553,6 +555,210 @@ describe('launchd schedule through the injectable executor (never the real launc
       expect(res.json().error).toMatch(/launchctl disable failed .*would load again at the next login/);
     } finally {
       fake.fail.clear();
+    }
+  });
+  it('a disable whose bootout fails on a loaded job answers 502 and puts the plist and the enabled flag back (R28-srv-core-X-01)', async () => {
+    const label = 'com.career-ops.upstream-sync';
+    expect((await send('PUT', `/api/schedule/${label}`, { hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+    const plist = path.join(t.cfg.launchAgentsDir, `${label}.plist`);
+    const installed = fs.readFileSync(plist, 'utf8');
+    fake.fail.add('launchctl bootout');
+    try {
+      const res = await send('PUT', `/api/schedule/${label}`, { hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/launchctl bootout failed .*may still be loaded.*previous schedule was restored/);
+    } finally {
+      fake.fail.clear();
+    }
+    expect(fs.readFileSync(plist, 'utf8')).toBe(installed);
+    expect(fake.loaded.has(label)).toBe(true);
+    expect(fake.disabled.has(label)).toBe(false);
+  });
+  it('a disable of a job launchd never loaded still succeeds, since its bootout failing is expected (R28-srv-core-X-01)', async () => {
+    const label = 'com.career-ops.upstream-sync';
+    fake.loaded.delete(label);
+    const res = await send('PUT', `/api/schedule/${label}`, { hour: 9, minute: 0, weekday: 0, enabled: false });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(fake.loaded.has(label)).toBe(false);
+    expect(fake.disabled.has(label)).toBe(true);
+  });
+  it('a failed bootout counts as unloaded only when launchctl print says the job is gone, not when print itself fails (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    let failPrintAfterBootout = false;
+    let bootedOut = false;
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'bootout') bootedOut = true;
+      if (cmd === 'launchctl' && args[0] === 'print' && failPrintAfterBootout && bootedOut) return { code: 5, stdout: '', stderr: 'fake launchctl: print timed out' };
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      expect((await put({ hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+      bootedOut = false;
+      failPrintAfterBootout = true;
+      base.fail.add('launchctl bootout');
+      const res = await put({ hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/launchctl bootout failed/);
+      expect(base.loaded.has(label)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a failed bootout is a failed save when the first launchctl print could not tell whether the job was loaded (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    let failFirstPrint = false;
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'print' && failFirstPrint) {
+        failFirstPrint = false;
+        return { code: 5, stdout: '', stderr: 'fake launchctl: print timed out' };
+      }
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      expect((await put({ hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+      failFirstPrint = true;
+      base.fail.add('launchctl bootout');
+      const res = await put({ hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/launchctl bootout failed/);
+      expect(base.loaded.has(label)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a failed bootout is rechecked even when the first print found no job, since another client may have loaded it since (R28-srv-core-X-01)', async () => {
+    const label = 'com.career-ops.upstream-sync';
+    fake.loaded.delete(label);
+    const realExec = fake.exec;
+    const app = await makeTestApp({}, {
+      exec: async (cmd, args, opts) => {
+        // launchd loads the job (a login, another client) right after the save's first print.
+        if (cmd === 'launchctl' && args[0] === 'disable') fake.loaded.add(label);
+        return realExec(cmd, args, opts);
+      },
+    });
+    try {
+      fake.fail.add('launchctl bootout');
+      const res = await app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload: { hour: 9, minute: 0, weekday: 0, enabled: false } });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/launchctl bootout failed/);
+    } finally {
+      fake.fail.clear();
+      fake.loaded.delete(label);
+      await app.close();
+    }
+  });
+  it('a rollback leaves loaded a job this save never loaded, such as one another client loaded mid-save (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    const label = 'com.career-ops.upstream-sync';
+    let failBootouts = 0;
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'disable') base.loaded.add(label);
+      if (cmd === 'launchctl' && args[0] === 'bootout' && failBootouts > 0) {
+        failBootouts--;
+        return { code: 5, stdout: '', stderr: 'fake launchctl: bootout failed' };
+      }
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      failBootouts = 1;
+      const res = await app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload: { hour: 9, minute: 0, weekday: 0, enabled: false } });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/launchctl bootout failed/);
+      expect(base.loaded.has(label)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a disable rollback clears the disabled flag before it loads the job again, since launchd refuses to load a disabled job (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    let phase: 'setup' | 'bootout' | 'after' = 'setup';
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'bootout' && phase === 'bootout') {
+        // The bootout unloads the job but still reports failure, and the print right after it times out.
+        await base.exec(cmd, args, opts);
+        phase = 'after';
+        return { code: 5, stdout: '', stderr: 'fake launchctl: bootout reported failure' };
+      }
+      if (cmd === 'launchctl' && args[0] === 'print' && phase === 'after') {
+        phase = 'setup';
+        return { code: 5, stdout: '', stderr: 'fake launchctl: print timed out' };
+      }
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      expect((await put({ hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+      phase = 'bootout';
+      const res = await put({ hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/previous schedule was restored/);
+      expect(base.loaded.has(label)).toBe(true);
+      expect(base.disabled.has(label)).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a disable rollback loads a job that was loaded while disabled again, and leaves it disabled (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    let phase: 'setup' | 'bootout' | 'after' = 'setup';
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'bootout' && phase === 'bootout') {
+        await base.exec(cmd, args, opts);
+        phase = 'after';
+        return { code: 5, stdout: '', stderr: 'fake launchctl: bootout reported failure' };
+      }
+      if (cmd === 'launchctl' && args[0] === 'print' && phase === 'after') {
+        phase = 'setup';
+        return { code: 5, stdout: '', stderr: 'fake launchctl: print timed out' };
+      }
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      expect((await put({ hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+      base.disabled.add(label);
+      phase = 'bootout';
+      const res = await put({ hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/previous schedule was restored/);
+      expect(base.loaded.has(label)).toBe(true);
+      expect(base.disabled.has(label)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+  it('a failed disable rollback does not enable a job whose prior disabled flag it could not read (R28-srv-core-X-01)', async () => {
+    const base = fakeLaunchdExec();
+    const exec: typeof base.exec = async (cmd, args, opts) => {
+      if (cmd === 'launchctl' && args[0] === 'print-disabled') return { code: 5, stdout: '', stderr: 'fake launchctl: print-disabled failed' };
+      return base.exec(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec });
+    try {
+      const label = 'com.career-ops.upstream-sync';
+      const put = (payload: Record<string, unknown>) => app.app.inject({ method: 'PUT', url: `/api/schedule/${label}`, headers: app.authedWrite, payload });
+      expect((await put({ hour: 4, minute: 30, weekday: 0, enabled: true })).statusCode).toBe(200);
+      // Loaded now, but disabled (a disable earlier in the session that never booted it out).
+      base.disabled.add(label);
+      base.fail.add('launchctl bootout');
+      const res = await put({ hour: 9, minute: 0, weekday: 0, enabled: false });
+      expect(res.statusCode, res.body).toBe(502);
+      expect(res.json().error).toMatch(/restoring the previous schedule also failed/);
+      expect(base.disabled.has(label)).toBe(true);
+    } finally {
+      await app.close();
     }
   });
   it('two saves at once both succeed, run one after the other, and the plist holds the later one (R12-srv-core-L3-01, R12-srv-core-02)', async () => {
