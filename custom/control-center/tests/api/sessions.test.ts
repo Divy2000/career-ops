@@ -1169,10 +1169,13 @@ describe('read confinement (BUG-06)', () => {
     const other = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
     t.sessions.store.beginTurn(other.id, { runId: 'r-gone-beside-unreadable', userText: 'x' });
     t.sessions.store.setStatus(other.id, 'running');
+    // Nothing will make that record readable again: the session waits a bounded time for it, then is no longer busy.
+    (t.sessions as unknown as { deps: { unreadableRunWaitMs?: number } }).deps.unreadableRunWaitMs = 300;
     expect(() => t.sessions.reconcile()).not.toThrow();
     expect(t.sessions.read(other.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
     await until(() => t.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
     expect(t.sessions.read(meta.id)!.status).toBe('error');
+    await until(() => !t.sessions.isActive(meta.id));
   });
 
   it('a session already settled after its run record went missing is not settled again at the next reconcile', () => {

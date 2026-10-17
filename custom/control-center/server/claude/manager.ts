@@ -36,6 +36,7 @@ const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_MS = 250;
 /** How long a turn that failed after its run started waits for that stopped run to end before giving its number back. */
 const RUN_END_WAIT_MS = 10_000;
+const UNREADABLE_RUN_WAIT_MS = 10 * 60_000;
 /** A running turn's reservation sentinel older than this is refreshed: well inside the stale GC's four hours. */
 const RESERVATION_REFRESH_AGE_MS = 60 * 60_000;
 /** Releases or refreshes a sentinel only while it is still the session's, under the tracker lock (run as a child, never loaded here). */
@@ -181,6 +182,8 @@ export interface ManagerDeps {
   home?: string;
   /** The first delay before a failed policy-pass ack is tried again (POLICY_ACK_RETRY_MS by default). */
   policyAckRetryMs?: number;
+  /** How long a stopped turn's session stays busy while its run record cannot be read (UNREADABLE_RUN_WAIT_MS by default). */
+  unreadableRunWaitMs?: number;
 }
 
 /** A name that is entirely a date (a digest) is no report, as the allocator reads it (reserve-report-num.mjs). */
@@ -1260,19 +1263,31 @@ export class SessionManager {
         }
       }
       try {
-        return this.runner.ending(runId);
+        const ending = this.runner.ending(runId);
+        unreadableSince = null;
+        return ending;
       } catch {
         // Its record is unreadable and the runner does not follow it: nothing here can tell it stopped, so the number is
         // kept (and refreshed) until an exit can be read.
+        unreadableSince ??= Date.now();
         return true;
       }
     };
+    let unreadableSince: number | null = null;
     const settle = () => void this.settleKeptReservation(id, beforeReports).finally(() => this.active.delete(id));
     if (!following()) {
       settle();
       return;
     }
     const timer = setInterval(() => {
+      if (unreadableSince !== null && Date.now() - unreadableSince > (this.deps.unreadableRunWaitMs ?? UNREADABLE_RUN_WAIT_MS)) {
+        // Still unreadable long after: the session is no longer kept busy by it. Its number stays reserved, no longer
+        // refreshed, so the allocator's stale GC frees it once any process that could still write it is long gone.
+        clearInterval(timer);
+        this.active.delete(id);
+        console.warn(`[sessions] session ${id}: the run record ${runId} still cannot be read; its report number is left to the stale reservation GC`);
+        return;
+      }
       this.keepReservationFresh(id);
       if (following()) return;
       clearInterval(timer);
