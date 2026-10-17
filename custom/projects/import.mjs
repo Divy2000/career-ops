@@ -140,7 +140,12 @@ async function importInto({ entries, blocks, wholeText, write, merge }) {
     return;
   }
   const tmp = `${TARGET}.tmp-${process.pid}`;
-  await writeFile(tmp, next);
+  try {
+    await writeFile(tmp, next);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
   publish(tmp, base, merge);
   process.stdout.write(`wrote ${plural(kept.length)} to ${TARGET}\n`);
 }

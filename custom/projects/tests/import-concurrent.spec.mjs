@@ -256,3 +256,27 @@ test('given a fresh data root, when the library appears during a --write --merge
   assert.doesNotMatch(result.stderr, /rerun with --merge/);
   assert.match(result.stderr, /rerun to merge into the current library/);
 });
+
+test('given a --write --merge import whose temp library write fails partway (a full disk), when it fails, then no partial temp library is left in the data root (R27-scripts-a-L1-01)', () => {
+  const root = tempDir('projects-import-enospc-');
+  const before = serializeLibrary([{ title: 'Existing Tool', bullets: ['Already here.'] }]);
+  fs.writeFileSync(path.join(root, 'article-digest.md'), before);
+  const a = path.join(root, 'a.json');
+  fs.writeFileSync(a, JSON.stringify([{ name: 'Alpha Service', highlights: ['Built alpha.'] }]));
+  const preload = path.join(root, 'enospc.mjs');
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const real = fs.promises.writeFile;
+fs.promises.writeFile = async (file, data, ...rest) => {
+  if (!String(file).includes('article-digest.md.tmp-')) return real(file, data, ...rest);
+  await real(file, String(data).slice(0, 10), ...rest);
+  const err = new Error('no space left on device'); err.code = 'ENOSPC'; throw err;
+};
+syncBuiltinESMExports();
+`);
+  const r = spawnSync(process.execPath, ['--import', preload, IMPORT, a, '--write', '--merge'], { cwd: root, env: rootEnv(root), encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /import failed: no space left on device/);
+  assert.equal(fs.readFileSync(path.join(root, 'article-digest.md'), 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(root).filter((f) => f.includes('.tmp-')), [], 'the failed import left its partial temp library behind');
+});
