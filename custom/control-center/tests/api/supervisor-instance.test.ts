@@ -874,16 +874,33 @@ describe('stopping the supervisor holds the data-root lock until every server ch
       .filter((line) => line.includes(path.join(pkg, 'server', 'index.ts')))
       .map((line) => Number(line.trim().split(/\s+/)[0]));
 
+  /** The supervisor's reload state, from /__supervisor/status. */
+  const reloadState = (port: number) =>
+    new Promise<string>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port, path: '/__supervisor/status?t=supervisor-instance-test-token', headers: { host: `127.0.0.1:${port}` } }, (res) => {
+        let body = '';
+        res.on('data', (d: Buffer) => (body += d.toString()));
+        res.on('end', () => resolve((JSON.parse(body) as { state: string }).state));
+      }).on('error', reject);
+    });
+
   it('a reload asked for while stopping starts no server child that outlives the supervisor', async () => {
     const root = copyFixtureRoot();
     const pkg = packageWhoseCloseHangs();
-    const s = startSupervisor(await freePort(), root, { packageRoot: pkg, reload: true });
+    const port = await freePort();
+    const s = startSupervisor(port, root, { packageRoot: pkg, reload: true });
     try {
       expect(await settled(s), s.output()).toBe('ready');
       // The watcher is up once a change reloads; then stop, and change a server file while the stuck child is waited for.
       for (let i = 0; !/reload ok/.test(s.output()); i++) {
         fs.writeFileSync(path.join(pkg, 'server', `touch-${i}.ts`), 'export {};\n');
         await until(() => /reload ok/.test(s.output()), 'the reload', 3000).catch(() => undefined);
+      }
+      // A retried touch may have queued one more reload: let every reload asked for so far finish first (past the 500 ms
+      // debounce), or its child would count as one started during the stop.
+      for (let quiet = 0; quiet < 2; ) {
+        await new Promise((r) => setTimeout(r, 1000));
+        quiet = (await reloadState(port)) === 'reloading' ? 0 : quiet + 1;
       }
       const before = new Set(childrenOfPackage(pkg));
       // Every server child seen while the supervisor stops: a late one would be SIGKILLed with the stuck one, so only
