@@ -5,7 +5,7 @@
 //   { owner, batch, at }  owner is session:<id>, daily:<pid>, or starting:<nonce> while a session is being created;
 //   a starting claim also names the process creating it: { pid, pidStart } (its pid and start time in seconds since the
 //   epoch, read under a pinned TZ and locale: ps text depends on the caller's zone, and the Control Center and the
-//   launchd daily job run in different ones; an earlier claim's string pidStart holds when it matches ps here or is recent).
+//   launchd daily job run in different ones; an earlier claim's string pidStart holds when it is that start in some zone).
 // A claim whose owner is gone is stale and taken over: a session that no longer exists or has a final status
 // (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead, no longer the one
 // .run-daily.pid names or no longer bash running run-daily.sh, or a start whose process has exited (a start can wait on a Keychain prompt
@@ -85,14 +85,20 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
       return Number.isFinite(at) && now - at < STARTING_MS;
     }
     if (!Number.isSafeInteger(claim.pid) || claim.pid <= 0 || !pidAlive(claim.pid)) return false;
-    if (typeof claim.pidStart === 'string') {
-      // A claim written before start times were epoch seconds holds ps text in its writer's zone: it matches only
-      // when read in that zone, so a mismatch proves nothing while the claim is recent and proves reuse after that.
-      if (claim.pidStart === localStartText(claim.pid)) return true;
-      const at = Date.parse(claim.at);
-      return Number.isFinite(at) && now - at < STARTING_MS;
-    }
     const started = processStart(claim.pid);
+    if (typeof claim.pidStart === 'string') {
+      // A claim written before start times were epoch seconds holds ps text in its writer's zone, which cannot be
+      // pinned now: it names this process when it is the same start in some zone (a whole quarter-hour offset of at
+      // most 14 hours). Text that does not parse proves nothing while the claim is recent.
+      if (started === undefined || started === null) return started === undefined;
+      const wall = lstartSeconds(claim.pidStart);
+      if (wall === undefined) {
+        const at = Date.parse(claim.at);
+        return Number.isFinite(at) && now - at < STARTING_MS;
+      }
+      const offset = wall - started;
+      return Math.abs(offset) <= 14 * 3600 && offset % 900 === 0;
+    }
     // Only ps naming another start time is proof the pid was reused; a ps that cannot run says nothing.
     return started === undefined || typeof claim.pidStart !== 'number' || started === claim.pidStart;
   }
@@ -131,19 +137,15 @@ function processStart(pid) {
   } catch (err) {
     return err.status === 1 && !String(err.stdout ?? '').trim() ? null : undefined;
   }
-  const m = LSTART.exec(out);
+  return lstartSeconds(out);
+}
+
+/** ps lstart text read as a UTC wall clock, in seconds since the epoch; undefined when it does not parse. */
+function lstartSeconds(text) {
+  const m = LSTART.exec(text);
   const month = m ? MONTHS.indexOf(m[1]) : -1;
   if (!m || month === -1) return undefined;
   return Date.UTC(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])) / 1000;
-}
-
-/** pid's start time as ps prints it in this process's own zone, the earlier claim format; undefined when ps cannot tell. */
-function localStartText(pid) {
-  try {
-    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { ...process.env, LC_ALL: 'C' } }).trim() || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 let ownStart;

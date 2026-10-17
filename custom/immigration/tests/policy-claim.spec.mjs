@@ -231,11 +231,12 @@ test('a start taken in one time zone holds against a claimant in another (R28-te
   }
 });
 
-test('a start claim in the earlier format (pidStart as ps text) holds on its live pid while recent, whatever zone wrote it (R28-tests-custom-L1-01)', () => {
+test('a start claim in the earlier format whose text does not parse holds on its live pid only while recent (R28-tests-custom-L1-01)', () => {
   const r = root();
-  // ps text in the writer's TZ cannot be compared with another zone's, so a mismatch proves nothing yet.
-  plant(r, { owner: 'starting:legacy', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 'gestern' });
   assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'gestern' });
+  assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
 });
 
 test('a start claim in the earlier format on a reused pid is taken over once it is no longer recent (R28-tests-custom-L1-01 review)', () => {
@@ -247,6 +248,25 @@ test('a start claim in the earlier format on a reused pid is taken over once it 
   const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } }).trim();
   plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: lstart });
   assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false);
+});
+
+test('a start claim in the earlier format written in another zone holds while its process runs, however old (R28-tests-custom-L1-01 review 2)', () => {
+  const r = root();
+  const old = new Date(Date.now() - 60 * 60_000).toISOString();
+  for (const zone of ['Pacific/Kiritimati', 'Pacific/Pago_Pago', 'Asia/Kolkata']) {
+    const lstart = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: zone } }).trim();
+    plant(r, { owner: 'starting:legacy', batch: null, at: old, pid: process.pid, pidStart: lstart });
+    assert.equal(tryClaim(r, { owner: 'daily:1', batch: null }).ok, false, zone);
+  }
+});
+
+test('a start claim in the earlier format holds when ps cannot run, however old (R28-tests-custom-L1-01 review 2)', () => {
+  const r = root();
+  plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
+  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, PATH: tempDir('no-ps-') }, encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, 'false');
 });
 
 test('many processes claiming at once: exactly one gets it', async () => {
