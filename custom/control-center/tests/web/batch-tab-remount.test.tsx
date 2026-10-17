@@ -15,6 +15,8 @@ let release: ((body: unknown) => void) | null;
 // While set, the next sessions read is held until answerSessions() so the tab can be left before it answers.
 let holdSessions: boolean;
 let answerSessions: ((res: Response) => void) | null;
+// Sessions reads made after the fan-out answered: the start re-reads the list once it is done with the answer.
+let readsAfterFanOut: number;
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -63,18 +65,29 @@ beforeEach(() => {
   release = null;
   holdSessions = false;
   answerSessions = null;
+  readsAfterFanOut = 0;
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
-      if (url === '/api/sessions/fanout' && method === 'POST') return new Promise<Response>((resolve) => (release = (body) => resolve(json(202, body))));
+      if (url === '/api/sessions/fanout' && method === 'POST')
+        return new Promise<Response>(
+          (resolve) =>
+            (release = (body) => {
+              readsAfterFanOut = 0;
+              resolve(json(202, body));
+            }),
+        );
       if (url === '/api/sessions' && method === 'GET' && holdSessions) {
         holdSessions = false;
         return new Promise<Response>((resolve) => (answerSessions = resolve));
       }
-      if (url === '/api/sessions' && method === 'GET') return json(200, []);
+      if (url === '/api/sessions' && method === 'GET') {
+        readsAfterFanOut += 1;
+        return json(200, []);
+      }
       if (url === '/api/actions') return json(200, []);
       return json(404, { error: 'not stubbed' });
     }),
@@ -104,8 +117,7 @@ describe('Pipeline > Batch left while a fan-out runs (R27-feat-b-L1-02)', () => 
     await startHeldFanOut();
     await render(false);
     await act(async () => release!(partlyFailed));
-    await until(() => (host.textContent === 'Inbox' ? true : null), 'the other tab');
-    await act(async () => new Promise((r) => setTimeout(r, 50)));
+    await until(() => (readsAfterFanOut > 0 ? true : null), 'the sessions read that ends the start');
     await render(true);
     const alert = await until(() => host.querySelector('[role="alert"]'), 'the error');
     expect(alert.textContent).toMatch(/1 could not start: the Claude CLI is not approved/);
