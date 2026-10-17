@@ -323,6 +323,20 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme-short.pdf', 'the latest pick');
   });
 
+  it('Given a re-attached draft that named its CV PDF and None for the cover letter, When a reply forks it, Then the fork keeps those documents (R29-feat-a-L1-01)', async () => {
+    docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-short.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: 'output/cover-acme.md' };
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-acme-short.pdf', cover: '' }));
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]'), 'the cover letter select');
+    await act(async () => applyPanel()!.onSessionId!('s-apply-fork'));
+
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-fork' });
+    expect(JSON.parse(sessionStorage.getItem('cc.apply.docs.s-apply-fork')!)).toEqual({ pdf: 'output/cv-acme-short.pdf', cover: '' });
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')!.value).toBe('output/cv-acme-short.pdf');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('');
+  });
+
   it('Given the documents listing still loading, When Fill is clicked on a re-attached draft, Then it attaches the draft\'s CV PDF (R28-feat-a-L2-01 review)', async () => {
     let releaseDocs!: () => void;
     const docsGate = new Promise<void>((r) => (releaseDocs = r));

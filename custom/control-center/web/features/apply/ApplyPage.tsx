@@ -212,11 +212,11 @@ function ApplyForm({ n, company, postingUrl, onNewDraft }: ApplyBodyProps & { on
       if (typedUrl !== null) writeTypedUrl(sid, typedUrl.trim());
       // Only the user's picks are kept: a preselected suggestion is no choice, so a newer tailored file is preselected
       // when the page comes back. A reply reports the draft it runs in: its prompt named no documents, so the draft's
-      // own are left as they are.
-      if (sid !== sessionId) writeDraftDocs(sid, { pdf: pickedPdf, cover: pickedCover });
+      // own are left as they are. A fork of a re-attached draft carries the draft's choices on.
+      if (sid !== sessionId) writeDraftDocs(sid, { pdf: pickedPdf ?? storedPdf, cover: pickedCover ?? storedCover });
       rememberSessionId(sid);
     },
-    [typedUrl, sessionId, pickedPdf, pickedCover, rememberSessionId],
+    [typedUrl, sessionId, pickedPdf, pickedCover, storedPdf, storedCover, rememberSessionId],
   );
   // A pick made after the draft started is the one Fill attaches, so it is kept for the re-attached draft as well.
   const pickDoc = (kind: keyof DraftDocs, value: string) => {
