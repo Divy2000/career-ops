@@ -132,7 +132,7 @@ export function ScriptTab({ id, intro, params }: { id: string; intro: string; pa
           disabled={busy !== null || (runId !== null && status === null)}
           params={params}
           onRun={(p) =>
-            void run(id, p).then((out) => {
+            run(id, p).then((out) => {
               if (out && 'runId' in out) setRunId(out.runId);
             })
           }
