@@ -269,6 +269,15 @@ describe('installTutorial with a quick guide', () => {
     expect(fs.readFileSync(path.join(dest('guided'), 'Poster.jpg'), 'utf8')).toBe('POSTER');
   });
 
+  it('refuses a guide whose name differs from tutorial.json only in case, which the manifest would overwrite', () => {
+    // Valid as both a manifest and a guide, so only the name clash can refuse it.
+    const both = JSON.stringify({ ...manifest, guide: 'Tutorial.json', sections: [GUIDE.sections[0]] });
+    folder({ manifest: JSON.parse(both), guide: null });
+    if (!fs.existsSync(path.join(src(), 'Tutorial.json'))) write('Tutorial.json', both);
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Tutorial\.json" is used by both the manifest and the guide file/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
   it.each([
     ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
     ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],
