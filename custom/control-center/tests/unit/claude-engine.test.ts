@@ -554,6 +554,17 @@ describe('guard hook', () => {
     expect(release('072', 'toolu_r').status).toBe(0);
   }, 30_000);
 
+  it('given a held number whose sentinel nears the age the allocator collects it at, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-aging-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(78, '2026-10-17T10:01:18.000Z');
+    recordHeldReportNums(dir, [78], realRoot);
+    // A --gc between this check and the release could collect it and another evaluation reserve the number again.
+    const old = new Date(Date.now() - 3.5 * 3_600_000);
+    fs.utimesSync(path.join(realRoot, 'reports', '078-RESERVED.md'), old, old);
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 078' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
+  }, 20_000);
+
   it('given a held number whose sentinel is gone, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-gone-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });

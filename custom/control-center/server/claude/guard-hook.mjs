@@ -103,11 +103,20 @@ function heldReportNums(file) {
   return held;
 }
 
-/** The created_at of report `num`'s reservation sentinel: 'gone' without one, null when it cannot be read. */
+// reserve-report-num.mjs --gc collects a sentinel untouched for 4 hours, outside any check made here; one this old is
+// not released, so the release that runs after this check can never meet a sentinel collected and reserved again.
+const RELEASE_MAX_SENTINEL_AGE_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * The created_at of report `num`'s reservation sentinel: 'gone' without one, null when it cannot be read or is old
+ * enough that the allocator may collect it before the release runs.
+ */
 function sentinelCreatedAt(dataRoot, num) {
+  const file = path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
   let text;
   try {
-    text = fs.readFileSync(path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`), 'utf8');
+    if (Date.now() - fs.statSync(file).mtimeMs >= RELEASE_MAX_SENTINEL_AGE_MS) return null;
+    text = fs.readFileSync(file, 'utf8');
   } catch (err) {
     if (err.code === 'ENOENT') return 'gone';
     throw err;
