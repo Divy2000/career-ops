@@ -4,6 +4,7 @@ import path from 'node:path';
 import { makeTestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
+import { acquireTrackerLock, resolveTrackerPath, trackerLockDirFor } from '../../../../tracker-utils.mjs';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TERMINAL = ['done', 'awaiting_user', 'error', 'cancelled'];
@@ -19,8 +20,20 @@ async function settleOn(app: App, id: string, timeoutMs = 30_000): Promise<{ met
     await wait(100);
   }
 }
+async function until(cond: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time');
+    await wait(25);
+  }
+}
 const INIT = { type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] };
 const NO_REPORT = { events: [INIT, { type: 'result', subtype: 'success', result: 'The posting needs a login; I could not read it.', total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false }] };
+/** A turn held until `go` exists in `dir`, which then exits 1 with no report. */
+const heldUntilGo = (dir: string) => ({
+  events: [INIT, { __waitFor: { dir, pattern: '^go$', timeoutMs: 20_000 } }, { type: 'result', subtype: 'success', result: 'Gave up.', total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false }],
+  exitCode: 1,
+});
 async function withScenario<T>(scenario: unknown, fn: () => Promise<T>): Promise<T> {
   const file = path.join(tempDir('cc-r28-scenario-'), 'scenario.json');
   fs.writeFileSync(file, JSON.stringify(scenario));
@@ -30,6 +43,14 @@ async function withScenario<T>(scenario: unknown, fn: () => Promise<T>): Promise
   } finally {
     delete process.env.FAKE_CLAUDE_SCENARIO;
   }
+}
+async function startHeld(app: App, url: string): Promise<{ id: string; n: number; go: () => void }> {
+  const gate = tempDir('cc-r28-gate-');
+  const fan = await withScenario(heldUntilGo(gate), async () => (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: [url] })).json());
+  const id = fan.sessions[0].id as string;
+  const runId = fan.sessions[0].turns[0].runId as string;
+  await until(() => app.runner.store.read(runId)?.childPid != null);
+  return { id, n: fan.reserved[0] as number, go: () => fs.writeFileSync(path.join(gate, 'go'), '') };
 }
 const sentinelPath = (app: App, n: number) => path.join(app.cfg.dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`);
 const reportPath = (app: App, file: string) => path.join(app.cfg.dataRoot, 'reports', file);
@@ -107,3 +128,30 @@ describe('a release that checks ownership only before it runs (R27-mgr-rev-03)',
   });
 });
 
+describe('a running turn refreshing its sentinel (R27-mgr-rev-04)', () => {
+  it('given a running Batch evaluate turn whose sentinel has aged past the refresh age, when another process holds the tracker lock, then the refresh waits for the lock before it touches the sentinel', async () => {
+    const app = await makeTestApp();
+    let held = false;
+    let lock: Awaited<ReturnType<typeof acquireTrackerLock>> | undefined;
+    try {
+      const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r28-refresh-locked');
+      lock = await acquireTrackerLock(trackerLockDirFor(resolveTrackerPath(app.cfg.dataRoot)), { timeoutMs: 5000 });
+      held = true;
+      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60_000);
+      fs.utimesSync(sentinelPath(app, n), fiveHoursAgo, fiveHoursAgo);
+
+      // Several tracker ticks run while the lock is held: none may touch the sentinel.
+      await wait(1500);
+      expect(Date.now() - fs.statSync(sentinelPath(app, n)).mtimeMs).toBeGreaterThan(4 * 60 * 60_000);
+      lock.release();
+      held = false;
+      await until(() => Date.now() - fs.statSync(sentinelPath(app, n)).mtimeMs < 60_000, 20_000);
+      go();
+      const { meta } = await settleOn(app, id);
+      expect(meta.lastReason).toMatch(new RegExp(`report number ${n} returned to the pool`));
+    } finally {
+      if (held) lock?.release();
+      await app.close();
+    }
+  }, 40_000);
+});

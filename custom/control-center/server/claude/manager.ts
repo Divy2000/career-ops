@@ -191,6 +191,8 @@ export class SessionManager {
   private sending = new Set<string>();
   /** Reservation warnings already given (a session and number, or a session's refresh failure): the tracker ticks every poll. */
   private reservationWarned = new Set<string>();
+  /** Sessions whose sentinel refresh is running: a tick does not start another while one waits for the tracker lock. */
+  private refreshing = new Set<string>();
   /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
   /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
@@ -752,7 +754,7 @@ export class SessionManager {
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
     if (num === null || this.creditedHolds(meta, num)) return meta;
-    if (this.refreshReservation(meta, num)) {
+    if (await this.refreshReservation(meta, num)) {
       this.forgetReservationLosses(meta.id);
       return meta;
     }
@@ -783,21 +785,17 @@ export class SessionManager {
     return this.store.read(meta.id)!;
   }
 
-  /** Refreshes `num`'s sentinel when it is still the session's (written no later than the session got the number); false when it is not. */
-  private refreshReservation(meta: SessionMeta, num: number): boolean {
-    const sentinel = this.sentinelPath(num);
-    const createdAt = readSentinelCreatedAt(sentinel);
-    if (createdAt === null || createdAt > this.reservedAt(meta, num)) return false;
-    const now = new Date();
-    try {
-      fs.utimesSync(sentinel, now, now);
-      // Collected and claimed again between the read and the refresh: the refreshed sentinel is someone else's.
-      return readSentinelCreatedAt(sentinel) === createdAt;
-    } catch (err) {
-      // Collected between the read and the refresh: the number is lost like any other.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      return false;
-    }
+  /**
+   * Refreshes `num`'s sentinel when it is still the session's (written no later than the session got the number); false
+   * when it is not. The check and the touch run under the tracker lock the stale GC takes, so a sentinel it is collecting
+   * is never refreshed after its age was read. Throws when the refresh could not be run (the tracker lock stayed busy).
+   */
+  private async refreshReservation(meta: SessionMeta, num: number): Promise<boolean> {
+    const since = this.reservedAt(meta, num);
+    if (!this.sentinelOwned(num, since)) return false;
+    const r = await this.settleSentinel('refresh', num, since);
+    if (r.failure) throw new Error(r.failure);
+    return r.outcome === 'refreshed';
   }
 
   /**
@@ -806,6 +804,14 @@ export class SessionManager {
    * write its report under it.
    */
   private keepReservationFresh(id: string): void {
+    // One refresh at a time: a tick while another waits for the tracker lock leaves it to finish.
+    if (this.refreshing.has(id)) return;
+    this.refreshing.add(id);
+    void this.refreshIfAged(id).finally(() => this.refreshing.delete(id));
+  }
+
+  /** Never rejects: the tracker tick behind it goes on, and an unreadable record waits for the next tick. */
+  private async refreshIfAged(id: string): Promise<void> {
     let num: number | null = null;
     try {
       // Read inside the try: the tracker tick calling this must never throw (an unreadable record waits for the next tick).
@@ -814,7 +820,7 @@ export class SessionManager {
       if (meta && num !== null && !this.creditedHolds(meta, num)) {
         const sentinel = this.sentinelPath(num);
         if (Date.now() - fs.statSync(sentinel).mtimeMs >= RESERVATION_REFRESH_AGE_MS) {
-          if (this.refreshReservation(meta, num)) this.forgetReservationLosses(id);
+          if (await this.refreshReservation(meta, num)) this.forgetReservationLosses(id);
           else this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
         }
       }
