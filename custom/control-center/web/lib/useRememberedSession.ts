@@ -42,12 +42,33 @@ export function useRememberedSession(key: string, { holdWhileAwaiting = false }:
   const [startingHere, setStartingHere] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [startFailed, setStartFailed] = useState(false);
-  // This mount's latest start's token: its report is stale once the stored token is another start's.
-  const ownStart = useRef<string | null>(null);
+  // This mount's latest start's token under each key: its report is stale once the stored token is another start's.
+  const ownStarts = useRef(new Map<string, string | null>());
   const superseded = useCallback(() => {
+    const own = ownStarts.current.get(key) ?? null;
     const latest = startToken(key);
-    return ownStart.current !== null && latest !== null && latest !== ownStart.current;
+    return own !== null && latest !== null && latest !== own;
   }, [key]);
+  // A host that changes the key in place (a page kept mounted for another row) starts over on the new key's session.
+  // A start still on its way reports through the callbacks of the key it was made under (its panel holds those): it is
+  // remembered under that key, and this mount's state, now the new key's, is left alone.
+  const [shownKey, setShownKey] = useState(key);
+  const [epoch, setEpoch] = useState(0);
+  if (shownKey !== key) {
+    setShownKey(key);
+    setEpoch((n) => n + 1);
+    setId(store.read());
+    setStartingElsewhere(store.starting());
+    setStarts(0);
+    setStartingHere(false);
+    setStatus(null);
+    setStartFailed(false);
+  }
+  const liveKey = useRef(key);
+  useEffect(() => {
+    liveKey.current = key;
+  }, [key]);
+  const isLive = useCallback(() => liveKey.current === key, [key]);
   useEffect(() => {
     const sync = () => {
       setId(store.read());
@@ -88,34 +109,37 @@ export function useRememberedSession(key: string, { holdWhileAwaiting = false }:
   );
   const onSessionId = useCallback(
     (sid: string) => {
-      setStartingHere(false);
+      const live = isLive();
+      if (live) setStartingHere(false);
       // A newer start was sent (from this tab, after this one's window ran out): its session is the one to hold.
       if (superseded()) return;
       store.write(sid);
       store.setStarting(false);
+      if (!live) return;
       // A new session (a start or a fork) has not reported yet: the one held before it may have ended, which must not
       // read as this one's end. A reply reports the same session, whose status the stream may already have shown.
       if (sid !== id) setStatus(null);
       setId(sid);
     },
-    [store, id, superseded],
+    [store, id, superseded, isLive],
   );
   // The panel shows why the start failed; the button comes back for another try.
   const onStartFailed = useCallback(() => {
-    setStartingHere(false);
+    const live = isLive();
+    if (live) setStartingHere(false);
     if (superseded()) return;
     store.setStarting(false);
-    setStartFailed(true);
-  }, [store, superseded]);
+    if (live) setStartFailed(true);
+  }, [store, superseded, isLive]);
   // The panel started a session from its own form: marked like start(), so a page mounted meanwhile waits for it.
   const onStarting = useCallback(() => {
-    ownStart.current = newStartToken(key);
+    ownStarts.current.set(key, newStartToken(key));
     store.setStarting(true);
     setStartingHere(true);
     setStartFailed(false);
   }, [key, store]);
   const start = () => {
-    ownStart.current = newStartToken(key);
+    ownStarts.current.set(key, newStartToken(key));
     store.write(null);
     store.setStarting(true);
     setStartingHere(true);
@@ -124,6 +148,6 @@ export function useRememberedSession(key: string, { holdWhileAwaiting = false }:
     setStartFailed(false);
     setStarts((n) => n + 1);
   };
-  // panelKey remounts the panel for each new start, so it does not keep the session it showed before.
-  return { shown, busy, waiting, awaitingReply, start, panelKey: starts, panel: { sessionId: id, autoStart: starts > 0 && id === null, onSessionId, onStatus, onStartFailed, onStarting } };
+  // panelKey remounts the panel for each new start and each new key, so it does not keep the session it showed before.
+  return { shown, busy, waiting, awaitingReply, start, panelKey: `${epoch}-${starts}`, panel: { sessionId: id, autoStart: starts > 0 && id === null, onSessionId, onStatus, onStartFailed, onStarting } };
 }

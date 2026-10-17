@@ -223,13 +223,14 @@ export function ApplicationPage() {
                     <Pill tone={alertTone(String(q.data.sponsorship.alert.status))}>{String(q.data.sponsorship.alert.status)}</Pill> {String(q.data.sponsorship.alert.headline)}
                   </p>
                 )}
-                <SponsorshipRefresh company={q.data.row.company} />
+                <SponsorshipRefresh key={sponsorCheckCompany(q.data.row.company)} company={q.data.row.company} />
               </div>
             )}
 
             {tab === 'outreach' && (
               <ModeLauncher
                 heading="Outreach and research"
+                key={`cc.application.${q.data.row.num}.outreach`}
                 rememberAs={`cc.application.${q.data.row.num}.outreach`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
@@ -244,6 +245,7 @@ export function ApplicationPage() {
             {tab === 'interview' && (
               <ModeLauncher
                 heading="Interview"
+                key={`cc.application.${q.data.row.num}.interview`}
                 rememberAs={`cc.application.${q.data.row.num}.interview`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
@@ -259,6 +261,7 @@ export function ApplicationPage() {
             {tab === 'offer' && (
               <ModeLauncher
                 heading="Offer and outcome"
+                key={`cc.application.${q.data.row.num}.offer`}
                 rememberAs={`cc.application.${q.data.row.num}.offer`}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
@@ -275,6 +278,7 @@ export function ApplicationPage() {
                 <DocumentsTab n={q.data.row.num} />
                 <ModeLauncher
                   heading="Generate with AI"
+                  key={`cc.application.${q.data.row.num}.documents`}
                   rememberAs={`cc.application.${q.data.row.num}.documents`}
                   target={{ type: 'app', value: String(q.data.row.num) }}
                   modes={[
