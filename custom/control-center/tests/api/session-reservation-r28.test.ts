@@ -183,6 +183,33 @@ describe('a release that checks ownership only before it runs (R27-mgr-rev-03)',
   });
 });
 
+describe('a release whose sentinel turns unreadable under the lock (R27-mgr-rev-03 review follow-up)', () => {
+  it('given a waiting session that owns its number, when its sentinel cannot be read once the release runs, then the deletion says it cannot be read, not that it was lost', async () => {
+    let app: App | null = null;
+    let n = 0;
+    const corrupting: Exec = async (cmd, args, opts) => {
+      if (args.includes('--release')) fs.writeFileSync(sentinelPath(app!, n), '{"pid": 1, "created_at": ');
+      return execNoShell(cmd, args, opts);
+    };
+    app = await makeTestApp({}, { exec: corrupting });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const fan = await withScenario(NO_REPORT, async () => (await call(app!, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r28-release-unreadable'] })).json());
+      const id = fan.sessions[0].id as string;
+      n = fan.reserved[0] as number;
+      expect((await settleOn(app, id)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+
+      expect((await call(app, 'DELETE', `/api/sessions/${id}`)).statusCode).toBe(200);
+      const said = warn.mock.calls.flat().join('\n');
+      expect(said).toMatch(new RegExp(`reservation of report number ${n} cannot be read, so it is not released`));
+      expect(said).not.toMatch(/already lost/);
+      expect(fs.existsSync(sentinelPath(app, n))).toBe(true);
+    } finally {
+      warn.mockRestore();
+      await app.close();
+    }
+  });
+});
 describe('a running turn refreshing its sentinel (R27-mgr-rev-04)', () => {
   it('given a running Batch evaluate turn whose sentinel has aged past the refresh age, when another process holds the tracker lock, then the refresh waits for the lock before it touches the sentinel', async () => {
     const app = await makeTestApp();

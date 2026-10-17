@@ -549,7 +549,7 @@ export class SessionManager {
     } finally {
       if (num !== null) {
         const released = await this.releaseReportNum(num, credited, since);
-        if (released.startsWith('could not') || released.includes('already lost')) console.warn(`[sessions] session ${id} deleted: ${released}`);
+        if (released.startsWith('could not') || released.includes('already lost') || released.includes('cannot be read')) console.warn(`[sessions] session ${id} deleted: ${released}`);
       }
     }
     for (const key of this.reservationWarned) if (key.startsWith(`${id}\0`)) this.reservationWarned.delete(key);
@@ -1490,6 +1490,8 @@ export class SessionManager {
         failure = await this.tryReleaseReportNum(num);
       } else {
         const r = await this.settleSentinel('release', num, since!);
+        // An unreadable sentinel is still there: whose it is cannot be told, so it is left in place.
+        if (r.outcome === 'unreadable') return `the reservation of report number ${num} cannot be read, so it is not released`;
         if (r.outcome && r.outcome !== 'released') return lost;
         failure = r.failure;
       }
