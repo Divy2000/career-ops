@@ -34,7 +34,7 @@ const ALL_RETIRED: FollowupCadence = {
   metadata: { analysisDate: '2026-10-10', totalTracked: 2, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 0, retired: 2 },
   entries: [],
 };
-const ACTIONS: ActionMeta[] = [{ id: 'followups.inviteMatch', label: 'Match invite', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }, { id: 'followups.replyPaste', label: 'Paste a reply', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }];
+const ACTIONS: ActionMeta[] = [{ id: 'followups.contactsVcf', label: 'Export vCard', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }, { id: 'followups.inviteMatch', label: 'Match invite', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }, { id: 'followups.replyPaste', label: 'Paste a reply', cost: 'free', confirm: null, resources: [], claude: false, sync: true, params: {} }];
 
 let host: HTMLElement;
 let root: Root;
@@ -52,6 +52,8 @@ beforeEach(() => {
       if (url === '/api/actions') return json(200, ACTIONS);
       if (url === '/api/actions/followups.inviteMatch') return inviteAnswer();
       if (url === '/api/actions/followups.replyPaste') return json(200, { result: { added: 1 } });
+      if (url === '/api/contacts') return json(200, { kind: 'ok', path: 'data/contacts.tsv', rows: [], skipped: 0 });
+      if (url === '/api/actions/followups.contactsVcf') return json(200, { result: 'BEGIN:VCARD\nEND:VCARD\n' });
       return json(404, { error: 'not stubbed' });
     }),
   );
@@ -145,5 +147,25 @@ describe('Follow-ups page', () => {
     expect(subject.value).toBe('');
     expect(from.value).toBe('');
     expect(body.value).toBe('');
+  });
+  it('Given a vCard export, When its download link is clicked, Then the blob URL outlives the click so WebKit can still read it (R28-feat-a-L1-01)', async () => {
+    const { ContactsTab } = await import('@web/features/followups/FollowupsPage');
+    await render(() => createElement(ContactsTab));
+    const exportButton = await until(() => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Export vCard') && !b.disabled), 'Export vCard');
+    vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL: vi.fn(() => 'blob:vcf-1'), revokeObjectURL: vi.fn() }));
+    const clicked = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await act(async () => exportButton.click());
+      for (let i = 0; i < 20 && clicked.mock.calls.length === 0; i += 1) await act(async () => {});
+      expect(clicked).toHaveBeenCalledTimes(1);
+      // WebKit resolves the blob URL after the click returns: revoked in the same tick, the download fails or is empty.
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:vcf-1');
+    } finally {
+      vi.useRealTimers();
+      clicked.mockRestore();
+    }
   });
 });

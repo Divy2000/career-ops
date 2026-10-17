@@ -262,7 +262,7 @@ export function RepliesTab() {
   );
 }
 
-function ContactsTab() {
+export function ContactsTab() {
   const q = useQuery({ queryKey: ['followups', 'contacts'], queryFn: () => apiGet<ContactsRead>('/api/contacts') });
   const actions = useActions();
   const { run, message, busy } = useRunAction();
@@ -276,7 +276,8 @@ function ContactsTab() {
       a.href = url;
       a.download = 'career-ops-contacts.vcf';
       a.click();
-      URL.revokeObjectURL(url);
+      // WebKit reads the blob URL after click() returns, so revoking it in the same tick fails the download.
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
     }
   };
   return (
