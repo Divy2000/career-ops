@@ -224,6 +224,193 @@ describe('Apply keeps its drafted answers across leaving the page', () => {
     expect(host.querySelector<HTMLInputElement>('[aria-label="Posting URL"]')!.value).toBe('https://careers.acme.example/apply/1');
   });
 
+  it('Given a CV PDF and cover letter picked for a draft, When the page comes back, Then they are still picked and Fill attaches them (R28-feat-a-L2-01)', async () => {
+    docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-short.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: null };
+    await openApply();
+    const pick = async (label: string, value: string) => {
+      await until(() => host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`), label);
+      const select = host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
+      await act(async () => {
+        select.value = value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    };
+    await pick('CV PDF to attach', 'output/cv-acme-short.pdf');
+    await pick('Cover letter text', 'output/cover-acme.md');
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-12' });
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]'), 'the cover letter select');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')!.value).toBe('output/cv-acme-short.pdf');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('output/cover-acme.md');
+
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    await act(async () => applyPanel()!.onEnvelope!('answers', ANSWERS, 1));
+    await until(() => fillButton() && !fillButton()!.disabled && fillButton(), 'Fill real form enabled');
+    await act(async () => fillButton()!.click());
+    const call = vi.mocked(fetch).mock.calls.find(([u, init]) => u === '/api/sessions/s-apply-12/turns' && init?.method === 'POST');
+    expect(String(call![1]!.body)).toContain('attach the CV PDF output/cv-acme-short.pdf and use the cover letter text in output/cover-acme.md');
+  });
+
+  it('Given a draft started before any CV PDF existed, When the tailored CV arrives and the page comes back, Then it is preselected (R28-feat-a-L2-01 review)', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    await openApply();
+    await until(() => host.querySelector('[aria-label="CV PDF to attach"]'), 'the CV PDF select');
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = DOCS;
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme.pdf', 'the tailored CV preselected');
+  });
+
+  it('Given the CV PDF a draft named was removed from output/, When the page comes back, Then Fill does not attach the missing file (R28-feat-a-L2-01 review)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-gone.pdf', cover: 'output/cover-gone.md' }));
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]'), 'the CV PDF select');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')!.value).toBe('output/cv-acme.pdf');
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    await act(async () => applyPanel()!.onEnvelope!('answers', ANSWERS, 1));
+    await until(() => fillButton() && !fillButton()!.disabled && fillButton(), 'Fill real form enabled');
+    await act(async () => fillButton()!.click());
+    const call = vi.mocked(fetch).mock.calls.find(([u, init]) => u === '/api/sessions/s-apply-12/turns' && init?.method === 'POST');
+    expect(String(call![1]!.body)).not.toContain('gone');
+  });
+
+  it('Given None picked for the cover letter and no PDF for a draft, When the page comes back, Then the row\'s suggestions do not replace those choices (R28-feat-a-L2-01 review)', async () => {
+    docs = { pdfs: ['output/cv-acme.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: 'output/cover-acme.md' };
+    await openApply();
+    for (const label of ['CV PDF to attach', 'Cover letter text']) {
+      await until(() => host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)?.value, label);
+      const select = host.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
+      await act(async () => {
+        select.value = '';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]'), 'the cover letter select');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')!.value).toBe('');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('');
+  });
+
+  it('Given a different CV PDF picked after the draft started, When the page comes back, Then the latest pick is kept (R28-feat-a-L2-01 review)', async () => {
+    docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-short.pdf'], covers: [], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: null };
+    await openApply();
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+    const select = await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]'), 'the CV PDF select');
+    await act(async () => {
+      select.value = 'output/cv-acme-short.pdf';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme-short.pdf', 'the latest pick');
+  });
+
+  it('Given the documents listing still loading, When Fill is clicked on a re-attached draft, Then it attaches the draft\'s CV PDF (R28-feat-a-L2-01 review)', async () => {
+    let releaseDocs!: () => void;
+    const docsGate = new Promise<void>((r) => (releaseDocs = r));
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (url === '/api/apply/documents?n=12') await docsGate;
+      return base(url, init);
+    });
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-b.pdf', cover: null }));
+    await openApply();
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    await act(async () => applyPanel()!.onEnvelope!('answers', ANSWERS, 1));
+    await until(() => fillButton() && !fillButton()!.disabled && fillButton(), 'Fill real form enabled');
+    await act(async () => fillButton()!.click());
+    releaseDocs();
+    const call = vi.mocked(fetch).mock.calls.find(([u, init]) => u === '/api/sessions/s-apply-12/turns' && init?.method === 'POST');
+    expect(String(call![1]!.body)).toContain('attach the CV PDF output/cv-b.pdf');
+  });
+
+  it('Given a draft that named no CV PDF, When a reply is sent to it and a newer CV arrives, Then the newer one is preselected (R28-feat-a-L2-01 review)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: null, cover: null }));
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme.pdf', 'the suggested CV');
+    // A reply sent from the panel reports the session it runs in, the same draft.
+    await act(async () => applyPanel()!.onStarting!());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-v2.pdf'], covers: [], suggestedPdf: 'output/cv-acme-v2.pdf', suggestedCover: null };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme-v2.pdf', 'the newer CV preselected');
+  });
+
+  it('Given a draft that named no CV PDF, When only a cover letter is picked and a newer CV arrives, Then the newer one is preselected (R28-feat-a-L2-01 review)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: null, cover: null }));
+    docs = { pdfs: ['output/cv-acme.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: null };
+    await openApply();
+    const select = await until(() => host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]'), 'the cover letter select');
+    await act(async () => {
+      select.value = 'output/cover-acme.md';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = { pdfs: ['output/cv-acme.pdf', 'output/cv-acme-v2.pdf'], covers: ['output/cover-acme.md'], suggestedPdf: 'output/cv-acme-v2.pdf', suggestedCover: null };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-acme-v2.pdf', 'the newer CV preselected');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('output/cover-acme.md');
+  });
+
+  it('Given a draft started with the suggested CV PDF untouched, When a newer tailored CV becomes the suggestion, Then the newer one is preselected (R28-fa-rev-01)', async () => {
+    docs = { pdfs: ['output/cv-old.pdf'], covers: ['output/cover-old.md'], suggestedPdf: 'output/cv-old.pdf', suggestedCover: 'output/cover-old.md' };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-old.pdf', 'the suggested CV preselected');
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-12'));
+
+    await act(async () => root.unmount());
+    panels = [];
+    docs = { pdfs: ['output/cv-old.pdf', 'output/cv-new.pdf'], covers: ['output/cover-old.md', 'output/cover-new.md'], suggestedPdf: 'output/cv-new.pdf', suggestedCover: 'output/cover-new.md' };
+    await openApply();
+    await until(() => host.querySelector<HTMLSelectElement>('[aria-label="CV PDF to attach"]')?.value === 'output/cv-new.pdf', 'the newer CV preselected');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Cover letter text"]')!.value).toBe('output/cover-new.md');
+  });
+
+  it('Given a draft deleted elsewhere, When it reports gone, Then its kept documents are let go too (R28-feat-a-L2-01 review)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-acme.pdf', cover: null }));
+    await openApply();
+    await act(async () => applyPanel()!.onStatus!('gone', null));
+    expect(sessionStorage.getItem('cc.apply.docs.s-apply-12')).toBeNull();
+  });
+
+  it('Given New draft after picking documents, When the next draft starts, Then the earlier draft\'s picks are let go with it (R28-feat-a-L2-01)', async () => {
+    sessionStorage.setItem('cc.apply.12', 's-apply-12');
+    sessionStorage.setItem('cc.apply.docs.s-apply-12', JSON.stringify({ pdf: 'output/cv-old.pdf', cover: '' }));
+    await openApply();
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    await until(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'New draft'), 'New draft');
+    await act(async () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'New draft')!.click());
+    expect(sessionStorage.getItem('cc.apply.docs.s-apply-12')).toBeNull();
+  });
+
   it('on /apply with no row, the re-attached session brings back the posting URL it was drafted for', async () => {
     vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
     sessionStorage.setItem('cc.apply.url', 's-apply-url');
