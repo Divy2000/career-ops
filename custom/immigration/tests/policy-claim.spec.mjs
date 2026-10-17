@@ -334,3 +334,18 @@ test('given the claim cannot be renamed into place (ENOSPC), when a claim is tak
   assert.deepEqual(fs.readdirSync(dir).filter((f) => f.includes('.tmp-')), []);
   assert.equal(readClaim(r), null);
 });
+
+test('given a claim whose rename into place fails and whose temp cleanup also fails, when tryClaim runs, then the rename error is thrown and the cleanup failure is only noted (R28-scripts-a-L1-01)', () => {
+  const r = root();
+  const code = `const fs = (await import('node:fs')).default;
+const realRename = fs.renameSync, realRm = fs.rmSync;
+fs.renameSync = (from, to) => { if (String(from).includes('.policy-pass.claim.tmp-')) { const err = new Error('i/o error'); err.code = 'EIO'; throw err; } return realRename(from, to); };
+fs.rmSync = (target, opts) => { if (String(target).includes('.policy-pass.claim.tmp-')) { const err = new Error('permission denied'); err.code = 'EACCES'; throw err; } return realRm(target, opts); };
+const { tryClaim } = await import(${JSON.stringify(MODULE)});
+try { tryClaim(${JSON.stringify(r)}, { owner: 'session:s-1', batch: null }); process.stdout.write('no error'); } catch (err) { process.stdout.write(err.message); }`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, 'i/o error');
+  assert.match(child.stderr, /could not remove the temp file .*\.policy-pass\.claim\.tmp-\d+: permission denied/);
+  assert.equal(readClaim(r), null);
+});

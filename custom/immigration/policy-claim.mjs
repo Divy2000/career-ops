@@ -239,7 +239,12 @@ function write(dataRoot, claim) {
     fs.writeFileSync(tmp, JSON.stringify(claim));
     fs.renameSync(tmp, file);
   } finally {
-    fs.rmSync(tmp, { force: true });
+    // The write or rename error is the one to report; a temp file that cannot be removed too is only noted.
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch (err) {
+      process.stderr.write(`note: could not remove the temp file ${tmp}: ${err.message}\n`);
+    }
   }
 }
 
