@@ -511,6 +511,24 @@ describe('guard hook', () => {
     expect(release('toolu_e')).toBe(2);
   }, 20_000);
 
+  it('given a held number whose sentinel is gone, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-gone-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    reserveAs(75, '2026-10-17T10:01:15.000Z');
+    recordHeldReportNums(dir, [75], realRoot);
+    // The app dropped the sentinel at the end of the turn, logging no release.
+    fs.rmSync(path.join(realRoot, 'reports', '075-RESERVED.md'));
+    expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 075' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
+  }, 20_000);
+
+  it('given a sentinel written after the session got its number, when the app records the hold, then none is recorded (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-since-'));
+    reserveAs(76, '2026-10-17T10:01:16.000Z');
+    reserveAs(77, '2026-10-17T10:01:17.000Z');
+    recordHeldReportNums(dir, [76, 77], realRoot, Date.parse('2026-10-17T10:01:16.500Z'));
+    expect(fs.readFileSync(path.join(dir, 'held-report-nums.log'), 'utf8').trim()).toBe(`+76=${heldAt(76)};`);
+  });
+
   it('given any session whose scope grants reports/**, when it writes a reservation sentinel, then it is refused, Dev Chat included (R28-cl2-rev-02)', () => {
     const modes = ['devchat', 'oferta', 'apply', 'tracker', 'patterns'];
     expect(writesFor(modes, ['reports/042-RESERVED.md'])).toEqual(Object.fromEntries(modes.map((m) => [`${m} reports/042-RESERVED.md`, 2])));

@@ -181,14 +181,15 @@ export function writeProgress(file: string, p: TurnProgress): void {
  * reserved for the session and the ones its own reserve-report-num.mjs runs printed, each naming its reservation by the
  * sentinel's created_at (`+N=<ms>;`), and guard-hook.mjs, which lets a session release only reservations it holds
  * (reserve-report-num.mjs --release deletes whichever sentinels it names), removes each one it lets go. A number
- * released, collected or reserved again has another created_at, so a hold on it no longer matches.
+ * released, collected or reserved again has another created_at, so a hold on it no longer matches. With `since` (when
+ * the session got the numbers), a sentinel written after it is another reservation's and is not recorded.
  */
 export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
 
-export function recordHeldReportNums(sessionDir: string, nums: readonly number[], dataRoot: string): void {
+export function recordHeldReportNums(sessionDir: string, nums: readonly number[], dataRoot: string, since?: number | null): void {
   const records = nums.flatMap((n) => {
     const at = readSentinelCreatedAt(path.join(dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`));
-    return at === null ? [] : [`\n+${n}=${at};`];
+    return at === null || (since !== undefined && (since === null || at > since)) ? [] : [`\n+${n}=${at};`];
   });
   if (records.length === 0) return;
   fs.mkdirSync(sessionDir, { recursive: true });
@@ -1199,7 +1200,9 @@ export class SessionManager {
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
       if (n > 1) meta = await this.reassertReservation(meta);
-      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum], this.cfg.dataRoot);
+      // Only a sentinel written no later than the session got the number is its reservation: a first turn that waited past
+      // the GC may find another evaluation's sentinel under it.
+      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum], this.cfg.dataRoot, this.ownedSince(meta, meta.reportNum));
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });

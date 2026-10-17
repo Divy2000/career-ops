@@ -141,6 +141,25 @@ function readIfPresent(file) {
   }
 }
 
+/**
+ * Removes a dead holder's lock `seen`. It is moved aside first and checked there, since a peer may have replaced it
+ * since it was read; a live lock moved by mistake goes back unless a new one already took its place.
+ */
+function takeOverLock(lock, seen) {
+  const aside = `${lock}.${process.pid}.${crypto.randomUUID()}`;
+  fs.renameSync(lock, aside);
+  try {
+    if (fs.readFileSync(aside, 'utf8') === seen) return;
+    try {
+      fs.linkSync(aside, lock);
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+  } finally {
+    fs.rmSync(aside, { force: true });
+  }
+}
+
 /** Runs `fn` holding the session's hold lock; one whose hook process died is replaced. */
 async function withHeldLock(dir, fn) {
   const lock = path.join(dir, HELD_LOCK_FILE);
@@ -154,7 +173,7 @@ async function withHeldLock(dir, fn) {
     }
     try {
       const seen = fs.readFileSync(lock, 'utf8');
-      if (lockHolderGone(lock, seen) && fs.readFileSync(lock, 'utf8') === seen) fs.rmSync(lock, { force: true });
+      if (lockHolderGone(lock, seen)) takeOverLock(lock, seen);
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
     }
@@ -188,8 +207,8 @@ async function releaseReason(command, policy, sessionDir, toolUseId) {
   const dataRoot = policy.dataRoot || policy.codeRoot;
   const holds = (held, n) => {
     if (!held.has(n)) return false;
-    const at = sentinelCreatedAt(dataRoot, n);
-    return at === 'gone' || at === held.get(n);
+    // A sentinel gone holds nothing to release: the app dropped it, or another evaluation may reserve it next.
+    return sentinelCreatedAt(dataRoot, n) === held.get(n);
   };
   for (const deadline = Date.now() + HELD_WAIT_MS; ; await sleepMs(100)) {
     const taken = await withHeldLock(sessionDir, () => {
