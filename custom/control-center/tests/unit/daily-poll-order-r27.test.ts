@@ -22,18 +22,16 @@ describe('DailyJobWatch poll ordering (R27-srv-core-X-01)', () => {
     expect(watch.status().running).toBe(false);
   });
 
-  it('given an older poll waiting, when runningNow is asked, then it answers from a probe started after the call', async () => {
+  it('given an older poll still waiting, when a newer poll answers running first, then the older stopped answer does not overwrite it', async () => {
     const { probe, pending } = deferredProbe();
     const watch = new DailyJobWatch(probe, new EventBus(), 60_000);
     const older = watch.poll();
     const now = watch.runningNow();
-    pending[0]!(true);
-    await older;
-    await Promise.resolve();
-    await Promise.resolve();
     expect(pending.length).toBe(2);
-    pending[1]!(false);
-    expect(await now).toBe(false);
-    expect(watch.status().running).toBe(false);
+    pending[1]!(true);
+    expect(await now).toBe(true);
+    pending[0]!(false);
+    await older;
+    expect(watch.status().running).toBe(true);
   });
 });
