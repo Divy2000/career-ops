@@ -712,7 +712,10 @@ export class SessionManager {
   private async reassertReservation(meta: SessionMeta): Promise<SessionMeta> {
     const num = meta.reportNum;
     if (num === null || this.creditedHolds(meta, num)) return meta;
-    if (this.refreshReservation(meta, num)) return meta;
+    if (this.refreshReservation(meta, num)) {
+      this.forgetReservationLosses(meta.id);
+      return meta;
+    }
     // Claimed before the await, as finalize does; the number is someone else's now, so it is not released.
     this.store.setReportNum(meta.id, null);
     const { r, nums: fresh } = await this.takeReportNums(1);
@@ -731,6 +734,8 @@ export class SessionManager {
       } finally {
         this.recordedReportNums(fresh);
       }
+      // A new reservation, possibly of the same number: losing it is a new loss, said again.
+      this.forgetReservationLosses(meta.id);
     } else {
       this.recordedReportNums(fresh);
       console.warn(`[sessions] session ${meta.id} lost report number ${num} and could not reserve another (exit ${r.code}): ${(r.stderr || r.stdout).trim().slice(-200)}`);
@@ -768,7 +773,10 @@ export class SessionManager {
       num = meta?.reportNum ?? null;
       if (meta && num !== null && !this.creditedHolds(meta, num)) {
         const sentinel = this.sentinelPath(num);
-        if (Date.now() - fs.statSync(sentinel).mtimeMs >= RESERVATION_REFRESH_AGE_MS && !this.refreshReservation(meta, num)) this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
+        if (Date.now() - fs.statSync(sentinel).mtimeMs >= RESERVATION_REFRESH_AGE_MS) {
+          if (this.refreshReservation(meta, num)) this.forgetReservationLosses(id);
+          else this.warnReservationLost(id, num, readSentinelCreatedAt(sentinel) === null && fs.existsSync(sentinel) ? 'cannot be read, so it is not refreshed or released' : 'was collected while its turn runs; the number may be handed out again');
+        }
       }
       // A tick that got through: a later failure is a new one, said again.
       this.reservationWarned.delete(`${id}\0refresh`);
@@ -781,6 +789,11 @@ export class SessionManager {
   /** Said once per session and number: the tracker ticks again every poll. Finalize then leaves the number alone. */
   private warnReservationLost(id: string, num: number, why: string): void {
     this.warnOnce(`${id}\0${num}\0${why}`, `[sessions] session ${id}: its reservation of report number ${num} ${why}`);
+  }
+
+  /** The session's reservation-loss warnings (not its refresh failure), forgotten once it holds a reservation again. */
+  private forgetReservationLosses(id: string): void {
+    for (const key of this.reservationWarned) if (key.startsWith(`${id}\0`) && key !== `${id}\0refresh`) this.reservationWarned.delete(key);
   }
 
   private warnOnce(key: string, message: string): void {

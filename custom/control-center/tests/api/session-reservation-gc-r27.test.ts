@@ -242,4 +242,41 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
       warn.mockRestore();
     }
   }, 30_000);
+  it('given a session that lost its number while running and was handed the same number again for its next turn, when that reservation is lost too, then the second loss is warned of as well', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const lostWarnings = (n: number) => warn.mock.calls.flat().filter((m) => String(m).includes(`reservation of report number ${n} was collected`)).length;
+    const app = await makeTestApp();
+    try {
+      const gate = tempDir('cc-r27-gate-');
+      const file = path.join(tempDir('cc-r27-scenario-'), 'scenario.json');
+      // Exits 0 with no report: the turn waits for the user and the session keeps its number.
+      fs.writeFileSync(file, JSON.stringify({ ...heldUntilGo(gate), exitCode: 0 }));
+      process.env.FAKE_CLAUDE_SCENARIO = file;
+      try {
+        const fan = (await call(app, 'POST', '/api/sessions/fanout', { mode: 'oferta', urls: ['https://jobs.example.com/synthetic/r27-x01-lost-twice'] })).json();
+        const id = fan.sessions[0].id as string;
+        const n = fan.reserved[0] as number;
+        await until(() => app.runner.store.read(fan.sessions[0].turns[0].runId as string)?.childPid != null);
+        fs.rmSync(sentinelPath(app, n));
+        await until(() => lostWarnings(n) === 1);
+        fs.writeFileSync(path.join(gate, 'go'), '');
+        expect((await settleOn(app, id)).meta).toMatchObject({ status: 'awaiting_user', reportNum: n });
+
+        fs.rmSync(path.join(gate, 'go'));
+        const sent = await call(app, 'POST', `/api/sessions/${id}/turns`, { prompt: 'Try again.' });
+        expect(sent.statusCode, sent.body).toBe(202);
+        expect(app.sessions.read(id)!.reportNum).toBe(n);
+        await until(() => app.runner.store.read(app.sessions.read(id)!.turns[1]!.runId!)?.childPid != null);
+        fs.rmSync(sentinelPath(app, n));
+        await until(() => lostWarnings(n) === 2);
+        fs.writeFileSync(path.join(gate, 'go'), '');
+        await settleOn(app, id);
+      } finally {
+        delete process.env.FAKE_CLAUDE_SCENARIO;
+      }
+    } finally {
+      await app.close();
+      warn.mockRestore();
+    }
+  }, 40_000);
 });
