@@ -297,11 +297,11 @@ export class ScheduleService {
       if (disable.code !== 0) return failed(`launchctl disable failed (exit ${disable.code}); the job would load again at the next login`, disable.stderr.trim());
       disabledNow = true;
     }
-    // bootout fails when the job is not loaded; that is the expected state before the first install, when print already
-    // said so. Otherwise the job is gone after a failed bootout only if print now says so (no such service): one still
-    // loaded, or whose state print could not read, may keep firing on its old schedule, so that is a failed save.
+    // bootout fails when the job is not loaded; that is the expected state before the first install. So a failed bootout
+    // is fine only if print now says the job is gone (no such service): one still loaded, or whose state print could not
+    // read, may keep firing on its old schedule, so that is a failed save.
     const bootout = await this.deps.exec('launchctl', ['bootout', target], { timeoutMs: 20_000 });
-    if (bootout.code !== 0 && print.code !== LAUNCHCTL_NO_SUCH_SERVICE && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code !== LAUNCHCTL_NO_SUCH_SERVICE) {
+    if (bootout.code !== 0 && (await this.deps.exec('launchctl', ['print', target], { timeoutMs: 10_000 })).code !== LAUNCHCTL_NO_SUCH_SERVICE) {
       return failed(`launchctl bootout failed (exit ${bootout.code}) and the job may still be loaded`, bootout.stderr.trim());
     }
     if (input.enabled) {
@@ -323,6 +323,8 @@ export class ScheduleService {
       fs.renameSync(tmp, s.plistPath);
     }
     let ok = true;
+    // launchd refuses to bootstrap a disabled job, so the disabled flag is put back before the job is loaded again.
+    if (s.reEnable) ok = (await this.deps.exec('launchctl', ['enable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     const loaded = (await this.deps.exec('launchctl', ['print', s.target], { timeoutMs: 10_000 })).code === 0;
     if (s.wasLoaded && !loaded && s.previous !== null) {
       ok = (await this.deps.exec('launchctl', ['bootstrap', `gui/${this.deps.uid}`, s.plistPath], { timeoutMs: 20_000 })).code === 0 && ok;
@@ -330,7 +332,6 @@ export class ScheduleService {
       ok = (await this.deps.exec('launchctl', ['bootout', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     }
     if (s.reDisable) ok = (await this.deps.exec('launchctl', ['disable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
-    if (s.reEnable) ok = (await this.deps.exec('launchctl', ['enable', s.target], { timeoutMs: 20_000 })).code === 0 && ok;
     return ok;
   }
 }
