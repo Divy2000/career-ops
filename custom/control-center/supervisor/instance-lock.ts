@@ -123,8 +123,9 @@ function noHardLinksError(dataRoot: string, err: NodeJS.ErrnoException): Error {
 /** Creates `file` holding `text`, whole, or returns false when a lock is already there. */
 export function createWhole(file: string, text: string): boolean {
   const tmp = aside(file, 'new');
-  fs.writeFileSync(tmp, text, { flag: 'wx' });
   try {
+    // Inside the try: a write that fails part way (ENOSPC, EIO) has already created the temp file.
+    fs.writeFileSync(tmp, text, { flag: 'wx' });
     fs.linkSync(tmp, file);
     return true;
   } catch (err) {
