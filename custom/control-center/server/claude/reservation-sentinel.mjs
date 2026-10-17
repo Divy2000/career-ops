@@ -61,7 +61,8 @@ async function main(argv) {
   const tracker = resolveTrackerPath(root);
   const sentinel = path.join(root, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
   const lock = await acquireTrackerLock(trackerLockDirFor(tracker), {
-    timeoutMs: Number(process.env.CAREER_OPS_TRACKER_LOCK_TIMEOUT_MS) || LOCK_TIMEOUT_MS,
+    // Never above its own bound: a child the server's exec timeout kills while it holds the lock leaves the lock behind.
+    timeoutMs: Math.min(Number(process.env.CAREER_OPS_TRACKER_LOCK_TIMEOUT_MS) || LOCK_TIMEOUT_MS, LOCK_TIMEOUT_MS),
     retryMs: Number(process.env.CAREER_OPS_TRACKER_LOCK_RETRY_MS) || 75,
     staleMs: Number(process.env.CAREER_OPS_TRACKER_LOCK_STALE_MS) || 10 * 60_000,
     tracker,
