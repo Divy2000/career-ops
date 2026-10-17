@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { assertRootsConfinable, buildArgv, buildAllowedTools, buildDisallowedTools, buildEnv, buildPermissions, buildPreamble, buildTools, neutralizeFileMentions, redact, writePolicyFile, writeSettingsFile } from '../../server/claude/invocation.js';
 import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, HOME_READ_DENY, READ_DENY, getModePolicy, listModeIds } from '../../server/claude/modes.js';
 import { GUARD_HOOK_PATH, PLAYWRIGHT_MCP_PATH, PRE_TOOL_MATCHER } from '../../server/claude/invocation.js';
-import { recordHeldReportNums, restoreHeldReportNums } from '../../server/claude/manager.js';
+import { reconcileHeldReportNums, recordHeldReportNums, restoreHeldReportNums } from '../../server/claude/manager.js';
 import { AGENT_SPAWNING_SCRIPTS, checkBash, checkRead, checkSearch, checkWrite, grepSecretExcludes, locateRead, narrowGrepInput, snapshotKey, URL_LIST_MAX_BYTES, urlListFilesIn, WRITER_SCRIPT_NAMES } from '../../server/claude/guard-policy.mjs';
 import { trackerDenyGlobs, writeGuardPolicy } from '../../server/claude/confinement.mjs';
 import { playwrightMcpArgs } from '../../server/claude/playwright-mcp-launcher.mjs';
@@ -564,6 +564,23 @@ describe('guard hook', () => {
     fs.utimesSync(path.join(realRoot, 'reports', '078-RESERVED.md'), old, old);
     expect(hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 078' }, cwd: realRoot, session_id: 's' }).status).toBe(2);
   }, 20_000);
+
+  it('given a release the hook let through that never reported back, when the next turn starts, then the hold comes back only while its sentinel is still that reservation (R28-cl2-rev-01)', () => {
+    const dir = fs.realpathSync(tempDir('cc-hook-orphan-'));
+    const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
+    const release = (id: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'node reserve-report-num.mjs --release 079' }, tool_use_id: id, cwd: realRoot, session_id: 's' }).status;
+    reserveAs(79, '2026-10-17T10:01:19.000Z');
+    recordHeldReportNums(dir, [79], realRoot);
+    // The CLI was killed after the hook let the release through and before it ran: the sentinel is still there.
+    expect(release('toolu_k')).toBe(0);
+    expect(release('toolu_l')).toBe(2);
+    reconcileHeldReportNums(dir, realRoot);
+    expect(release('toolu_m')).toBe(0);
+    // This time the release ran and another evaluation reserved 079 since: nothing comes back.
+    reserveAs(79, '2026-10-17T10:02:19.000Z');
+    reconcileHeldReportNums(dir, realRoot);
+    expect(release('toolu_n')).toBe(2);
+  }, 30_000);
 
   it('given a held number whose sentinel is gone, when the session releases it, then it is refused (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-gone-'));

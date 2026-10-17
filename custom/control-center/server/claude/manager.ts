@@ -206,6 +206,42 @@ export function restoreHeldReportNums(sessionDir: string, nums: readonly number[
   fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n}@${toolUseId};`).join(''));
 }
 
+/**
+ * Gives back each hold a release let go whose sentinel is still the reservation it named: that release never ran, or
+ * failed before deleting it (the CLI killed after the hook let it through leaves no result to restore it from). Only
+ * between turns, while no release of the session's can be running. Records are read as guard-hook.mjs reads them.
+ */
+export function reconcileHeldReportNums(sessionDir: string, dataRoot: string): void {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  const held = new Map<number, number>();
+  const letGo = new Map<number, { id: string | null; at: number | null }>();
+  for (const line of text.split('\n')) {
+    const m = HELD_RECORD.exec(line);
+    if (!m) continue;
+    const num = Number(m[2]);
+    if (m[1] === '-') {
+      letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
+      held.delete(num);
+    } else if (m[3] !== undefined) {
+      held.set(num, Number(m[3]));
+      letGo.delete(num);
+    } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num)!.at !== null && !held.has(num)) {
+      held.set(num, letGo.get(num)!.at!);
+      letGo.delete(num);
+    }
+  }
+  const records = [...letGo].flatMap(([n, { at }]) => (at !== null && readSentinelCreatedAt(path.join(dataRoot, 'reports', `${String(n).padStart(3, '0')}-RESERVED.md`)) === at ? [`\n+${n}=${at};`] : []));
+  if (records.length) fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), records.join(''));
+}
+
+const HELD_RECORD = /^([+-])(\d+)(?:=(\d+)|@([A-Za-z0-9_-]{1,100}))?;$/;
+
 /** The tool ids the CLI hands out (toolu_...); anything else is never written into a hold record. */
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
@@ -1263,6 +1299,7 @@ export class SessionManager {
       // the GC may find another evaluation's sentinel under it.
       // A hold that cannot be recorded only means the hook refuses that release: the turn goes on.
       try {
+        reconcileHeldReportNums(sessionDir, this.cfg.dataRoot);
         if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum], this.cfg.dataRoot, this.ownedSince(meta, meta.reportNum));
       } catch (err) {
         console.warn(`[sessions] session ${meta.id}: could not record the report number it holds: ${(err as Error).message}`);
