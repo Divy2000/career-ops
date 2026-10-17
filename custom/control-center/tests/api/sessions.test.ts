@@ -1158,6 +1158,26 @@ describe('read confinement (BUG-06)', () => {
     expect(statuses()).toHaveLength(1);
   });
 
+  it('a half-written run record does not stop reconcile: that turn ends in error, and the other sessions are still settled (R28-claude-L1-01)', async () => {
+    const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    const run = t.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', '0'], cwd: PACKAGE_ROOT } });
+    t.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'x' });
+    t.sessions.store.setStatus(meta.id, 'running');
+    await until(() => t.runner.store.read(run.id)!.endedAt !== null && !t.runner.ending(run.id));
+    // A power loss mid-write leaves the run's meta.json truncated.
+    fs.writeFileSync(path.join(t.runner.store.dirOf(run.id), 'meta.json'), `{"id":"${run.id}","status":"runn`);
+    const other = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+    t.sessions.store.beginTurn(other.id, { runId: 'r-gone-beside-unreadable', userText: 'x' });
+    t.sessions.store.setStatus(other.id, 'running');
+    // Nothing will make that record readable again: the session waits a bounded time for it, then is no longer busy.
+    (t.sessions as unknown as { deps: { unreadableRunWaitMs?: number } }).deps.unreadableRunWaitMs = 300;
+    expect(() => t.sessions.reconcile()).not.toThrow();
+    expect(t.sessions.read(other.id)).toMatchObject({ status: 'error', error: 'run record missing after a restart' });
+    await until(() => t.sessions.read(meta.id)!.turns[0]!.endedAt !== null);
+    expect(t.sessions.read(meta.id)!.status).toBe('error');
+    await until(() => !t.sessions.isActive(meta.id));
+  });
+
   it('a session already settled after its run record went missing is not settled again at the next reconcile', () => {
     const meta = t.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
     t.sessions.store.beginTurn(meta.id, { runId: 'r-gone-twice', userText: 'x' });
@@ -1777,6 +1797,27 @@ describe('report reservations and session trackers survive failures (r16-claude)
       // The number went back only once its run had ended.
       expect(app.runner.store.list().map((r) => r.status)).toEqual(['cancelled']);
       expect(fs.existsSync(path.join(app.cfg.dataRoot, 'reports', '008-RESERVED.md'))).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('a turn whose running status cannot be recorded after the turn was is still followed and finalized once (R28-claude-L1-02)', async () => {
+    const app = await freshApp();
+    try {
+      const append = app.sessions.store.appendEvent.bind(app.sessions.store);
+      vi.spyOn(app.sessions.store, 'appendEvent').mockImplementation((id, event) => {
+        if (event.type === 'status' && event.status === 'running') throw new Error('EACCES: the event log is read-only');
+        return append(id, event);
+      });
+      await withScenario(scenarioFile({ events: [INIT, result('Nothing is overdue.', 0.02)] }), async () => call(app, 'POST', '/api/sessions', { mode: 'advisor', prompt: 'What is overdue?' }));
+      expect(app.sessions.store.list()).toHaveLength(1);
+      const id = app.sessions.store.list()[0]!.id;
+      // Recorded before the status failed: the turn is ended with its cost, as any other, so a reply cannot leave it open.
+      await until(() => app.sessions.read(id)!.turns[0]?.endedAt != null);
+      expect(app.sessions.read(id)!.turns).toHaveLength(1);
+      expect(app.sessions.read(id)!.turns[0]!.costUsd).toBe(0.02);
+      expect(fs.existsSync(path.join(app.sessions.store.guardDirOf(id), 'turns', '1', 'after.json'))).toBe(true);
     } finally {
       await app.close();
     }
