@@ -396,7 +396,19 @@ describe('Claude sessions', () => {
     expect(fs.readdirSync(path.join(t.cfg.dataRoot, 'reports'))).toEqual(before);
   });
 
-  it('the fan-out limit counts distinct URLs: more than BATCH_MAX_URLS copies of one posting start one session', async () => {
+  it('given a mode that is not a posting evaluation, when it is fanned out, then it is refused with 400 before any session starts or report number is reserved (R30-srv-core-X-01)', async () => {
+    const sessionsBefore = (await get('/api/sessions')).json().length;
+    const reportsBefore = fs.readdirSync(path.join(t.cfg.dataRoot, 'reports'));
+    for (const mode of ['pipeline', 'immigration-policy', 'sponsorship-check', 'deep']) {
+      const res = await post('/api/sessions/fanout', { mode, urls: ['https://jobs.example.com/notgated/1', 'https://jobs.example.com/notgated/2'] });
+      expect(res.statusCode, `${mode}: ${res.body}`).toBe(400);
+      expect(res.json().error).toMatch(/only evaluates postings/);
+    }
+    expect((await get('/api/sessions')).json()).toHaveLength(sessionsBefore);
+    expect(fs.readdirSync(path.join(t.cfg.dataRoot, 'reports'))).toEqual(reportsBefore);
+  });
+
+  it('the fan-out limit counts distinct URLs:more than BATCH_MAX_URLS copies of one posting start one session', async () => {
     const res = await post('/api/sessions/fanout', { mode: 'oferta', urls: Array.from({ length: BATCH_MAX_URLS + 1 }, () => 'https://jobs.example.com/synthetic/11') });
     expect(res.statusCode, res.body).toBe(202);
     const { sessions, reserved } = res.json();

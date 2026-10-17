@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import { BusyError, liveWorkOn, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
-import { englishModeOf, listLaunchableModeIds } from '../claude/modes.js';
+import { englishModeOf, listLaunchableModeIds, sessionRefusal } from '../claude/modes.js';
 import { isReportGated } from '../claude/honesty.js';
 import type { SessionMeta } from '../claude/sessions.js';
 import { readPipeline } from '../domains/pipeline.js';
@@ -329,6 +329,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
     if (noReplies) return reply.code(422).send({ error: noReplies });
+    // Fan-out is Batch evaluate: every other mode's start guards (Process inbox, the policy-pass claim, the one check
+    // per company) live in POST /api/sessions only, so a fan-out of one would run beside the session they hold back.
+    const refusal = sessionRefusal(parsed.data.mode);
+    if (refusal) return reply.code(422).send({ error: refusal });
+    if (!isReportGated(parsed.data.mode)) return reply.code(400).send({ error: `a fan-out only evaluates postings; ${parsed.data.mode} is not a posting evaluation mode` });
     const inboxHeld = processInboxHolds(parsed.data.mode, parsed.data.urls);
     if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
     try {
