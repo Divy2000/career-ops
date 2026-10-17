@@ -75,4 +75,30 @@ describe('a session releases only the report numbers it holds (R28-cl2-rev-01)',
       await app.close();
     }
   });
+
+  it('given a session that released its number, when another evaluation reserves it and the session releases it again, then the second release is refused', async () => {
+    const app = await makeTestApp();
+    try {
+      otherHolds(app, 60);
+      const gate = tempDir('cc-r28-release-gate-');
+      const start = withScenario([INIT, { __bash: 'node reserve-report-num.mjs' }, { __bash: 'node reserve-report-num.mjs --release 061' }, { __waitFor: { dir: gate, pattern: '^go$' } }, { __bash: 'node reserve-report-num.mjs --release 061' }, RESULT], async () =>
+        (await call(app, 'POST', '/api/sessions', { mode: 'oferta', prompt: 'Evaluate' })).json().id as string,
+      );
+      const id = await start;
+      const deadline = Date.now() + 20_000;
+      while (results(app.sessions.store.readEvents(id).map((e) => e.event as Ev)).length < 2) {
+        if (Date.now() > deadline) throw new Error('the first release never ran');
+        await wait(50);
+      }
+      expect(fs.existsSync(sentinel(app, 61))).toBe(false);
+      otherHolds(app, 61);
+      fs.writeFileSync(path.join(gate, 'go'), '');
+      const [, first, again] = results(await settleOn(app, id));
+      expect(first, first?.summary).toMatchObject({ ok: true });
+      expect(again).toMatchObject({ ok: false, summary: expect.stringMatching(/releases only/) });
+      expect(fs.existsSync(sentinel(app, 61))).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
 });

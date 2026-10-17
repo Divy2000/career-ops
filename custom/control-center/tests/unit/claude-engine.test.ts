@@ -452,18 +452,20 @@ describe('guard hook', () => {
     expect(writesFor(modes, rels)).toEqual(Object.fromEntries(modes.flatMap((m) => rels.map((rel, i) => [`${m} ${rel}`, i === 0 ? 0 : 2]))));
   });
 
-  it('given a session holding report 060, when it runs reserve-report-num.mjs --release, then only 060 may go, in any quoting (R28-cl2-rev-01)', () => {
+  it('given a session holding report 060, when it runs reserve-report-num.mjs --release, then only 060 may go, once, in any quoting (R28-cl2-rev-01)', () => {
     const dir = fs.realpathSync(tempDir('cc-hook-held-'));
     const pf = writePolicyFile(dir, { codeRoot: realRoot, policy: getModePolicy('oferta')!, deny: [...ALWAYS_DENIED_WRITES] });
     const bash = (command: string) => hookRun(dir, pf, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: realRoot, session_id: 's' });
-    fs.writeFileSync(path.join(dir, 'held-report-nums.json'), JSON.stringify({ nums: [60] }));
-    for (const cmd of ['node reserve-report-num.mjs --release 060', 'node reserve-report-num.mjs --release 60-60', 'node reserve-report-num.mjs', 'node reserve-report-num.mjs --count 3', 'node reserve-report-num.mjs --gc']) expect(bash(cmd).status, cmd).toBe(0);
-    for (const cmd of [`node reserve-report-num.mjs '--release' "059-060"`, 'node reserve-report-num.mjs --release 061']) {
+    // The app's records: 60 held, 59 held and let go again, and a record cut short.
+    fs.writeFileSync(path.join(dir, 'held-report-nums.log'), '+60;\n+59;\n-59;\n+61');
+    for (const cmd of ['node reserve-report-num.mjs --release 060', 'node reserve-report-num.mjs', 'node reserve-report-num.mjs --count 3', 'node reserve-report-num.mjs --gc']) expect(bash(cmd).status, cmd).toBe(0);
+    // Let go once, 60 is no longer held: another evaluation may reserve it next.
+    for (const cmd of ['node reserve-report-num.mjs --release 60-60', `node reserve-report-num.mjs '--release' "059"`, 'node reserve-report-num.mjs --release 061']) {
       const r = bash(cmd);
       expect(r.status, cmd).toBe(2);
       expect(r.stderr).toMatch(/releases only the report numbers it holds/);
     }
-  }, 20_000);
+  }, 30_000);
 
   it('given any session whose scope grants reports/**, when it writes a reservation sentinel, then it is refused, Dev Chat included (R28-cl2-rev-02)', () => {
     const modes = ['devchat', 'oferta', 'apply', 'tracker', 'patterns'];

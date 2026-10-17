@@ -46,30 +46,41 @@ function endsTorn(file) {
   }
 }
 
-// The report numbers the session holds, written by the app into the session folder (manager.ts HELD_REPORT_NUMS_FILE).
-const HELD_REPORT_NUMS_FILE = 'held-report-nums.json';
+// The report numbers the turn holds, logged in its turn folder (manager.ts HELD_REPORT_NUMS_FILE): `+N;` from the app,
+// `-N;` from here once a release lets one go, each on a line of its own. A record cut short (no `;`) holds nothing, and
+// the next one starts its own line rather than joining it.
+const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
+const HELD_RECORD = /^([+-])(\d+);$/;
 // The allocator's CLI reads --release <NNN>[-<MMM>] this way; an argument it would refuse is left to its usage error.
 const RELEASE_ARG = /^(\d+)(?:-(\d+))?$/;
 const RELEASE_MAX = 50;
-// The app records a number the session reserved once the run's result reaches it (it polls the output): a release
-// right after the reservation waits for that record this long before it is refused.
+// The app records a number the turn reserved once the run's result reaches it (it polls the output): a release right
+// after the reservation waits for that record this long before it is refused.
 const HELD_WAIT_MS = 3000;
 
-function heldReportNums(sessionDir) {
+function heldReportNums(file) {
+  let text;
   try {
-    const nums = JSON.parse(fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8')).nums;
-    return new Set(Array.isArray(nums) ? nums.filter(Number.isSafeInteger) : []);
+    text = fs.readFileSync(file, 'utf8');
   } catch (err) {
     if (err.code === 'ENOENT') return new Set();
     throw err;
   }
+  const held = new Set();
+  for (const line of text.split('\n')) {
+    const m = line.match(HELD_RECORD);
+    if (m?.[1] === '+') held.add(Number(m[2]));
+    else if (m) held.delete(Number(m[2]));
+  }
+  return held;
 }
 
 /**
- * reserve-report-num.mjs --release deletes the sentinels it names whoever reserved them, so a session releases only
- * the numbers it holds: the one the app reserved for it, and the ones its own reservations printed.
+ * reserve-report-num.mjs --release deletes the sentinels it names whoever reserved them, so a turn releases only the
+ * numbers it holds: the one the app reserved for the session, and the ones its own reservations printed. A number let
+ * go is no longer held: another evaluation may reserve it next.
  */
-async function releaseReason(command, sessionDir) {
+async function releaseReason(command, turnDir) {
   const tokens = tokenize(command);
   if (!tokens || tokens[0] !== 'node' || tokens[1] !== 'reserve-report-num.mjs' || tokens[2] !== '--release') return null;
   const m = (tokens[3] ?? '').match(RELEASE_ARG);
@@ -78,9 +89,13 @@ async function releaseReason(command, sessionDir) {
   const end = m[2] === undefined ? start : Number(m[2]);
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end - start + 1 > RELEASE_MAX) return null;
   const nums = Array.from({ length: end - start + 1 }, (_, i) => start + i);
+  const file = path.join(turnDir, HELD_REPORT_NUMS_FILE);
   for (const deadline = Date.now() + HELD_WAIT_MS; ; await new Promise((r) => setTimeout(r, 100))) {
-    const held = heldReportNums(sessionDir);
-    if (nums.every((n) => held.has(n))) return null;
+    const held = heldReportNums(file);
+    if (nums.every((n) => held.has(n))) {
+      fs.appendFileSync(file, nums.map((n) => `\n-${n};`).join(''));
+      return null;
+    }
     if (Date.now() > deadline) break;
   }
   return 'Bash: a session releases only the report numbers it holds (the one reserved for it, or one its own reserve-report-num.mjs run printed); every other sentinel is another evaluation\'s reservation';
@@ -159,7 +174,7 @@ async function main() {
 
   if (tool === 'Bash') {
     const command = String(input.command ?? '');
-    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, sessionDir));
+    const reason = checkBash(command, policy, cwd) ?? (await releaseReason(command, snapDir));
     if (reason) deny(reason);
     // URLs a script reads from a list file it was given get the same checks as its URL arguments.
     const listed = [];

@@ -177,35 +177,32 @@ export function writeProgress(file: string, p: TurnProgress): void {
 }
 
 /**
- * The report numbers a session holds, in its guard folder (outside every write scope): the one the app reserved for it
- * and the ones its own reserve-report-num.mjs runs printed. reserve-report-num.mjs --release deletes whichever sentinels
- * it names, so guard-hook.mjs lets a session release only these (the hook reads the file under the same name).
+ * The report numbers a turn holds, logged in its turn folder (outside every write scope) as `+N;` and `-N;` records:
+ * the app adds the one it reserved for the session and the ones the turn's own reserve-report-num.mjs runs printed,
+ * and guard-hook.mjs, which lets a turn release only numbers it holds (reserve-report-num.mjs --release deletes
+ * whichever sentinels it names), removes each one it lets go. Per turn: a number left over may be anyone's later.
  */
-export const HELD_REPORT_NUMS_FILE = 'held-report-nums.json';
+export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
 
-export function readHeldReportNums(sessionDir: string): number[] {
-  try {
-    const nums = (JSON.parse(fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8')) as { nums?: unknown }).nums;
-    return Array.isArray(nums) ? nums.filter((n): n is number => Number.isSafeInteger(n)) : [];
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw err;
-  }
+export function recordHeldReportNums(turnDir: string, nums: readonly number[]): void {
+  fs.mkdirSync(turnDir, { recursive: true });
+  fs.appendFileSync(path.join(turnDir, HELD_REPORT_NUMS_FILE), nums.map((n) => `\n+${n};`).join(''));
 }
 
-export function recordHeldReportNums(sessionDir: string, nums: readonly number[]): void {
-  const held = readHeldReportNums(sessionDir);
-  if (nums.every((n) => held.includes(n))) return;
-  const file = path.join(sessionDir, HELD_REPORT_NUMS_FILE);
-  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
+/** The Bash commands of a stream-json assistant line by tool id, whole: a tool.use event keeps only their first 200 characters. */
+export function bashCommandsIn(line: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let obj: { type?: unknown; message?: { content?: unknown } };
   try {
-    fs.mkdirSync(sessionDir, { recursive: true });
-    fs.writeFileSync(tmp, JSON.stringify({ nums: [...new Set([...held, ...nums])].sort((a, b) => a - b) }));
-    fs.renameSync(tmp, file);
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
+    obj = JSON.parse(line) as typeof obj;
+  } catch {
+    return out;
   }
+  if (obj?.type !== 'assistant' || !Array.isArray(obj.message?.content)) return out;
+  for (const b of obj.message.content as Array<{ type?: unknown; id?: unknown; name?: unknown; input?: { command?: unknown } }>) {
+    if (b?.type === 'tool_use' && b.name === 'Bash' && typeof b.input?.command === 'string') out.set(String(b.id), b.input.command);
+  }
+  return out;
 }
 
 /** Whether a Bash command is a reserve-report-num.mjs run that reserves (the script reserves unless told to help, release or gc). */
@@ -1130,7 +1127,7 @@ export class SessionManager {
       // The CLI that runs this turn must be a version whose confinement was probed (cached on the binary's stat).
       await assertApprovedClaude(this.cfg.claudeBin, this.cfg.nodeEnv);
       if (n > 1) meta = await this.reassertReservation(meta);
-      if (meta.reportNum !== null) recordHeldReportNums(sessionDir, [meta.reportNum]);
+      if (meta.reportNum !== null) recordHeldReportNums(turnDir, [meta.reportNum]);
       // A fork's first turn runs under an id --fork-session mints, so its tool-results folder is not known yet.
       const readOnlyRoots = opts.fork ? [] : toolResultsDirs(this.cfg.claudeProjectsDir, this.cfg.codeRoot, meta.claudeSessionId);
       const policyFile = writePolicyFile(turnDir, { codeRoot: this.cfg.codeRoot, dataRoot: this.cfg.dataRoot, sessionDir, policy, extraAllow: blacklistAllowed ? ['data/blacklist.md'] : [], deny, readOnlyRoots });
@@ -1260,6 +1257,7 @@ export class SessionManager {
     };
     const handleLine = (l: RawLine, emit: boolean) => {
       const events: SessionEvent[] = l.stream === 'stdout' ? parser.push(l.line) : [{ type: 'stderr', text: redact(l.line, token) }];
+      const commands = l.stream === 'stdout' && l.line.includes('"tool_use"') ? bashCommandsIn(l.line) : null;
       for (const ev of events) {
         if (ev.type === 'envelope') {
           envelopes++;
@@ -1267,10 +1265,10 @@ export class SessionManager {
           envelopeKinds[kind] = (envelopeKinds[kind] ?? 0) + 1;
         }
         if (ev.type === 'permission.denied') denials++;
-        if (ev.type === 'tool.use' && ev.name === 'Bash' && reservesReportNums(ev.summary)) reserveRuns.add(ev.id);
+        if (ev.type === 'tool.use' && ev.name === 'Bash' && reservesReportNums(commands?.get(ev.id) ?? ev.summary)) reserveRuns.add(ev.id);
         if (ev.type === 'tool.result' && reserveRuns.delete(ev.id) && ev.ok) {
           const nums = printedReservation(ev.summary);
-          if (nums.length) recordHeldReportNums(this.store.guardDirOf(id), nums);
+          if (nums.length) recordHeldReportNums(path.join(this.store.guardDirOf(id), 'turns', String(n)), nums);
         }
         if (ev.type === 'turn.done') {
           turnDone = ev;
