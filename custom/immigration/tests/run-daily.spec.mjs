@@ -985,6 +985,20 @@ jobTest('the Claude OAuth token reaches only the claude calls: no step (the scan
   assert.equal(r.rankCalls[0].token, true, 'the rank call reaches claude with the token, through the shim only');
 });
 
+jobTest('the policy pass and the rank call run claude with SUBPROCESS_ENV_SCRUB on, so its hook children never see the OAuth token (R29-tests-custom-L1-01)', () => {
+  const w = dailyWorld();
+  const r = w.run();
+  assert.equal(r.status, 0, r.log);
+  assert.equal(r.calls.length, 1, r.log);
+  assert.equal(r.calls[0].token, true, 'the policy pass runs on the Keychain token');
+  assert.equal(r.calls[0].scrub, true, 'the policy pass sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1');
+  assert.equal(r.calls[0].hookChildToken, false, 'a hook child of the policy pass saw the OAuth token');
+  assert.equal(r.rankCalls.length, 1, r.steps);
+  assert.equal(r.rankCalls[0].token, true, 'the rank call runs on the Keychain token');
+  assert.equal(r.rankCalls[0].scrub, true, 'the rank call sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1');
+  assert.equal(r.rankCalls[0].hookChildToken, false, 'a hook child of the rank call saw the OAuth token');
+});
+
 jobTest('no step sees an inherited ANTHROPIC_* variable or a credential CLAUDE_CODE_* one, and the claude calls still get the Keychain token', () => {
   const w = dailyWorld();
   const scrubbed = { ANTHROPIC_API_KEY: 'sk-ant-x', ANTHROPIC_AUTH_TOKEN: 't', ANTHROPIC_BASE_URL: 'https://proxy.example', ANTHROPIC_CUSTOM_HEADERS: 'X-Key: k', CLAUDE_CODE_API_KEY_HELPER: '/bin/k', CLAUDE_CODE_CLIENT_CERT: '/c.pem', CLAUDE_CODE_CLIENT_KEY_PASSPHRASE: 'p', CLAUDE_CODE_SECRET: 's', CLAUDE_CODE_PASSWORD: 'p', CLAUDE_CODE_CREDENTIALS: 'c', CLAUDE_CODE_CREDENTIAL_FILE: 'f', CLAUDE_CODE_EXTRA_HEADER: 'h' };

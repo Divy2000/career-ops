@@ -360,9 +360,10 @@ process.stdout.write(policy.sha256);
   # The pass's output is untrusted text and must not reach the day log unprefixed: a line it prints that starts with
   # !!!, === or --- would be read by parseDailyLog as a run marker and forge the run status or failure text shown in the
   # app. Prefix every line (both stdout and stderr) so the anchored markers never match. pipefail keeps the pass's own
-  # exit code as the pipeline's, so a failed pass still fails the step.
+  # exit code as the pipeline's, so a failed pass still fails the step. SUBPROCESS_ENV_SCRUB keeps the token out of the
+  # guard hook children, as in the Control Center's sessions.
   DISABLE_AUTOUPDATER=1 CC_POLICY_FILE="$settings_dir/policy.json" CC_POLICY_SHA256="$policy_sha" CC_SESSION_DIR="$settings_dir" \
-  CLAUDE_CODE_OAUTH_TOKEN="$CC_OAUTH_TOKEN" ANTHROPIC_API_KEY="" "$CLAUDE_REAL" -p "$prompt" \
+  CLAUDE_CODE_OAUTH_TOKEN="$CC_OAUTH_TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" "$CLAUDE_REAL" -p "$prompt" \
     --restricted \
     --tools "Read,Edit,Write,WebFetch,WebSearch" \
     --permission-mode dontAsk \
@@ -464,7 +465,7 @@ fs.writeFileSync(path.join(process.env.DIR, "claude"), [
   "set -m",
   `on_term() { [ -z "$!" ] || { kill -TERM -- "-$!" 2>/dev/null; wait "$!" 2>/dev/null; }; echo 143 >> ${failures}; exit 143; }`,
   "trap on_term TERM INT",
-  `CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shellQuote(path.join(process.env.DIR, "token"))})" ANTHROPIC_API_KEY="" ${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
+  `CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shellQuote(path.join(process.env.DIR, "token"))})" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" ${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
   "child=$!",
   "wait \"$child\"",
   "rc=$?",
