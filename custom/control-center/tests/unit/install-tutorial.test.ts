@@ -338,6 +338,9 @@ describe('installTutorial with a quick guide', () => {
     const r = installTutorial({ source: src(), dataRoot, dryRun: true });
     expect(r.files.filter((n) => n === 'Poster.jpg')).toHaveLength(1);
     expect(r.files.filter((n) => n === 'poster.jpg')).toHaveLength(1);
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readFileSync(path.join(dest('guided'), 'poster.jpg'), 'utf8')).toBe('POSTER');
+    expect(fs.readFileSync(path.join(dest('guided'), 'Poster.jpg'), 'utf8')).toBe('POSTER');
   });
 
   it.each([
