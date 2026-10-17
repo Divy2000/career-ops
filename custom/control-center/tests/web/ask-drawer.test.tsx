@@ -80,6 +80,18 @@ describe('Ask drawer: proposed actions', () => {
     expect(host.querySelectorAll('li.proposal button')).toHaveLength(0);
   });
 
+  it('a proposal the drawer cannot run (setProfile, setPortals) is marked unsupported on Review and run without asking to approve a write (R30-shared-comp-X-01)', async () => {
+    for (const action of ['setProfile', 'setPortals']) {
+      await act(async () => emitEnvelope!('act', { action, params: {} }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      expect(item.textContent, action).not.toContain('writes');
+      await act(async () => item.querySelector('button')!.click());
+      expect(document.body.querySelector('.dialog'), action).toBeNull();
+      expect(item.dataset.proposalState, action).toBe('unsupported');
+      expect(item.textContent, action).toContain('Structured settings editors are not available yet');
+    }
+  });
+
   it('an allowlisted act envelope is offered to run with its label', async () => {
     await act(async () => emitEnvelope!('act', { action: 'navigate', params: { to: '/pipeline' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
