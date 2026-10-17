@@ -285,6 +285,23 @@ describe('installTutorial with a quick guide', () => {
     expect(JSON.parse(fs.readFileSync(path.join(dest('guided'), 'tutorial.json'), 'utf8'))).toEqual(both);
   });
 
+  it('refuses two tutorial files whose names differ only in case when they are different files', () => {
+    folder({ manifest: { ...manifest, poster: 'poster.jpg', posterLight: 'Poster.jpg' } });
+    write('poster.jpg', 'DARK');
+    if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) write('Poster.jpg', 'LIGHT');
+    else {
+      // A case-insensitive source disk cannot hold both, so report Poster.jpg as another file, as a case-sensitive one would.
+      const realStat = fs.statSync;
+      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+        const st = realStat(p, o);
+        if (st && path.basename(String(p)) === 'Poster.jpg') st.ino = typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1;
+        return st;
+      }) as typeof fs.statSync);
+    }
+    expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Poster\.jpg" is used by both the poster and the light poster file/);
+    expect(fs.existsSync(dest('guided'))).toBe(false);
+  });
+
   it.each([
     ['a guide file that is not in the folder', null, /guide file "guide\.json" not found/],
     ['a guide that is not JSON', '{ nope', /guide\.json is not valid JSON/],

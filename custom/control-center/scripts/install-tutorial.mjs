@@ -362,20 +362,20 @@ export function installTutorial(opts) {
     manifest = checked.manifest;
   }
 
-  const copies = partCopies(manifest).map(({ kind, name }) => ({ kind, from: path.join(source, name), to: name }));
-  if (manifest.transcript !== undefined) copies.push({ kind: 'transcript', from: path.join(source, built && scriptFrom ? scriptFrom : manifest.transcript), to: manifest.transcript });
-  for (const c of copies) if (!isFile(c.from)) throw new Error(`${c.kind} file "${c.to}" not found in the source folder`);
+  const planned = partCopies(manifest).map(({ kind, name }) => ({ kind, from: path.join(source, name), to: name }));
+  if (manifest.transcript !== undefined) planned.push({ kind: 'transcript', from: path.join(source, built && scriptFrom ? scriptFrom : manifest.transcript), to: manifest.transcript });
+  for (const c of planned) if (!isFile(c.from)) throw new Error(`${c.kind} file "${c.to}" not found in the source folder`);
   if (opts.strictDims === true) for (const p of manifest.parts) checkPosters(source, p);
-  if (manifest.guide !== undefined) {
-    for (const c of planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true)) {
-      // Staging may sit on a case-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
-      // A guide that is the manifest file itself is written back unchanged.
-      if (c.to === 'tutorial.json' && !built && sameFile(c.from, manifestPath)) continue;
-      if (c.to.toLowerCase() === 'tutorial.json') throw new Error(`"${c.to}" is used by both the manifest and the ${c.kind} file, so the manifest would overwrite it`);
-      const same = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase());
-      if (same && !sameFile(same.from, c.from)) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
-      if (!same || same.to !== c.to) copies.push(c);
-    }
+  if (manifest.guide !== undefined) planned.push(...planGuide(built ? path.join(source, GUIDE_DIR) : source, manifest.guide, manifest.chapters.length, opts.strictDims === true));
+  const copies = [];
+  for (const c of planned) {
+    // A guide that is the manifest file itself is written back unchanged.
+    if (c.to === 'tutorial.json' && !built && sameFile(c.from, manifestPath)) continue;
+    // Staging may sit on a case-insensitive disk, where "Poster.jpg" and "poster.jpg" are one file.
+    if (c.to.toLowerCase() === 'tutorial.json') throw new Error(`"${c.to}" is used by both the manifest and the ${c.kind} file, so the manifest would overwrite it`);
+    const same = copies.find((o) => o.to.toLowerCase() === c.to.toLowerCase());
+    if (same && !sameFile(same.from, c.from)) throw new Error(`"${c.to}" is used by both the ${same.kind} and the ${c.kind} file, which are different files`);
+    if (!same || same.to !== c.to) copies.push(c);
   }
 
   const tutorialsDir = path.join(dataRoot, 'data', 'control-center', 'tutorials');
