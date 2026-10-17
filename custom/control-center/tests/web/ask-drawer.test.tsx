@@ -824,8 +824,11 @@ describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () 
       const item = host.querySelector<HTMLLIElement>('li.proposal')!;
       await act(async () => bodyButton('Review and run')!.click());
       const doIt = await until(() => bodyButton('Do it'), 'the confirm');
-      confirmed = true;
-      await act(async () => doIt.click());
+      // Set in the same task as the click, so no sessions poll can be taken for the recheck.
+      await act(async () => {
+        confirmed = true;
+        doIt.click();
+      });
       await until(() => answerRecheck, 'the recheck of live Process inbox runs');
       expect(seen.at(-1)).toBe(true);
       await act(async () => answerRecheck!());
@@ -966,6 +969,61 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
       expect(item.dataset.proposalState).toBe('failed');
       expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
       await remountDrawer();
+    }
+  });
+
+  it('given a Process inbox start sent while the confirm is open but not answered yet, Do it starts nothing (R27-shared-comp-X-01 review)', async () => {
+    const { lastSession } = await import('@web/lib/lastSession');
+    const process = lastSession('cc.pipeline.process');
+    for (const [action, params] of [['evaluateCompany', { company: 'Acme' }], ['evaluate', { url: 'https://jobs.acme.example/1' }]] as const) {
+      listed = [];
+      await remountDrawer();
+      const item = await propose(action, params);
+      // The Inbox's start form marks the start before its POST; the session is in no list until the POST answers.
+      process.setStarting(true);
+      try {
+        await act(async () => bodyButton('Do it')!.click());
+        expect(posts).toEqual([]);
+        expect(item.dataset.proposalState).toBe('failed');
+        expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+      } finally {
+        process.setStarting(false);
+      }
+    }
+  });
+
+  it('given a Process inbox that reported its id while the confirm was open but is not listed yet, Do it starts nothing (R27-shared-comp-X-01 review)', async () => {
+    const { lastSession } = await import('@web/lib/lastSession');
+    const process = lastSession('cc.pipeline.process');
+    for (const [action, params] of [['evaluateCompany', { company: 'Acme' }], ['evaluate', { url: 'https://jobs.acme.example/1' }]] as const) {
+      listed = [];
+      await remountDrawer();
+      const item = await propose(action, params);
+      process.write('s-reported');
+      try {
+        await act(async () => bodyButton('Do it')!.click());
+        expect(posts).toEqual([]);
+        expect(item.dataset.proposalState).toBe('failed');
+      } finally {
+        process.write(null);
+      }
+    }
+  });
+
+  it('given a remembered Process inbox id from before the proposal that the server no longer lists, the evaluation still runs', async () => {
+    const { lastSession } = await import('@web/lib/lastSession');
+    const process = lastSession('cc.pipeline.process');
+    listed = [];
+    process.write('s-gone');
+    try {
+      await remountDrawer();
+      const item = await propose('evaluateCompany', { company: 'Acme' });
+      await act(async () => bodyButton('Do it')!.click());
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+      expect(posts.map((p) => p.url)).toEqual(['/api/sessions/fanout']);
+      expect(item.dataset.proposalState).toBe('done');
+    } finally {
+      process.write(null);
     }
   });
 

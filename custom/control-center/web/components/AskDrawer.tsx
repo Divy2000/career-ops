@@ -170,13 +170,18 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
   /**
    * Whether a running Process inbox session already evaluates what an evaluate or evaluateCompany would: every pending
    * row, so a second evaluation would run, report and bill it twice. Read fresh, not from the 5 s poll, since Process
-   * inbox can start in the gap (or while the confirm is open).
+   * inbox can start in the gap (or while the confirm is open). A start the Inbox sent that is in no list yet counts too,
+   * as Batch evaluate counts it: one still awaiting its answer, or one that reported an id other than knownProcess (the
+   * id remembered when the proposal was run) that the list does not show yet.
    */
-  const processInboxOwns = async (p: Proposal): Promise<boolean> => {
+  const processInboxOwns = async (p: Proposal, knownProcess: string | null): Promise<boolean> => {
     if (p.action !== 'evaluate' && p.action !== 'evaluateCompany') return false;
     // Its own request: the shared query would join a poll sent before the run started, or be cancelled by a start.
     const list = await apiGet<SessionMeta[]>('/api/sessions');
-    if (!list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
+    const process = lastSession('cc.pipeline.process');
+    const remembered = process.read();
+    const unlisted = remembered !== null && remembered !== knownProcess && !list.some((s) => s.id === remembered);
+    if (!process.starting() && !unlisted && !list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
     return p.action === 'evaluateCompany' || (await isPendingInboxRow(String(p.params.url).trim()));
   };
 
@@ -186,6 +191,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     const def = askAction(p.action);
     if (!def || started.current.has(p.id)) return;
     started.current.add(p.id);
+    const knownProcess = lastSession('cc.pipeline.process').read();
     // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
     update(p.id, { state: 'running', note: null });
     // Checked before the question: a proposal that cannot run is not offered to the user as a write to approve.
@@ -199,7 +205,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     let companyUrls: string[] = [];
     let companyLeftOut: string | null = null;
     try {
-      if (await processInboxOwns(p)) {
+      if (await processInboxOwns(p, knownProcess)) {
         update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
         return;
       }
@@ -251,7 +257,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       await endBatchStarting(qc);
     };
     try {
-      if (await processInboxOwns(p)) {
+      if (await processInboxOwns(p, knownProcess)) {
         update(p.id, { state: 'failed', note: PROCESS_INBOX_RUNNING });
         return;
       }
