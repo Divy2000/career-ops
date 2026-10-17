@@ -561,6 +561,18 @@ fs.appendFileSync = (file, data, ...rest) => {
   realAppend(file, String(data).slice(0, 3), ...rest);
   throw full();
 };
+const realOpen = fs.openSync;
+const realWriteFd = fs.writeSync;
+const hitFds = new Set();
+fs.openSync = (file, ...rest) => { const fd = realOpen(file, ...rest); if (hit(file)) hitFds.add(fd); return fd; };
+// As write(2) on a filling volume: a short write returns its count, and the next write fails.
+const shortWritten = new Set();
+fs.writeSync = (fd, data, ...rest) => {
+  if (!hitFds.has(fd)) return realWriteFd(fd, data, ...rest);
+  if (shortWritten.has(fd)) throw full();
+  shortWritten.add(fd);
+  return realWriteFd(fd, Buffer.from(data).subarray(0, 3));
+};
 const realCopy = fs.copyFileSync;
 fs.copyFileSync = (src, dest, ...rest) => {
   if (!hit(dest)) return realCopy(src, dest, ...rest);
@@ -578,6 +590,41 @@ test('given a local-paths.txt with user lines, when the volume fills while local
   assert.match(res.stderr, /no space left/);
   assert.equal(fs.readFileSync(f, 'utf8'), 'my-notes/\nmy-drafts/\n');
   assert.deepEqual(fs.readdirSync(path.dirname(f)), ['local-paths.txt']);
+});
+
+test('given a local-paths.txt another installer appends to, when the volume fills while local-paths adds custom/, then only the partial custom/ is cut back and the other entry stays (R28-scr-rev-01)', () => {
+  const d = tmp();
+  const f = put(path.join(d, 'config', 'local-paths.txt'), 'my-notes/\n');
+  // Another installer appends its entry after this one read the file, then this one's append fills the volume.
+  const preload = put(path.join(d, 'race.mjs'), `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const file = ${JSON.stringify(f)};
+const full = () => { const err = new Error('ENOSPC: no space left on device'); err.code = 'ENOSPC'; return err; };
+const realOpen = fs.openSync;
+const realWrite = fs.writeSync;
+const realAppend = fs.appendFileSync;
+const fds = new Set();
+let writes = 0;
+fs.openSync = (p, ...rest) => { const fd = realOpen(p, ...rest); if (p === file) fds.add(fd); return fd; };
+// A short write returns its count and the next write fails, as write(2) does on a filling volume.
+fs.writeSync = (fd, data, ...rest) => {
+  if (!fds.has(fd)) return realWrite(fd, data, ...rest);
+  if (writes++ > 0) throw full();
+  realAppend(file, 'other/\\n');
+  return realWrite(fd, Buffer.from(data).subarray(0, 3));
+};
+fs.appendFileSync = (p, data, ...rest) => {
+  if (p !== file) return realAppend(p, data, ...rest);
+  realAppend(file, 'other/\\n');
+  realAppend(p, String(data).slice(0, 3));
+  throw full();
+};
+syncBuiltinESMExports();
+`);
+  const res = seedWith(preload, ['local-paths', '--dir', d]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /no space left/);
+  assert.equal(fs.readFileSync(f, 'utf8'), 'my-notes/\nother/\n');
 });
 
 test('given no article-digest.md, when the volume fills while projects-seed writes it, then no partial article-digest.md is left for a re-run to keep (R28-scripts-b-L1-02)', () => {

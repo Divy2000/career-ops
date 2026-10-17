@@ -38,16 +38,26 @@ function localPaths(dir) {
 }
 
 function appendOrRestore(file, suffix) {
-  const size = fs.statSync(file).size;
+  const bytes = Buffer.from(suffix);
+  const fd = fs.openSync(file, 'a+');
+  let written = 0;
   try {
-    fs.appendFileSync(file, suffix);
+    while (written < bytes.length) written += fs.writeSync(fd, bytes, written);
   } catch (err) {
+    // Cut back only this run's own bytes, and only while they are still the file's tail: another installer may have
+    // appended its lines meanwhile, and those stay.
     try {
-      fs.truncateSync(file, size);
+      const size = fs.fstatSync(fd).size;
+      const tail = Buffer.alloc(written);
+      if (written > 0 && size >= written && fs.readSync(fd, tail, 0, written, size - written) === written && tail.equals(bytes.subarray(0, written))) {
+        fs.ftruncateSync(fd, size - written);
+      }
     } catch {
       // The append error is the one to report.
     }
     throw err;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
