@@ -419,3 +419,16 @@ test('given the temp file cannot be removed once linked, when cv-write seeds an 
   assert.equal(res.stdout.trim(), 'created');
   assert.equal(fs.readFileSync(path.join(data, 'cv.md'), 'utf8'), '# New resume\n');
 });
+
+test('given the volume refuses hard links and cv.md is a dangling symlink, when cv-write seeds it, then it refuses as the link path does and keeps the symlink (R27 merge review)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  fs.mkdirSync(data);
+  fs.symlinkSync(path.join(d, 'nowhere.md'), path.join(data, 'cv.md'));
+  const r = put(path.join(d, 'resume.md'), '# New resume\n');
+  const res = seedWith(linkFs(d, 'eperm'), ['cv-write', '--data', data, '--resume', r]);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /appeared while it was being written/);
+  assert.equal(fs.readlinkSync(path.join(data, 'cv.md')), path.join(d, 'nowhere.md'));
+  assert.deepEqual(fs.readdirSync(data), ['cv.md'], 'no temp file is left');
+});

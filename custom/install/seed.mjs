@@ -146,7 +146,15 @@ function linkNew(tmp, file) {
     fs.linkSync(tmp, file);
   } catch (err) {
     if (!['EPERM', 'ENOTSUP', 'ENOSYS', 'EOPNOTSUPP'].includes(err.code)) throw err;
-    if (exists(file)) throw Object.assign(new Error(`${file} appeared while it was being written`), { code: 'EEXIST' });
+    // lstat, not exists: a dangling symlink in cv.md's place blocks the link, so it blocks the rename too.
+    let taken = true;
+    try {
+      fs.lstatSync(file);
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+      taken = false;
+    }
+    if (taken) throw Object.assign(new Error(`${file} appeared while it was being written`), { code: 'EEXIST' });
     fs.renameSync(tmp, file);
     return;
   }
