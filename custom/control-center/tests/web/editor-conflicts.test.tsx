@@ -151,6 +151,20 @@ describe('cv.md editor (Profile & CV)', () => {
     expect(writes()[0]!.headers['If-Match']).toBe('c1');
     expect(alerts()).toBe('');
   });
+
+  it('given Save clicked twice before the page re-renders, then one PUT goes out and the save is not shown as a change on disk', async () => {
+    const editor = await mountEditor();
+    await type(editor, '# CV\n- typed here\n');
+    const save = button('Save')!;
+    await act(async () => {
+      save.click();
+      save.click();
+    });
+    await until(() => document.body.textContent?.includes('Saved cv.md'), 'the saved note');
+    expect(writes()).toHaveLength(1);
+    expect(alerts()).toBe('');
+    expect(document.body.textContent).not.toContain('Current version on disk');
+  });
 });
 
 describe('raw YAML editor (Settings)', () => {

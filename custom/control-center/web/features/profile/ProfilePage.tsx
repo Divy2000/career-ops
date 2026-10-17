@@ -51,6 +51,8 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
   const [conflict, setConflict] = useState<UserFile | null>(null);
   // One save at a time: a second PUT on the same ETag would come back 409 and show the user's own save as a change on disk.
   const [saving, setSaving] = useState(false);
+  // The disabled button lags a click by a render: a second click before it would still send that second PUT.
+  const savingNow = useRef(false);
   const text = draft ?? q.data?.text ?? '';
   useUnsaved(label, draft !== null && draft !== (q.data?.text ?? ''));
   const onEdit = (value: string) => {
@@ -59,6 +61,8 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
     setDraft(value);
   };
   const save = async () => {
+    if (savingNow.current) return;
+    savingNow.current = true;
     setNote(null);
     const from = edit.base ?? q.data;
     const etag = from?.etag ?? null;
@@ -84,6 +88,7 @@ export function UserFileEditor({ fileKey, label }: { fileKey: string; label: str
         setNote({ tone: 'danger', text: 'The file changed on disk since you loaded it. Review the current version below, then save again to overwrite it.' });
       } else setNote({ tone: 'danger', text: `Could not save: ${describeError(err)}` });
     } finally {
+      savingNow.current = false;
       setSaving(false);
     }
   };
