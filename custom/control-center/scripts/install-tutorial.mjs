@@ -299,8 +299,8 @@ function partCopies(manifest) {
 
 /** One file on disk, whatever the path spelling: on a case-insensitive disk "Poster.jpg" and "poster.jpg" are. */
 function sameFile(a, b) {
-  const x = fs.statSync(a);
-  const y = fs.statSync(b);
+  const x = fs.statSync(a, { bigint: true });
+  const y = fs.statSync(b, { bigint: true });
   return x.dev === y.dev && x.ino === y.ino;
 }
 
