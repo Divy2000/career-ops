@@ -84,7 +84,12 @@ export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): Ap
   const abs = path.join(dataRoot, SETTINGS_REL);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = `${abs}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
-  fs.renameSync(tmp, abs);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+    fs.renameSync(tmp, abs);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
   return next;
 }
