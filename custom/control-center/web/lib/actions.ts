@@ -61,6 +61,25 @@ export function actionOutputText(result: unknown, stderr?: string): string | nul
   return text || null;
 }
 
+// The POSTs a registry action sends while a caller's code runs synchronously (see watchActionPosts).
+let watching: Promise<unknown>[] | null = null;
+
+/**
+ * Calls fn and returns, with its value, the answer of every action POST fn sent before returning (run sends its POST
+ * synchronously, before its first await). An action button keeps its lock until those answers, which can take longer
+ * than any timer, rather than until the run's whole promise, which also waits on a runs refetch with no limit.
+ */
+export function watchActionPosts<T>(fn: () => T): { value: T; posts: Promise<unknown>[] } {
+  const outer = watching;
+  const posts: Promise<unknown>[] = [];
+  watching = posts;
+  try {
+    return { value: fn(), posts };
+  } finally {
+    watching = outer;
+  }
+}
+
 export type RunMessage = { tone: 'ok' | 'danger'; text: string };
 export type RunResult = { message: RunMessage; output: string | null };
 
@@ -85,7 +104,9 @@ export function useRunAction() {
       opts.onSettled?.({ message: m, output: o });
     };
     try {
-      const out = await apiSend<ActionOutcome>('POST', `/api/actions/${id}`, opts.confirmed ? { params, confirmed: true } : { params });
+      const post = apiSend<ActionOutcome>('POST', `/api/actions/${id}`, opts.confirmed ? { params, confirmed: true } : { params });
+      watching?.push(post.catch(() => undefined));
+      const out = await post;
       if ('findings' in out && out.findings) {
         settle({ tone: 'danger', text: out.findings }, actionOutputText(out.result, out.stderr));
         toast.warning(out.findings);
