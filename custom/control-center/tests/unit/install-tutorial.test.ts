@@ -39,6 +39,16 @@ function asAnotherFile(name: string) {
   }) as typeof fs.statSync);
 }
 
+/** Reports inode 0 for every file, as some FUSE and network disks do. */
+function inodesAllZero() {
+  const realStat = fs.statSync;
+  vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
+    const st = realStat(p, o);
+    if (st) st.ino = typeof st.ino === 'bigint' ? 0n : 0;
+    return st;
+  }) as typeof fs.statSync);
+}
+
 /** The folder layout of a recording: chapters/toc.json, one mp4, one srt and tutorial/script.md. */
 function recordingFolder() {
   write('chapters/toc.json', JSON.stringify(TOC));
@@ -283,13 +293,21 @@ describe('installTutorial with a quick guide', () => {
     folder({ manifest: { ...manifest, poster: 'poster.jpg' }, guide: JSON.stringify({ sections: [{ ...GUIDE.sections[0], poster: 'Poster.jpg' }] }) });
     write('poster.jpg', 'POSTER');
     if (!fs.existsSync(path.join(src(), 'Poster.jpg'))) fs.linkSync(path.join(src(), 'poster.jpg'), path.join(src(), 'Poster.jpg'));
-    const realStat = fs.statSync;
-    vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike, o?: fs.StatSyncOptions) => {
-      const st = realStat(p, o);
-      if (st) st.ino = typeof st.ino === 'bigint' ? 0n : 0;
-      return st;
-    }) as typeof fs.statSync);
+    inodesAllZero();
     expect(() => installTutorial({ source: src(), dataRoot })).toThrow(/"Poster\.jpg" is used by both the poster and the guide poster file/);
+  });
+
+  it('installs one file named twice by the same name on a disk that reports inode 0 for every file', () => {
+    folder({ manifest: { ...manifest, poster: 'today.jpg' } });
+    inodesAllZero();
+    installTutorial({ source: src(), dataRoot });
+    expect(fs.readFileSync(path.join(dest('guided'), 'today.jpg'), 'utf8')).toBe('JPEG');
+  });
+
+  it('installs a guide that is the tutorial.json itself on a disk that reports inode 0 for every file', () => {
+    folder({ manifest: { ...manifest, guide: 'tutorial.json', sections: [GUIDE.sections[0]] }, guide: null });
+    inodesAllZero();
+    expect(installTutorial({ source: src(), dataRoot }).files).toContain('tutorial.json');
   });
 
   it('refuses a guide whose name differs from tutorial.json only in case, which the manifest would overwrite', () => {

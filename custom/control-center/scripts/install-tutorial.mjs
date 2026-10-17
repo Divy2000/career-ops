@@ -306,6 +306,7 @@ const diskKey = (name) => name.normalize('NFC').toUpperCase().toLowerCase().norm
 
 /** One file on disk, whatever the path spelling: on a case-insensitive disk "Poster.jpg" and "poster.jpg" are. */
 function sameFile(a, b) {
+  if (path.resolve(a) === path.resolve(b)) return true;
   const x = fs.statSync(a, { bigint: true });
   const y = fs.statSync(b, { bigint: true });
   // Some FUSE and network disks report inode 0 for every file, so a 0 proves nothing.
