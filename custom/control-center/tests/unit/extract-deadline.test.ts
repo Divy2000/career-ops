@@ -52,7 +52,7 @@ export const detectPdfExtractor = () => ({ name: 'fake', extract: () => execFile
   });
 
   it('hands the extractor only the variables a PDF tool needs, so no other credential reaches it', async () => {
-    const needed = { PATH: '/usr/bin:/bin', HOME: '/home/u', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TMPDIR: '/tmp', TZ: 'UTC', CAREER_OPS_ROOT: '/data', CAREER_OPS_DATA_DIR: '/data', CAREER_OPS_DOCUMENTS_DIR: '/data/documents', CAREER_OPS_INTAKE_STATE: '/data/data/intake-state.json' };
+    const needed = { PATH: '/usr/bin:/bin', HOME: '/home/u', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8', TMPDIR: '/tmp', TZ: 'UTC', CAREER_OPS_ROOT: '/data', CAREER_OPS_DATA_DIR: '/data', CAREER_OPS_DOCUMENTS_DIR: '/data/documents', CAREER_OPS_INTAKE_STATE: '/data/data/intake-state.json', LD_LIBRARY_PATH: '/opt/poppler/lib', DYLD_LIBRARY_PATH: '/opt/poppler/lib', DYLD_FALLBACK_LIBRARY_PATH: '/opt/poppler/lib' };
     const secrets = { OPENAI_API_KEY: 'sk-openai', GITHUB_TOKEN: 'ghp-leak', AWS_SECRET_ACCESS_KEY: 'aws-leak', GOOGLE_APPLICATION_CREDENTIALS: '/k.json', DATABASE_URL: 'postgres://u:p@h/db', NPM_CONFIG__AUTH: 'npm-leak', CAREER_OPS_API_KEY: 'co-leak', CAREER_OPS_GITHUB_PAT: 'ghp-co-leak', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8000' };
     const seen = await childEnvKeys({ ...needed, ...secrets });
     expect(Object.keys(secrets).filter((k) => seen.has(k))).toEqual([]);
