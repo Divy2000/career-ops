@@ -10,12 +10,12 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
 const claudeBin = process.env.CC_CLAUDE_BIN?.trim() || 'claude';
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-probe-'));
 const token = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8' });
 if (token.status !== 0 || !token.stdout.trim()) {
   console.error('Keychain item career-ops-claude-token not found');
   process.exit(1);
 }
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-probe-'));
 // Same as claude-probe-reads.mjs: no nested-session or provider variables reach the CLI, and it never auto-updates past the approved version.
 const BASE_ENV = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k))), DISABLE_AUTOUPDATER: '1' };
 const env = { ...BASE_ENV, CLAUDE_CODE_OAUTH_TOKEN: token.stdout.trim(), ANTHROPIC_API_KEY: '' };

@@ -85,6 +85,7 @@ describe('claude-probe.mjs (npm run probe:claude)', () => {
       expect(r.status, JSON.stringify(stored) + r.stdout).toBe(1);
       expect(r.stderr).toMatch(/Keychain item career-ops-claude-token not found/);
       expect(fs.readdirSync(box.calls)).toEqual([]);
+      expect(fs.readdirSync(box.tmp), 'a refused run leaves no temp dir').toEqual([]);
     }
   });
 });
