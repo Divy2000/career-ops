@@ -138,6 +138,25 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     expect(onRun).toHaveBeenCalledTimes(2);
   });
 
+  it('given the run never settles (its runs refetch stalls), then the button is locked only until the server 30 s sync timeout has passed (R27-comp-actionbar-01)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { onRun, button } = await renderPending();
+      await press(button);
+      await act(async () => vi.advanceTimersByTime(34_000));
+      expect(button.disabled).toBe(true);
+      await press(button);
+      expect(onRun).toHaveBeenCalledTimes(1);
+      await act(async () => vi.advanceTimersByTime(2_000));
+      await settle();
+      expect(button.disabled).toBe(false);
+      await press(button);
+      expect(onRun).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('given the run failed, then the failure is logged and the next click starts it again', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const { onRun, releases, button } = await renderPending();

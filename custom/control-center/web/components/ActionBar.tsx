@@ -8,10 +8,22 @@ export function CostPill({ cost }: { cost: ActionMeta['cost'] }) {
   return <Pill tone={cost === 'tokens' ? 'warn' : cost === 'network' ? 'info' : 'neutral'}>{label}</Pill>;
 }
 
+// A run's promise can outlast its POST (useRunAction waits on a runs refetch that has no limit of its own). The lock
+// ends once the server's 30 s sync timeout has surely answered the POST, so a stalled refetch cannot lock the button for good.
+const RUN_LOCK_LIMIT_MS = 35_000;
+async function withinRunLockLimit(run: void | Promise<unknown>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([run, new Promise<void>((resolve) => (timer = setTimeout(resolve, RUN_LOCK_LIMIT_MS)))]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Button for a registry action: shows the cost badge and asks (Radix dialog) when the action declares a confirm text.
  * onRun gets `confirmed: true` once the user confirmed, which the request must carry (the server refuses otherwise).
- * An onRun that returns its run's promise keeps the button from starting the run again until it settles.
+ * An onRun that returns its run's promise keeps the button from starting the run again until it settles (at most RUN_LOCK_LIMIT_MS).
  */
 export function ActionButton({ meta, onRun, disabled, children, params }: { meta: ActionMeta | undefined; onRun: (params: Record<string, unknown>, opts: { confirmed: boolean }) => void | Promise<unknown>; disabled?: boolean; children?: ReactNode; params?: Record<string, unknown> }) {
   const confirm = useConfirm();
@@ -49,7 +61,7 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
             if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
             started = true;
             setRunning(true);
-            await onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
+            await withinRunLockLimit(onRun(params ?? {}, { confirmed: Boolean(meta.confirm) }));
           } catch (err) {
             console.error(`${meta.id} failed:`, err);
           } finally {
