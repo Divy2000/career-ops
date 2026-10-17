@@ -1191,3 +1191,107 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
     expect(item.dataset.proposalState).toBe('done');
   });
 });
+
+describe('Ask drawer: an evaluateCompany skips postings whose evaluation started while the confirm was open (R29-shared-comp-X-01)', () => {
+  const U1 = 'https://jobs.acme.example/1';
+  const U2 = 'https://jobs.acme.example/2';
+  let posts: Array<{ url: string; body: unknown }>;
+  let listed: Array<Record<string, unknown>>;
+  let answerSingleStart: (() => void) | null;
+  const row = (url: string) => ({ url, company: 'Acme', role: 'Engineer', location: null, compensation: null, done: false, section: 'pending', postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'manual', seniority: null, line: 1 });
+  const oferta = (id: string, url: string, status = 'running') => ({ id, mode: 'oferta', status, target: { type: 'url', value: url } });
+  beforeEach(async () => {
+    posts = [];
+    listed = [];
+    answerSingleStart = null;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init.body)) });
+          if (url === '/api/sessions/fanout') return json({ sessions: [{ id: 's-fan' }], reserved: [50] }, 202);
+          // A single Evaluate elsewhere, still waiting on its answer.
+          await new Promise<void>((r) => (answerSingleStart = r));
+          return json(oferta('s-single', U1, 'queued'), 202);
+        }
+        if (url === '/api/pipeline') return json({ kind: 'ok', path: 'data/pipeline.md', etag: 'e1', rows: [row(U1), row(U2)] });
+        if (url === '/api/sessions') return json(listed);
+        return json([]);
+      }),
+    );
+    await remountDrawer();
+  });
+  afterEach(async () => {
+    // A start left waiting would stay in the shared in-flight map for the next test.
+    await act(async () => answerSingleStart?.());
+    vi.unstubAllGlobals();
+  });
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+  const propose = async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluateCompany', params: { company: 'Acme' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    expect(document.body.querySelector('.dialog')?.textContent).toContain('2 pending Inbox postings at Acme');
+    return item;
+  };
+  const fannedOut = () => posts.filter((p) => p.url === '/api/sessions/fanout').map((p) => (p.body as { urls: string[] }).urls);
+
+  it('given an oferta session for one posting started on the server while the confirm was open, Do it starts only the other', async () => {
+    const item = await propose();
+    listed = [oferta('s-elsewhere', `${U1}?utm_source=linkedin`)];
+    await act(async () => bodyButton('Do it')!.click());
+    await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+    expect(fannedOut()).toEqual([[U2]]);
+  });
+
+  it('given every posting started elsewhere while the confirm was open, Do it starts nothing and says so', async () => {
+    const item = await propose();
+    listed = [oferta('s-a', U1), oferta('s-b', U2, 'awaiting_user')];
+    await act(async () => bodyButton('Do it')!.click());
+    await until(() => item.dataset.proposalState === 'failed' || undefined, 'the proposal failed');
+    expect(fannedOut()).toEqual([]);
+    expect(item.textContent).toContain('Every pending Inbox posting at Acme is already being evaluated.');
+  });
+
+  it('given an evaluate of a posting whose oferta session started elsewhere while the confirm was open, Do it opens that session and starts none', async () => {
+    await act(async () => emitEnvelope!('act', { action: 'evaluate', params: { url: U1 } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    listed = [oferta('s-elsewhere', U1)];
+    await act(async () => bodyButton('Do it')!.click());
+    await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+    expect(posts).toEqual([]);
+    expect(navigations.at(-1)).toEqual({ to: '/sessions/$id', params: { id: 's-elsewhere' } });
+  });
+
+  it('given a single Evaluate start for one posting still awaiting its answer, Do it starts only the other', async () => {
+    const { useStartEvaluation } = await import('@web/features/today/evaluate');
+    let start: ((ref: string) => Promise<unknown>) | null = null;
+    const Probe = () => {
+      start = useStartEvaluation();
+      return null;
+    };
+    const probeHost = document.createElement('div');
+    document.body.append(probeHost);
+    const probeRoot = createRoot(probeHost);
+    await act(async () => probeRoot.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Probe))));
+    try {
+      const item = await propose();
+      let single: Promise<unknown> | null = null;
+      await act(async () => void (single = start!(U1)));
+      await until(() => answerSingleStart, 'the single start sent');
+      await act(async () => bodyButton('Do it')!.click());
+      await until(() => item.dataset.proposalState === 'done' || undefined, 'the proposal done');
+      expect(fannedOut()).toEqual([[U2]]);
+      await act(async () => {
+        answerSingleStart!();
+        await single;
+      });
+    } finally {
+      await act(async () => probeRoot.unmount());
+      probeHost.remove();
+    }
+  });
+});
