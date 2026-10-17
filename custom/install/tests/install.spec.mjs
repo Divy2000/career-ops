@@ -972,6 +972,16 @@ test('given --core-only on macOS with the Keychain item stored, when --onboard h
   assert.doesNotMatch(r.out, /Store the Keychain token/);
 });
 
+test('given --core-only on Linux, when --onboard headless runs, then it says headless onboarding needs macOS and never suggests dropping --core-only (R28-scripts-b-L2-01 review)', () => {
+  const { w, D } = fresh();
+  const r = w.run(['--dir', D, '--non-interactive', '--core-only', '--no-start', '--no-h1b-index', '--onboard', 'headless'], { env: { FAKE_UNAME: 'Linux' } });
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.claudeArgv(), null);
+  assert.match(r.out, /Headless onboarding reads the Claude token from the macOS Keychain, so it runs only on macOS\./);
+  assert.doesNotMatch(r.out, /without --core-only/);
+  assert.doesNotMatch(r.out, /Store the Keychain token/);
+});
+
 // ---------------------------------------------------------------- plan confirmation
 
 test('on a terminal the plan is confirmed first; n aborts with exit 1 and nothing changes', () => {
