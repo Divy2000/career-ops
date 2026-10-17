@@ -158,7 +158,12 @@ export function writeProgress(file: string, p: TurnProgress): void {
     fs.writeFileSync(tmp, JSON.stringify(p));
     fs.renameSync(tmp, file);
   } catch (err) {
-    fs.rmSync(tmp, { force: true });
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch (cleanup) {
+      // The save's own failure is what the caller acts on; a later read sweeps this temp file.
+      console.warn(`[sessions] could not remove the progress temp file ${tmp}: ${(cleanup as Error).message}`);
+    }
     throw err;
   }
 }

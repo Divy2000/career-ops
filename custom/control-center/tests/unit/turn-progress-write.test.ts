@@ -27,6 +27,28 @@ describe("a turn's saved transcript progress", () => {
     expect(() => writeProgress(file, { rawSeq: 1, rawOffset: 0 })).toThrow();
     expect(fs.readdirSync(dir)).toEqual(['progress.json']);
   });
+  it('given a save whose rename fails and whose temp file cannot be removed either, when it throws, then the rename failure is what is thrown', () => {
+    const dir = tempDir('cc-progress-');
+    const file = path.join(dir, 'progress.json');
+    fs.mkdirSync(file);
+    fs.writeFileSync(path.join(file, 'x'), '');
+    const rm = vi.spyOn(fs, 'rmSync').mockImplementation(() => {
+      throw Object.assign(new Error('EPERM: operation not permitted, unlink'), { code: 'EPERM' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let thrown: NodeJS.ErrnoException | undefined;
+      try {
+        writeProgress(file, { rawSeq: 1, rawOffset: 0 });
+      } catch (err) {
+        thrown = err as NodeJS.ErrnoException;
+      }
+      expect(thrown?.syscall).toBe('rename');
+    } finally {
+      rm.mockRestore();
+      warn.mockRestore();
+    }
+  });
   it('given temp files left by a save that crashed before its rename, when progress is read, then those of a process that is gone or that are old are swept, and a live peer\'s save in flight is kept', () => {
     const dir = tempDir('cc-progress-');
     const file = path.join(dir, 'progress.json');
