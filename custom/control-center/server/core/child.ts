@@ -34,6 +34,9 @@ export function runModule(code: string, opts: { cwd: string; env: NodeJS.Process
       clearTimeout(timer);
       resolve({ code: code ?? 1, stdout, stderr });
     });
+    // A child that exits before reading all of its input (a failed import) breaks the pipe: an unhandled EPIPE would take
+    // the server down, and 'close' already reports the exit code and stderr.
+    child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify(opts.input));
   });
 }

@@ -17,7 +17,7 @@ import { dedupUrlKey } from '@shared/dedup-url';
 import { plainPostingUrl, postingUrl } from '@shared/posting-url';
 import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
-import { useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
+import { activeEvaluationIn, evaluationStarting, useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
 import { useTracker } from '../lib/queries';
 import { STATES } from '../features/tracker/StatusControl';
@@ -96,6 +96,8 @@ async function isPendingInboxRow(url: string): Promise<boolean> {
   return pipeline.kind === 'ok' && pipeline.rows.some((r) => !r.done && dedupUrlKey(r.url) === key);
 }
 
+const allBeingEvaluated = (company: string, leftOut: string | null) =>
+  leftOut ? `Every other pending Inbox posting at ${company} is already being evaluated. ${leftOut}` : `Every pending Inbox posting at ${company} is already being evaluated.`;
 const PROCESS_INBOX_RUNNING = 'Process inbox is evaluating the pending rows: an evaluation started now would evaluate, report and bill them a second time. Try again once it ends.';
 
 export function useAskHotkey(toggle: () => void): void {
@@ -218,9 +220,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
       try {
         const pending = await pendingUrlsAt(company);
         companyLeftOut = pending.leftOut;
-        companyUrls = pending.urls.filter((u) => !activeFor(u));
+        companyUrls = pending.urls.filter((u) => !activeFor(u) && !evaluationStarting(u));
         if (companyUrls.length === 0) {
-          update(p.id, { state: 'failed', note: companyLeftOut ? `Every other pending Inbox posting at ${company} is already being evaluated. ${companyLeftOut}` : `Every pending Inbox posting at ${company} is already being evaluated.` });
+          update(p.id, { state: 'failed', note: allBeingEvaluated(company, companyLeftOut) });
           return;
         }
       } catch (err) {
@@ -287,7 +289,8 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         case 'evaluate': {
           const url = String(p.params.url).trim();
           // A posting still being evaluated opens that session rather than a second paid one, as Evaluate visible does.
-          const active = activeFor(url);
+          // Read fresh, not from the 5 s poll: it may have started elsewhere while the confirm was open.
+          const active = activeEvaluationIn(await apiGet<SessionMeta[]>('/api/sessions'), url);
           if (active) {
             await router.navigate({ to: '/sessions/$id', params: { id: active.id } });
             break;
@@ -308,6 +311,16 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         case 'evaluateCompany': {
           let outcome: ReturnType<typeof fanoutOutcome>;
           try {
+            // Checked again, fresh rather than from the 5 s poll: a posting may have started evaluating elsewhere while the
+            // confirm was open, and neither the sessions route nor the manager dedupes oferta sessions by target. A start
+            // still awaiting its answer is in no list: one pending before the read, or still pending after it, counts.
+            const startingBefore = new Set(companyUrls.filter(evaluationStarting));
+            const list = await apiGet<SessionMeta[]>('/api/sessions');
+            companyUrls = companyUrls.filter((u) => !startingBefore.has(u) && !evaluationStarting(u) && !activeEvaluationIn(list, u));
+            if (companyUrls.length === 0) {
+              update(p.id, { state: 'failed', note: allBeingEvaluated(company, companyLeftOut) });
+              return;
+            }
             outcome = fanoutOutcome(await fanOut('oferta', companyUrls));
           } finally {
             await letGo();
