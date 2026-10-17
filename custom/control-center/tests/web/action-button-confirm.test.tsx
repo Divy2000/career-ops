@@ -89,6 +89,38 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     expect(button.disabled).toBe(false);
   });
 
+  it('given the disabled button lost focus to the page during its run, then focus is back on it once the run settles', async () => {
+    const { releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    // A browser moves focus off a focused button that becomes disabled; jsdom does not (and ignores blur() on one), so
+    // the test drops focus to the page through an element that goes away.
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('given the user moved focus elsewhere during the run, then the settled run leaves it there', async () => {
+    const { releases, button } = await renderPending();
+    const other = document.createElement('input');
+    document.body.append(other);
+    try {
+      button.focus();
+      await press(button);
+      other.focus();
+      await act(async () => releases[0]!(true));
+      await settle();
+      expect(document.activeElement).toBe(other);
+    } finally {
+      other.remove();
+    }
+  });
+
   it('given the run settled, then the next click starts it again', async () => {
     const { onRun, releases, button } = await renderPending();
     await press(button);

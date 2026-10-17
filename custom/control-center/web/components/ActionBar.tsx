@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Pill } from './ui';
 import { useConfirm } from './ConfirmDialog';
 import type { ActionMeta } from '@shared/api';
@@ -21,9 +21,20 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
   // Shown while the run is in flight, so a click it ignores does not look like a dead button. Not while the confirm
   // is open: the dialog hands focus back to this button when it closes.
   const [running, setRunning] = useState(false);
+  // A browser drops focus to the page from a focused button that becomes disabled: once the run ends and the button is
+  // enabled again, focus goes back to it, unless the user has put it somewhere else meanwhile.
+  const button = useRef<HTMLButtonElement>(null);
+  const ran = useRef(false);
+  useEffect(() => {
+    if (running || !ran.current) return;
+    ran.current = false;
+    const active = document.activeElement;
+    if (active === null || active === document.body) button.current?.focus();
+  }, [running]);
   if (!meta) return null;
   return (
     <button
+      ref={button}
       type="button"
       disabled={disabled || running}
       title={meta.confirm ?? undefined}
@@ -31,14 +42,17 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
         if (asking.current) return;
         asking.current = true;
         void (async () => {
+          let started = false;
           try {
             if (meta.confirm && !(await confirm({ title: meta.label, body: meta.confirm, confirmLabel: 'Run', danger: true }))) return;
+            started = true;
             setRunning(true);
             await onRun(params ?? {}, { confirmed: Boolean(meta.confirm) });
           } catch (err) {
             console.error(`${meta.id} failed:`, err);
           } finally {
             asking.current = false;
+            ran.current = started;
             setRunning(false);
           }
         })();
