@@ -105,6 +105,25 @@ describe('ActionButton while its run is in flight (R27-shared-comp-X-01)', () =>
     expect(document.activeElement).toBe(button);
   });
 
+  it('given the caller keeps the button off after the run settles (its started run is still going), then focus is back on it once the caller turns it on (R27-comp-actionbar-02)', async () => {
+    const { onRun, releases, button } = await renderPending();
+    button.focus();
+    await press(button);
+    const gone = document.createElement('input');
+    document.body.append(gone);
+    gone.focus();
+    gone.remove();
+    // The run's answer gave the caller a run id it now watches: the button stays off until that run ends.
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: true }))));
+    await act(async () => releases[0]!(true));
+    await settle();
+    expect(button.disabled).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => root.render(createElement(ConfirmProvider, null, createElement(ActionButton, { meta: meta(null), onRun, disabled: false }))));
+    await settle();
+    expect(document.activeElement).toBe(button);
+  });
+
   it('given the button did not have focus when its run started (a mouse click in Safari), then the settled run does not focus it', async () => {
     const { releases, button } = await renderPending();
     expect(document.activeElement).toBe(document.body);

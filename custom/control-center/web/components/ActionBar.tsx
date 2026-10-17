@@ -35,20 +35,22 @@ export function ActionButton({ meta, onRun, disabled, children, params }: { meta
   const [running, setRunning] = useState(false);
   // A browser drops focus to the page from a focused button that becomes disabled: once the run ends and the button is
   // enabled again, focus goes back to it if it had focus at the click, unless the user has put it somewhere else meanwhile.
+  // A caller can keep it off past the run (the run it started is still going), so this waits for the button to be on.
   const button = useRef<HTMLButtonElement>(null);
   const ran = useRef(false);
+  const off = Boolean(disabled) || running;
   useEffect(() => {
-    if (running || !ran.current) return;
+    if (off || !ran.current) return;
     ran.current = false;
     const active = document.activeElement;
     if (active === null || active === document.body) button.current?.focus();
-  }, [running]);
+  }, [off]);
   if (!meta) return null;
   return (
     <button
       ref={button}
       type="button"
-      disabled={disabled || running}
+      disabled={off}
       title={meta.confirm ?? undefined}
       onClick={() => {
         if (asking.current) return;
