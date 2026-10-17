@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
+import { execNoShell, type Exec } from '../../server/routes/system.js';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const TERMINAL = ['done', 'awaiting_user', 'error', 'cancelled'];
@@ -84,7 +85,12 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
 
   it('given a running Batch evaluate turn whose sentinel the stale GC collected, when the turn ends, then no release runs that could remove a reservation written in the meantime, and the loss is warned of', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const app = await makeTestApp();
+    const releases: string[] = [];
+    const recording: Exec = async (cmd, args, opts) => {
+      if (args.includes('--release')) releases.push(args[args.indexOf('--release') + 1]!);
+      return execNoShell(cmd, args, opts);
+    };
+    const app = await makeTestApp({}, { exec: recording });
     try {
       const { id, n, go } = await startHeld(app, 'https://jobs.example.com/synthetic/r27-x01-gone');
       fs.rmSync(sentinelPath(app, n));
@@ -93,6 +99,7 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
 
       const { meta } = await settleOn(app, id);
       expect(meta.lastReason).toMatch(new RegExp(`report number ${n} was already lost`));
+      expect(releases).not.toContain(String(n));
     } finally {
       await app.close();
       warn.mockRestore();
@@ -113,10 +120,22 @@ describe('a reserved report number held by a long-running turn (R27-claude-X-01)
         throw new Error('EIO: i/o error, read');
       });
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const said = () => warn.mock.calls.flat().filter((m) => String(m).includes('could not refresh the reservation')).length;
       await until(() => refused >= 8);
       spy.mockRestore();
       // Said once, not on every tick while the record stays unreadable.
-      expect(warn.mock.calls.flat().filter((m) => String(m).includes('could not refresh the reservation')).length).toBe(1);
+      expect(said()).toBe(1);
+      // Once it reads again, a later failure is a new one and is said again.
+      await wait(1000);
+      const again = refused;
+      const spyAgain = vi.spyOn(app.sessions.store, 'read').mockImplementation((sid: string) => {
+        if (sid !== id) return read(sid);
+        refused++;
+        throw new Error('EIO: i/o error, read');
+      });
+      await until(() => refused >= again + 3);
+      spyAgain.mockRestore();
+      expect(said()).toBe(2);
       warn.mockRestore();
       go();
 

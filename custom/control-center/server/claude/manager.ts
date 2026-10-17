@@ -757,6 +757,8 @@ export class SessionManager {
     try {
       // Read inside the try: the tracker tick calling this must never throw (an unreadable record waits for the next tick).
       const meta = this.store.read(id);
+      // Read again: a later failure is a new one, said again.
+      this.reservationWarned.delete(`${id}\0refresh`);
       num = meta?.reportNum ?? null;
       if (!meta || num === null || meta.creditedReport?.num === num) return;
       const sentinel = this.sentinelPath(num);
