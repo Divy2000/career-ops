@@ -46,6 +46,9 @@ export type ReportRead =
 
 const RESERVED_RE = /^\d+-RESERVED\.md$/;
 const NUMBERED_RE = /^(\d+)-.*\.md$/;
+// A name that is entirely a date is a digest (scan-ats-full.mjs --md-out reports/ writes reports/YYYY-MM-DD.md), not
+// report #YYYY; reserve-report-num.mjs skips the same names.
+const BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
 const EM_DASH = String.fromCharCode(0x2014);
 
 export function isReservedReportFile(name: string): boolean {
@@ -53,6 +56,7 @@ export function isReservedReportFile(name: string): boolean {
 }
 
 export function reportNumberOf(name: string): number | null {
+  if (BARE_DATE_RE.test(name)) return null;
   const m = name.match(NUMBERED_RE);
   return m ? parseInt(m[1]!, 10) : null;
 }

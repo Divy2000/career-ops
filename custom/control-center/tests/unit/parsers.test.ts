@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseReport, readReport, listReportFiles, parseScore, splitSections, isReservedReportFile } from '../../server/domains/reports.js';
+import { parseReport, readReport, listReportFiles, parseScore, splitSections, isReservedReportFile, reportNumberOf } from '../../server/domains/reports.js';
 import { readTracker, postedFromNotes, pdfPresent } from '../../server/domains/tracker.js';
 import { parsePipeline, parseRankCell, readPipeline, seniorityOf, sourceOf } from '../../server/domains/pipeline.js';
 import { parseShortlist, readShortlist } from '../../server/domains/shortlist.js';
@@ -31,6 +31,16 @@ describe('reports', () => {
     expect([...files.keys()]).toEqual([1, 2, 3, 4, 6, 7]);
     expect(isReservedReportFile('005-RESERVED.md')).toBe(true);
     expect(readReport(root, 5)).toMatchObject({ kind: 'reserved', file: '005-RESERVED.md' });
+  });
+
+  it('does not read a bare-date digest such as reports/2026-10-17.md as report #2026 (R28-mgr-rev-05)', () => {
+    const dated = copyFixtureRoot();
+    fs.writeFileSync(path.join(dated, 'reports', '2026-10-17.md'), '# Scan digest 2026-10-17\n');
+    expect([...listReportFiles(dated).keys()]).toEqual([1, 2, 3, 4, 6, 7]);
+    expect(readReport(dated, 2026)).toEqual({ kind: 'missing', num: 2026 });
+    expect(reportNumberOf('2026-10-17.md')).toBeNull();
+    expect(reportNumberOf('2026-acme-2026-10-17.md')).toBe(2026);
+    expect(reportNumberOf('1001-taken.md')).toBe(1001);
   });
 
   it('parses the header, Machine Summary and the Block A table oferta writes', () => {
