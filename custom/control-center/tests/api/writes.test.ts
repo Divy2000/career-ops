@@ -503,6 +503,19 @@ describe('tracker delete identity guard edge cases (R28-feat-c-L1-01)', () => {
     expect(r.statusCode, r.body).toBe(200);
     expect(tracker()).not.toContain('Longname');
   });
+
+  it('given a "025" row ahead of #25 that the page shows as #25, when it is confirmed, then the refusal names the spelling to fix', async () => {
+    fs.appendFileSync(
+      path.join(d.cfg.dataRoot, 'data', 'applications.md'),
+      ['| 025 | 2026-10-08 | Spelled Corp | - | Engineer | 3.0/5 | Evaluated | ❌ | [20](../reports/020-spelled.md) | |', '| 25 | 2026-10-08 | Exact Corp | - | Engineer | 3.0/5 | Evaluated | ❌ | [21](../reports/021-exact.md) | |', ''].join('\n'),
+    );
+    const r = await confirmDelete({ n: 25, expectCompany: 'Spelled Corp', expectRole: 'Engineer', expectReport: 20 });
+    expect(r.statusCode, r.body).toBe(409);
+    // A fresh preview shows the same row, so the refusal points at the number cell instead.
+    expect(r.json().error).toMatch(/written "025"/);
+    expect(r.json().error).not.toMatch(/Preview the delete again/);
+    expect(tracker()).toContain('Exact Corp');
+  });
 });
 
 describe('documents', () => {

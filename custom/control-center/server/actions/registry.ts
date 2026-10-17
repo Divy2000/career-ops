@@ -233,23 +233,27 @@ interface DeleteParse {
  * The rows tracker.mjs delete --num n removes, matched as its removeRowByNum does (a trimmed table line whose number
  * cell is exactly n), each as the page shows it, or null for one too malformed to parse.
  */
-async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<Array<{ company: string; role: string; report: number | null } | null>> {
+async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<{ rows: Array<{ company: string; role: string; report: number | null } | null>; respelled: string | null }> {
   const [tp, file] = await Promise.all([importCore<DeleteParse>(ctx.codeRoot, 'tracker-parse.mjs'), resolveTrackerFile(ctx.codeRoot, ctx.dataRoot)]);
   let text: string;
   try {
     text = fs.readFileSync(file.canonical, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { rows: [], respelled: null };
     throw err;
   }
   const lines = text.split('\n').map((l) => l.trim());
   const colmap = tp.resolveColumns(lines);
-  return lines
-    .filter((l) => l.startsWith('|') && (l.split('|').map((c) => c.trim())[colmap.num!] ?? '') === String(n))
+  const numCell = (l: string) => (l.startsWith('|') ? (l.split('|').map((c) => c.trim())[colmap.num!] ?? '') : '');
+  const rows = lines
+    .filter((l) => numCell(l) === String(n))
     .map((l) => {
       const raw = tp.parseTrackerRow(l, colmap);
       return raw ? { company: raw.company ?? '', role: raw.role ?? '', report: tp.extractTrackerReportNumbers(raw.report ?? '', raw.notes ?? '')[0] ?? null } : null;
     });
+  // The page reads a number cell as parseInt does, so it can show a row written "024" as #24, which this delete skips.
+  const respelled = lines.map(numCell).find((c) => c !== String(n) && parseInt(c, 10) === n) ?? null;
+  return { rows, respelled };
 }
 
 export const ACTIONS: ActionDef[] = [
@@ -288,13 +292,14 @@ export const ACTIONS: ActionDef[] = [
     preview: (p) => p.dryRun,
     check: async (p, ctx) => {
       if (p.dryRun || (p.expectCompany === undefined && p.expectRole === undefined && p.expectReport === undefined)) return null;
-      const rows = await rowsDeletedUnder(ctx, p.n);
+      const { rows, respelled } = await rowsDeletedUnder(ctx, p.n);
       const matches = (r: (typeof rows)[number]) =>
         r !== null && (p.expectCompany === undefined || r.company === p.expectCompany) && (p.expectRole === undefined || r.role === p.expectRole) && (p.expectReport === undefined || r.report === p.expectReport);
       // tracker.mjs deletes every row numbered n, so each of them must be the previewed one.
       const other = rows.find((r) => !matches(r));
       if (other === undefined) return null;
       const named = other === null ? 'a row this page cannot read' : `${other.company} (${other.role})`;
+      if (respelled !== null) return { status: 409, error: `Row #${p.n} is also written "${respelled}" in applications.md, and this delete would remove ${named} instead of that row. Fix the number cell there first.` };
       // The page previews one row, so a number shared with a matching row stays refused however often it is previewed.
       if (rows.some(matches)) return { status: 409, error: `Row #${p.n} numbers more than one row (also ${named}), and deleting it would remove them all. Renumber the duplicate in applications.md (or run Deduplicate tracker) first.` };
       return { status: 409, error: `Row #${p.n} now holds ${named}, not only the row you previewed. Preview the delete again.` };
