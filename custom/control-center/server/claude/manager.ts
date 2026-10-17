@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
 import { pidAlive, type Runner } from '../runner/runner.js';
+import { createWhole, processStartTime, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS, type ProcessStart } from '../../supervisor/instance-lock.js';
 import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
@@ -223,6 +224,30 @@ function printedReservation(output: string): number[] {
   return Array.from({ length: end - start + 1 }, (_, i) => start + i);
 }
 
+/**
+ * Held in a session's guard folder while a process checks the session idle and starts its next turn (until beginTurn
+ * marks it running): two server processes on one data root (blue/green) would otherwise both start a paid turn on it.
+ */
+const TURN_CLAIM_FILE = 'turn.claim';
+/** Preparing a turn takes seconds; a claim this old was left by a process that never released it. */
+const TURN_CLAIM_STALE_MS = 15 * 60_000;
+let ownStart: ProcessStart | undefined;
+
+/** Whether the process a turn claim names is gone: dead, a reused PID, or the claim is cut short or stale. */
+function turnClaimGone(file: string, text: string): boolean {
+  let holder: { pid?: unknown; start?: unknown; at?: unknown };
+  try {
+    holder = JSON.parse(text) as typeof holder;
+  } catch {
+    return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
+  }
+  if (!Number.isInteger(holder.pid) || typeof holder.at !== 'number') return Date.now() - fs.statSync(file).mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
+  if (Date.now() - holder.at >= TURN_CLAIM_STALE_MS) return true;
+  const start = processStartTime(holder.pid as number);
+  if (start === null) return true;
+  return typeof start === 'number' && typeof holder.start === 'number' && start !== holder.start;
+}
+
 export interface ManagerDeps {
   readToken: TokenReader;
   exec: Exec;
@@ -347,11 +372,20 @@ export class SessionManager {
   }
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
-    const meta = this.must(id);
+    let meta = this.must(id);
     assertCurrentPolicy(meta);
     const policy = this.turnPolicy(meta.mode);
     // Checked and claimed synchronously: two requests racing past the token read would run two `claude --resume` on one session.
     this.assertIdle(meta);
+    const unclaimTurn = this.claimTurn(id);
+    try {
+      // Read again under the claim: another server process may have started a turn since.
+      meta = this.must(id);
+      this.assertIdle(meta);
+    } catch (err) {
+      unclaimTurn();
+      throw err;
+    }
     this.sending.add(id);
     try {
       // A fork that never reported its own Claude id (even one whose first turn never started) forks the source again;
@@ -368,6 +402,7 @@ export class SessionManager {
       }
     } finally {
       this.sending.delete(id);
+      unclaimTurn();
     }
   }
 
@@ -377,6 +412,13 @@ export class SessionManager {
     const policy = this.turnPolicy(first.mode);
     // A source with a turn starting or running would get a second paid run beside it, on the conversation it is writing.
     this.assertIdle(first, { finishing: false });
+    const unclaimTurn = this.claimTurn(id);
+    try {
+      this.assertIdle(this.must(id), { finishing: false });
+    } catch (err) {
+      unclaimTurn();
+      throw err;
+    }
     this.sending.add(id);
     try {
       // A cancelled turn still stopping may yet start the conversation, or write the report a replayed request would.
@@ -405,7 +447,28 @@ export class SessionManager {
       }
     } finally {
       this.sending.delete(id);
+      unclaimTurn();
     }
+  }
+
+  /**
+   * Takes the session's turn claim (TURN_CLAIM_FILE), or replaces one whose holder is gone; a live holder (another server
+   * process starting a turn on it) is refused as busy. Returns the release, which removes this claim and only this one.
+   */
+  private claimTurn(id: string): () => void {
+    const dir = this.store.guardDirOf(id);
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, TURN_CLAIM_FILE);
+    ownStart ??= processStartTime(process.pid);
+    const text = JSON.stringify({ pid: process.pid, start: ownStart, at: Date.now(), nonce: crypto.randomUUID() });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (createWhole(file, text)) return () => removeIf(file, text);
+      const seen = readOrNull(file);
+      if (seen === null) continue;
+      if (!turnClaimGone(file, seen)) break;
+      removeIf(file, seen);
+    }
+    throw new BusyError(`session ${id} is starting a turn in another server process`);
   }
 
   /**
