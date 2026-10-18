@@ -369,7 +369,16 @@ export function readReportFile(dataRoot: string, file: string): ReportRead {
 }
 
 function parseReportFile(dir: string, file: string, num: number): ReportRead {
-  const read = readText(path.join(dir, file));
+  let read: ReturnType<typeof readText>;
+  try {
+    read = readText(path.join(dir, file));
+  } catch (err) {
+    // This one file cannot be read (a folder put in its place after the listing, no permission): the report is
+    // unreadable, not the whole index. Anything else (EMFILE, EIO) is not about this file and propagates.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EISDIR' || code === 'EACCES' || code === 'EPERM') return { kind: 'malformed', num, file, error: `Cannot read the report: ${(err as Error).message}`, line: null };
+    throw err;
+  }
   if (read.kind === 'missing') return { kind: 'missing', num };
   try {
     return { kind: 'ok', report: parseReport(read.text, file, num) };

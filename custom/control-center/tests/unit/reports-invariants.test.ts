@@ -1,5 +1,5 @@
 // The invariants in server/domains/reports.invariants.md, as table-driven and seeded randomized cases.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseReport, readReport, readReportFile, type ReportFull } from '../../server/domains/reports.js';
@@ -127,6 +127,8 @@ describe('report invariants: table cases', () => {
 });
 
 describe('report invariants: reading files', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   const rootWith = (files: Record<string, string>) => {
     const root = tempDir('reports-inv-');
     fs.mkdirSync(path.join(root, 'reports'));
@@ -134,6 +136,29 @@ describe('report invariants: reading files', () => {
     return root;
   };
   const report = (company: string, score: string) => `# Evaluation: ${company} ${DASH} Eng\n\n**Score:** ${score}\n`;
+  const failRead = (root: string, name: string, code: string) => {
+    const target = path.join(root, 'reports', name);
+    const real = fs.readFileSync;
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((p: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (p === target) throw Object.assign(new Error(`${code}: cannot read '${target}'`), { code });
+      return (real as (...a: unknown[]) => unknown)(p, ...rest);
+    }) as typeof fs.readFileSync);
+  };
+
+  it.each(['EISDIR', 'EACCES', 'EPERM'])('reads a listed report that fails to read with %s as malformed, not a thrown error (R34-srv-dom-b-L1-01)', (code) => {
+    const root = rootWith({ '099-acme.md': report('Acme', '2.0/5'), '100-zeta.md': report('Zeta', '4.0/5') });
+    failRead(root, '099-acme.md', code);
+    expect(readReport(root, 99)).toMatchObject({ kind: 'malformed', num: 99, file: '099-acme.md', line: null });
+    expect(readReportFile(root, '099-acme.md')).toMatchObject({ kind: 'malformed', num: 99, file: '099-acme.md' });
+    expect(readReport(root, 100)).toMatchObject({ kind: 'ok' });
+  });
+
+  it('still throws a read error that is not about this one file', () => {
+    const root = rootWith({ '099-acme.md': report('Acme', '2.0/5') });
+    failRead(root, '099-acme.md', 'EMFILE');
+    expect(() => readReport(root, 99)).toThrow(/EMFILE/);
+  });
+
   it('reads the named file when two share a number, and the first by name by number (R34-srv-dom-b-L1-02)', () => {
     const root = rootWith({ '099-acme.md': report('Acme', '2.0/5'), '099-zeta.md': report('Zeta', '4.5/5') });
     const named = readReportFile(root, '099-zeta.md');
