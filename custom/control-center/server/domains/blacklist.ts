@@ -71,6 +71,64 @@ export function blacklistOverCap(rows: BlacklistRow[], existing: BlacklistRow[])
   return null;
 }
 
+/** tracker-parse.mjs normalizeTextKey, which scan.mjs keys a company-scope row by (through normalizeCompany). */
+export type NormalizeTextKey = (value: unknown, separator?: string) => string;
+
+/**
+ * The key scan.mjs parseBlacklist files a row under: `domain:` and the trimmed, lowercased host without a trailing dot
+ * (its normalizeBlacklistDomain), or the normalized company. An empty value means the scanner skips the row.
+ */
+export function blacklistScannerKey(row: Pick<BlacklistRow, 'company' | 'scope'>, norm: NormalizeTextKey): { key: string; empty: boolean } {
+  if (row.scope === 'domain') {
+    const host = row.company.trim().toLowerCase().replace(/\.$/, '');
+    return { key: `domain:${host}`, empty: host === '' };
+  }
+  const key = norm(row.company);
+  return { key, empty: key === '' };
+}
+
+/**
+ * The first row of `rows` the scanner would never read: one whose key is empty, or a second row under a key (the
+ * scanner keeps the first). Rows like these the file already holds pass, so a save that leaves them as they are (in any
+ * order) is not refused: each row of the file excuses one saved row with the same company and scope, and a key keeps
+ * no more rows than the file has under it. Null when none.
+ */
+export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[], norm: NormalizeTextKey): string | null {
+  const id = (r: Pick<BlacklistRow, 'company' | 'scope'>) => `${r.scope}\0${r.company}`;
+  const held = new Map<string, number>();
+  const heldIds = new Map<string, number>();
+  for (const r of existing) {
+    const { key } = blacklistScannerKey(r, norm);
+    held.set(key, (held.get(key) ?? 0) + 1);
+    heldIds.set(id(r), (heldIds.get(id(r)) ?? 0) + 1);
+  }
+  // Uses up one row of the file with this company and scope; false when none is left.
+  const excuse = (r: BlacklistRow) => {
+    const left = heldIds.get(id(r)) ?? 0;
+    if (left > 0) heldIds.set(id(r), left - 1);
+    return left > 0;
+  };
+  const first = new Map<string, BlacklistRow>();
+  const count = new Map<string, number>();
+  for (const r of rows) {
+    const k = blacklistScannerKey(r, norm);
+    if (k.empty) {
+      if (excuse(r)) continue;
+      return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
+    }
+    const n = (count.get(k.key) ?? 0) + 1;
+    count.set(k.key, n);
+    const prior = first.get(k.key);
+    if (!prior) {
+      first.set(k.key, r);
+      excuse(r);
+      continue;
+    }
+    if (n > Math.max(1, held.get(k.key) ?? 0) || !excuse(r)) return `the scanner reads ${r.company} as the same ${r.scope} as ${prior.company}, and keeps only the first; remove one of them`;
+  }
+  return null;
+}
+
 export interface BlacklistParsed {
   rows: BlacklistRow[];
   /** Text before the table (kept verbatim on save); null when the file has none. */
