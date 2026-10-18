@@ -19,6 +19,7 @@ async function settleOn(app: TestApp, id: string, timeoutMs = 30_000): Promise<S
   }
 }
 const INIT = { type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] };
+const delta = (text: string) => ({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
 const result = (text: string, cost: number) => ({ type: 'result', subtype: 'success', result: text, total_cost_usd: cost, usage: { input_tokens: 10, output_tokens: 5 }, num_turns: 1, is_error: false });
 function scenarioFile(scenario: unknown): string {
   const file = path.join(tempDir('cc-scenario-'), 'scenario.json');
@@ -189,12 +190,18 @@ describe('session manager: replaying an original request never duplicates a live
   it('given a source whose cancelled first turn is still stopping and never started a conversation, when it is forked, then the fork starts only once that run has ended', async () => {
     const app = await makeTestApp();
     try {
-      const stubborn = scenarioFile({ events: [{ __ignoreSigterm: true }, { __sleep: 8000 }, result('late', 0.01)] });
+      // It ignores SIGTERM before it streams anything, so its delta proves a cancel can no longer end it at once.
+      const stubborn = scenarioFile({ events: [{ __ignoreSigterm: true }, delta('ready'), { __sleep: 8000 }, result('late', 0.01)] });
       const { id, turns } = await withScenario(stubborn, async () => (await call(app, 'POST', '/api/sessions', { mode: 'devchat', target: { type: 'none', value: null }, prompt: 'look around' })).json());
       const srcRun = turns[0].runId as string;
       const deadline = Date.now() + 10_000;
-      while (app.runner.store.read(srcRun)?.childPid == null && Date.now() < deadline) await wait(50);
+      const streamed = () => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta');
+      while (!streamed() && Date.now() < deadline) await wait(50);
+      expect(streamed()).toBe(true);
       expect((await call(app, 'POST', `/api/sessions/${id}/cancel`, {})).statusCode).toBe(200);
+      // The cancel's SIGTERM must not end it: the runner's SIGKILL comes about 5 s later.
+      await wait(1000);
+      expect(app.runner.store.read(srcRun)?.endedAt ?? null).toBeNull();
       const res = await withScenario(scenarioFile(NO_REPORT), async () => call(app, 'POST', `/api/sessions/${id}/fork`, { prompt: 'again' }));
       expect(res.statusCode, res.body).toBe(202);
       const endedAt = app.runner.store.read(srcRun)!.endedAt;

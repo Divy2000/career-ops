@@ -16,8 +16,14 @@ async function until(cond: () => boolean, timeoutMs = 10_000): Promise<void> {
   }
 }
 const INIT = { type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] };
-/** A CLI slow to stop: SIGTERM does nothing, so a cancelled run lives until the runner's SIGKILL. */
-const STUBBORN = { events: [INIT, { __ignoreSigterm: true }, ...Array.from({ length: 200 }, () => ({ __sleep: 100 }))] };
+const delta = (text: string) => ({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
+/**
+ * A CLI slow to stop: SIGTERM does nothing, so a cancelled run lives until the runner's SIGKILL. It ignores SIGTERM
+ * before it streams anything, so its delta proves a cancel can no longer end it at once.
+ */
+const STUBBORN = { events: [{ __ignoreSigterm: true }, INIT, delta('ready'), ...Array.from({ length: 200 }, () => ({ __sleep: 100 }))] };
+/** True once the session streamed a text delta, which the stubborn CLI prints only after it ignores SIGTERM. */
+const streamed = (app: App, id: string) => app.sessions.store.readEvents(id).some((e) => e.event.type === 'text.delta');
 
 /** Starts an evaluation of `url`, then cancels it while its process is still stopping. */
 async function cancelledButStopping(app: App, url: string): Promise<{ id: string; runId: string }> {
@@ -27,8 +33,11 @@ async function cancelledButStopping(app: App, url: string): Promise<{ id: string
   try {
     const started = (await call(app, 'POST', '/api/sessions', { mode: 'oferta', target: { type: 'url', value: url }, prompt: 'Evaluate it' })).json();
     const runId = started.turns[0].runId as string;
-    await until(() => app.runner.store.read(runId)?.childPid != null);
+    await until(() => streamed(app, started.id as string));
     expect((await call(app, 'POST', `/api/sessions/${started.id}/cancel`, {})).statusCode).toBe(200);
+    expect(app.runner.store.read(runId)?.endedAt ?? null).toBeNull();
+    // The cancel's SIGTERM must not end it: the runner's SIGKILL comes about 5 s later.
+    await wait(1000);
     expect(app.runner.store.read(runId)?.endedAt ?? null).toBeNull();
     return { id: started.id as string, runId };
   } finally {
