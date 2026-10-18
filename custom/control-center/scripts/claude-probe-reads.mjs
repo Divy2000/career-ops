@@ -13,7 +13,8 @@
 // Usage: node scripts/claude-probe-reads.mjs [--only C2,C8] [--record] [--keep] [--raw-only | --guarded-only]
 //   --record  writes the result to server/core/contract.json (claude.readProbe) and
 //             adds the version to claude.approvedVersions when every gate case passed
-//   --keep    keeps the temp layout for inspection (the home canary is always removed)
+//   --keep    keeps the temp layout for inspection, with a copy of this run's transcripts in its transcripts/
+//             (the home canary and the transcripts under ~/.claude/projects are always removed)
 //   --raw-only / --guarded-only  run one half of C13 (WebFetch with a logging hook, or with the guard hook);
 //             --record refuses such a run, since the other half never ran
 import fs from 'node:fs';
@@ -535,33 +536,52 @@ groups.push({ ids: ['C16'], run: async () => {
 /**
  * The CLI keeps each probe conversation under <config dir>/projects/<this layout's code dir>/. Only directories
  * carrying this layout's unique name are removed: those a hook payload of this run named under a projects/ folder,
- * and those in the default config dir's projects/.
+ * and those in the default config dir's projects/. With `keepInto` (--keep) each is copied there first. Every folder
+ * is tried; the failures are thrown together at the end.
  */
-function cleanTranscripts() {
+function cleanTranscripts(keepInto) {
   const unique = path.basename(T);
-  const dirs = new Set();
+  const named = new Set();
   for (const d of fs.existsSync(GUARD) ? fs.readdirSync(GUARD) : []) {
     const log = path.join(GUARD, d, 'hook-log.ndjson');
     if (!fs.existsSync(log)) continue;
     for (const line of fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)) {
       try {
         const tp = JSON.parse(line).transcript_path;
-        if (typeof tp === 'string') dirs.add(path.dirname(tp));
+        if (typeof tp === 'string') named.add(path.dirname(tp));
       } catch {
         /* torn line */
       }
     }
   }
-  for (const dir of dirs) {
-    if (path.basename(path.dirname(dir)) === 'projects' && path.basename(dir).includes(unique)) fs.rmSync(dir, { recursive: true, force: true });
+  const mine = new Set();
+  for (const dir of named) {
+    if (path.basename(path.dirname(dir)) === 'projects' && path.basename(dir).includes(unique)) mine.add(dir);
     else console.error(`left in place (not this probe's project dir): ${dir}`);
   }
   // A call stopped before its first hook ran has a project folder no hook log names; the default config dir is the
   // only one outside T (INHERITED drops CLAUDE_CONFIG_DIR, and the per-case config dirs live in T).
   const projects = path.join(CONFIG_HOME, 'projects');
   if (fs.existsSync(projects)) {
-    for (const d of fs.readdirSync(projects)) if (d.includes(unique)) fs.rmSync(path.join(projects, d), { recursive: true, force: true });
+    for (const d of fs.readdirSync(projects)) if (d.includes(unique)) mine.add(path.join(projects, d));
   }
+  const failures = [];
+  for (const dir of mine) {
+    if (!fs.existsSync(dir)) continue;
+    if (keepInto) {
+      try {
+        fs.cpSync(dir, path.join(keepInto, path.basename(dir)), { recursive: true });
+      } catch (err) {
+        failures.push(`copy of ${dir} not kept: ${err?.message ?? err}`);
+      }
+    }
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (err) {
+      failures.push(`${dir}: ${err?.message ?? err}`);
+    }
+  }
+  if (failures.length) throw new Error(failures.join('; '));
 }
 
 groups.push({ ids: ['C20'], run: async () => {
@@ -598,7 +618,7 @@ function cleanup() {
   step(HOME_DIR, () => fs.rmSync(HOME_DIR, { recursive: true, force: true }));
   step(OTHER_PROJECT, () => fs.rmSync(OTHER_PROJECT, { recursive: true, force: true }));
   step(CONFIG_FILE, () => fs.rmSync(CONFIG_FILE, { force: true }));
-  if (!KEEP) step(`this probe's transcripts under ${path.join(CONFIG_HOME, 'projects')}`, cleanTranscripts);
+  step(`this probe's transcripts under ${path.join(CONFIG_HOME, 'projects')}`, () => cleanTranscripts(KEEP ? path.join(T, 'transcripts') : null));
   const out = redact(JSON.stringify(summary, null, 2));
   step(path.join(T, 'probe-summary.json'), () => {
     fs.mkdirSync(T, { recursive: true });

@@ -625,6 +625,18 @@ out({ type: 'result', is_error: false, permission_denials: [] });
       expect(fs.readFileSync(box.contract, 'utf8')).toBe(before);
     }, 60_000);
   }
+
+  it('given --keep, when the probe ends, then its transcript folders are gone from ~/.claude/projects and a copy stays in the kept dir (R35-supervisor-L1-02)', () => {
+    const box = sandbox();
+    const r = runActing(box, actingCli(box, '9.9.9'), ['--only', 'C8', '--keep']);
+    const kept = /probe dir kept: (.+)/.exec(r.stderr)?.[1];
+    expect(kept, r.stderr).toBeTruthy();
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects')).filter((n) => n.includes('cc-reads-probe-'))).toEqual([]);
+    const copies = fs.readdirSync(path.join(String(kept), 'transcripts'));
+    expect(copies.length).toBe(1);
+    expect(fs.readdirSync(path.join(String(kept), 'transcripts', copies[0] as string)).filter((n) => n.endsWith('.jsonl')).length).toBe(1);
+    canariesGone(box);
+  }, 60_000);
 });
 
 describe('claude-probe.mjs ends every CLI process group it starts (invariant 11)', () => {

@@ -38,7 +38,8 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
    `finish()` is already under way; a second signal cleans up and exits at once. Cleanup runs every step even when
    one fails and names what may remain; a failed step makes a normal exit status 1.
 8. **Cleanup removes only what this run created**: the home canary dir, the `~/.claude` canary file and other-project
-   folder, transcripts whose project folder carries this layout's unique name, and the temp layout (unless --keep).
+   folder, transcripts whose project folder carries this layout's unique name (always; --keep copies them into the
+   kept layout's `transcripts/` first), and the temp layout (unless --keep).
    Resources a case group acquires (the local WebFetch server) are released in that group's `finally`.
 
 ## The --record write
