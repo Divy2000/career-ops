@@ -89,37 +89,42 @@ export function blacklistScannerKey(row: Pick<BlacklistRow, 'company' | 'scope'>
 
 /**
  * The first row of `rows` the scanner would never read: one whose key is empty, or a second row under a key (the
- * scanner keeps the first). Rows like these the file already holds pass, so a save that leaves them as they are is not
- * refused: as many empty-key rows of a company and scope as the file holds, and as many rows per key as the file has.
- * Null when none.
+ * scanner keeps the first). Rows like these the file already holds pass, so a save that leaves them as they are (in any
+ * order) is not refused: each row of the file excuses one saved row with the same company and scope, and a key keeps
+ * no more rows than the file has under it. Null when none.
  */
 export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[], norm: NormalizeTextKey): string | null {
   const id = (r: Pick<BlacklistRow, 'company' | 'scope'>) => `${r.scope}\0${r.company}`;
   const held = new Map<string, number>();
-  const heldEmpty = new Map<string, number>();
+  const heldIds = new Map<string, number>();
   for (const r of existing) {
-    const k = blacklistScannerKey(r, norm);
-    if (k.empty) heldEmpty.set(id(r), (heldEmpty.get(id(r)) ?? 0) + 1);
-    else held.set(k.key, (held.get(k.key) ?? 0) + 1);
+    const { key } = blacklistScannerKey(r, norm);
+    held.set(key, (held.get(key) ?? 0) + 1);
+    heldIds.set(id(r), (heldIds.get(id(r)) ?? 0) + 1);
   }
+  // Uses up one row of the file with this company and scope; false when none is left.
+  const excuse = (r: BlacklistRow) => {
+    const left = heldIds.get(id(r)) ?? 0;
+    if (left > 0) heldIds.set(id(r), left - 1);
+    return left > 0;
+  };
   const first = new Map<string, BlacklistRow>();
   const count = new Map<string, number>();
   for (const r of rows) {
     const k = blacklistScannerKey(r, norm);
     if (k.empty) {
-      // Each one the file holds excuses one row, so a copy of it is not let through as well.
-      const left = heldEmpty.get(id(r)) ?? 0;
-      if (left > 0) {
-        heldEmpty.set(id(r), left - 1);
-        continue;
-      }
+      if (excuse(r)) continue;
       return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
     }
     const n = (count.get(k.key) ?? 0) + 1;
     count.set(k.key, n);
     const prior = first.get(k.key);
-    if (!prior) first.set(k.key, r);
-    else if (n > Math.max(1, held.get(k.key) ?? 0)) return `the scanner reads ${r.company} as the same ${r.scope} as ${prior.company}, and keeps only the first; remove one of them`;
+    if (!prior) {
+      first.set(k.key, r);
+      excuse(r);
+      continue;
+    }
+    if (n > Math.max(1, held.get(k.key) ?? 0) || !excuse(r)) return `the scanner reads ${r.company} as the same ${r.scope} as ${prior.company}, and keeps only the first; remove one of them`;
   }
   return null;
 }

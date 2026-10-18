@@ -84,4 +84,20 @@ describe('blacklist rows the scanner skips by key', () => {
       expect(fs.readFileSync(abs, 'utf8')).toBe(legacy);
     });
   });
+
+  it('given a file that already holds one duplicate, when it is swapped for a newly typed duplicate of that key, then it is refused', async () => {
+    const legacy = `${FILE}| initech | 2025-01-02 | company | dup |\n`;
+    await withApp(legacy, async (save) => {
+      const saved = await save([initech, { company: 'INITECH', since: '2026-10-03', scope: 'company', reason: 'new' }]);
+      expect(saved.status, saved.body).toBe(400);
+    });
+  });
+
+  it('given a file that already holds a duplicate, when the two rows are saved in swapped order, then the save succeeds', async () => {
+    const legacy = `${FILE}| initech | 2025-01-02 | company | dup |\n`;
+    await withApp(legacy, async (save) => {
+      const saved = await save([{ company: 'initech', since: '2025-01-02', scope: 'company', reason: 'dup' }, initech]);
+      expect(saved.status, saved.body).toBe(200);
+    });
+  });
 });
