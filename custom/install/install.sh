@@ -103,6 +103,7 @@ CC_DEFER_BLOCKED=0
 TTY_OK=0
 PROMPT_OK=0
 CV_COPY=""
+CV_APPLIED=1
 DOC_COPIES=()
 
 _log() {
@@ -1047,6 +1048,7 @@ else
           say "  replaced cv.md; the old one is saved as ${result#*$'\t'}"
         else
           say "  cv.md left as is."
+          CV_APPLIED=0
           pending "cv.md exists and differs from $RESUME, so it was not replaced. Re-run with --replace-cv to replace it (the old file is backed up as cv.md.bak-<timestamp>)."
         fi
         ;;
@@ -1192,6 +1194,7 @@ doctor_state() { # prints "ready" or "incomplete<TAB>files"
 
 onboard_inputs() {
   ONBOARD_ARGS=()
+  if [ "$CV_APPLIED" = 0 ]; then ONBOARD_ARGS+=(--cv-not-applied); fi
   if [ -n "$CV_COPY" ]; then ONBOARD_ARGS+=("$CV_COPY"); else ONBOARD_ARGS+=(""); fi
   if [ "${#DOC_COPIES[@]}" -gt 0 ]; then ONBOARD_ARGS+=("${DOC_COPIES[@]}"); fi
 }

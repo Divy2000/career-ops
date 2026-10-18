@@ -668,6 +668,17 @@ test('an existing cv.md that differs is never replaced non-interactively: exit 3
   assert.deepEqual(fs.readdirSync(D).filter((n) => n.startsWith('cv.md.bak')), []);
 });
 
+test('a differing cv.md that is kept is not called a copy of the resume in the onboarding prompt (R31-scripts-b-L2-03)', () => {
+  const { w, D, args } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: { ...READY_FILES, 'cv.md': 'OLD\n' } });
+  const resume = md(w, 'resume.md', '# New\n');
+  const r = w.run(args('--resume', resume, '--onboard', 'none'));
+  const copy = path.join(D, 'documents', 'cv', 'resume.md');
+  assert.match(r.out, /cv\.md left as is/);
+  assert.ok(!r.out.includes(`cv.md (from ${copy})`), r.out);
+  assert.ok(r.out.includes(`${copy} (differs from cv.md; not applied)`), r.out);
+});
+
 test('--replace-cv backs the old cv.md up byte for byte, then writes the new one', () => {
   const { w, D, args } = fresh();
   w.makeCheckout(D);
