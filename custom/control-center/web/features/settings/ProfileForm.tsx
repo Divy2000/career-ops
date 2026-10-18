@@ -10,7 +10,7 @@ import { useEditBase } from '../../lib/editBase';
 import { KeyEditor, type ColumnsAt, type FieldRules } from './StructuredEditor';
 import { EditorNoteView, useStructuredConfig } from './useStructuredConfig';
 import { ConfigEditor } from './RawConfigEditor';
-import type { CadenceRead } from '@shared/api';
+import type { CadenceRead, ConfigRead } from '@shared/api';
 
 interface SectionDef {
   key: string;
@@ -116,8 +116,12 @@ export function CadenceForm() {
       if (err instanceof ApiError && err.status === 409) {
         // Told, the user may now save their values over the version on disk they were shown: the next save carries
         // that version's ETag, so a further change on disk meanwhile is refused again.
+        // The base is the version the 409 named, not the cache: a refetch that fails leaves the pre-conflict copy there.
+        const current = (err.body as { current: ConfigRead }).current;
+        const doc = current.doc as { followup_cadence?: unknown } | null;
+        const cadence = isPlainObject(doc?.followup_cadence) ? (doc.followup_cadence as Record<string, number>) : {};
+        edit.rebase({ kind: current.kind, etag: current.etag, cadence, keys: q.data?.keys ?? [], parseError: current.parseError ?? null });
         await qc.invalidateQueries({ queryKey: ['config', 'cadence'] });
-        edit.rebase(qc.getQueryData<CadenceRead>(['config', 'cadence']) ?? null);
         setNote({ tone: 'danger', text: 'config/profile.yml changed on disk since you started editing; nothing was written. Your values are still in the form: save again to apply them over the current version.' });
       } else setNote({ tone: 'danger', text: `Could not save cadence: ${describeError(err)}` });
     } finally {
