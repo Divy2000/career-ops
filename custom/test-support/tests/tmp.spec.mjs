@@ -241,3 +241,34 @@ test('waits', async () => {
     }
   });
 }
+
+/** Starts one fixture module under plain node (no test runner in between) with a fresh TMPDIR. */
+function startFixture(source) {
+  const dir = tempDir('tmp-check-plain-');
+  const fresh = tempDir('tmp-check-fresh-');
+  const file = path.join(dir, 'fixture.mjs');
+  fs.writeFileSync(file, source.replaceAll('FRESH', JSON.stringify(fresh)));
+  const child = spawn(process.execPath, [file], { env: suiteEnv(process.env, fresh), stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  child.stdout.on('data', (d) => { output += d; });
+  child.stderr.on('data', (d) => { output += d; });
+  const closed = new Promise((r) => child.once('close', (code, signal) => r({ code, signal, output, leftovers: fs.readdirSync(fresh).sort() })));
+  return { child, fresh, closed };
+}
+
+test('Given a spec that loads tmp.mjs leaves a file in its temp dir and its tests pass, the spec process exits with status 1, the status a failing test gives (R34-mut-06)', async () => {
+  const { child, closed } = startFixture(`import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import ${JSON.stringify(TMP_MJS)};
+fs.writeFileSync(path.join(os.tmpdir(), 'leaked-file'), 'x');
+`);
+  try {
+    const r = await closed;
+    assert.equal(r.code, 1, r.output);
+    assert.match(r.output, /left 1 entry in its temp dir \(now removed\): leaked-file/);
+    assert.deepEqual(r.leftovers, []);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
