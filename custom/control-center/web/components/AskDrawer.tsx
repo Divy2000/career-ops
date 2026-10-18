@@ -21,7 +21,7 @@ import { activeEvaluationIn, evaluationStarting, useActiveEvaluation, useStartEv
 import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
 import { isProcessInboxMode } from '../features/pipeline/evaluating';
 import { useTracker } from '../lib/queries';
-import { STATES } from '../features/tracker/StatusControl';
+import { STATES, rowIdentity } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
 
 export interface Proposal {
@@ -242,10 +242,11 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
         return;
       }
     }
-    // A row named by number only is easy to confuse with another application: the setStatus confirm names it by
-    // company and role, and shows the note it appends to the Notes cell (which can re-link reports).
+    // A row named by number only is easy to confuse with another application: the setStatus and generatePdf confirms
+    // name it by company and role (setStatus also shows the note it appends to the Notes cell, which can re-link reports),
+    // and the write names that application, so one a reindex moved under the number is refused.
     const rowNum = Number(rowParam(p.params));
-    const shownRow = p.action === 'setStatus' && Number.isInteger(rowNum) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === rowNum) : undefined;
+    const shownRow = (p.action === 'setStatus' || p.action === 'generatePdf') && Number.isInteger(rowNum) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === rowNum) : undefined;
     const nameRow = (): string => (shownRow ? `row #${rowNum} (${shownRow.company}${shownRow.role ? ` - ${shownRow.role}` : ''})` : `row #${rowParam(p.params)}`);
     const question =
       p.action === 'evaluateCompany' && companyUrls.length > FANOUT_CONFIRM_ABOVE
@@ -254,7 +255,9 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens).${companyLeftOut ? ` ${companyLeftOut}` : ''} Continue?`, confirmLabel: 'Do it', danger: true }
           : p.action === 'setStatus'
             ? { title: 'The advisor proposes a write', body: `Set ${nameRow()} to ${String(p.params.state ?? '')}${p.params.note ? `, writing the note "${String(p.params.note)}" into its Notes cell` : ''}. Continue?`, confirmLabel: 'Do it', danger: true }
-            : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
+            : p.action === 'generatePdf'
+              ? { title: 'The advisor proposes a write', body: `Generate the tailored CV PDF for ${nameRow()} (uses tokens). Continue?`, confirmLabel: 'Do it', danger: true }
+              : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
     if (def.confirm && !(await confirm(question))) {
       update(p.id, { state: 'rejected', note: 'declined' });
       return;
@@ -374,7 +377,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           }
           store.setStarting(true);
           try {
-            const m = await startTailoredCvSession(n);
+            const m = await startTailoredCvSession(n, shownRow ? rowIdentity(shownRow) : undefined);
             if (m.status === 'error') {
               store.setStarting(false);
               update(p.id, { state: 'failed', note: m.error ?? 'session failed to start' });
