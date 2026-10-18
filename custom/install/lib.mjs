@@ -12,14 +12,17 @@ export const LIMITS = {
 };
 
 export function versionAtLeast(actual, floor) {
-  const a = String(actual).replace(/^v/, '').split('.').map(Number);
-  const f = String(floor).replace(/^v/, '').split('.').map(Number);
+  const [aCore, aTag] = String(actual).replace(/^v/, '').split(/-(.*)/);
+  const [fCore, fTag] = String(floor).replace(/^v/, '').split(/-(.*)/);
+  const a = aCore.split('.').map(Number);
+  const f = fCore.split('.').map(Number);
   for (let i = 0; i < 3; i++) {
     const x = a[i] || 0;
     const y = f[i] || 0;
     if (x !== y) return x > y;
   }
-  return true;
+  // A pre-release comes before its own release (2.1.296-beta.1 < 2.1.296).
+  return !aTag || Boolean(fTag);
 }
 
 function fullVersion(v) {

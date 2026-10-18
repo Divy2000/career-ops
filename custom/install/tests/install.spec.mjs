@@ -1369,6 +1369,16 @@ test('--onboard headless names the newest approved version that meets the headle
   }
 });
 
+test('--onboard headless runs an approved pre-release Claude Code above the floor (R30-scripts-b-X-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  approveClaude(w, ['2.1.296-beta.1']);
+  const data = path.join(w.T, 'mydata');
+  const resume = md(w, 'resume.md', '# Me\n## Skills\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_VERSION: '2.1.296-beta.1', FAKE_CLAUDE_DRAFTS: '1' } });
+  assert.doesNotMatch(r.out, /Headless onboarding needs Claude Code/, r.out);
+  assert.equal(w.claudeArgv()?.[0], '-p', r.out);
+});
+
 test('--onboard headless with a too-old Claude Code the contract lists still names an approved version new enough (R20 FU-scripts-02 review)', () => {
   const { w, D } = fresh({ keychain: true });
   approveClaude(w, ['2.1.287', '2.1.289']);
@@ -2305,6 +2315,21 @@ test('a data root next to the home directory is fine', () => {
   assert.ok(fs.existsSync(path.join(w.home, 'career-data', 'modes', '_custom.md')));
 });
 
+test('a checkout marker naming the home directory is refused once node is installed, before the log or the daily lock lands in home (R30-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ tools: ['git', 'security', 'uname', 'launchctl', 'plutil', 'claude'], keychain: true });
+  const stubs = path.join(INSTALL_DIR, 'tests', 'stubs');
+  // brew install node puts node and npm on the PATH, as Homebrew does.
+  fs.writeFileSync(path.join(w.bin, 'brew'), `#!/bin/bash\necho "brew $*" >> "$STUB_LOG"\nif [ "$*" = "install node" ]; then ln -sf ${stubs}/node ${w.bin}/node; ln -sf ${stubs}/npm ${w.bin}/npm; fi\nexit 0\n`, { mode: 0o755 });
+  w.makeCheckout(D, { files: { '.career-ops-data': `${w.home}\n` } });
+  const r = w.run(['--dir', D, '--install-missing', ...QUIET], { tty: 'y\ny\nn\nn\nn\n' });
+  assert.ok(w.calls('brew').includes('brew install node'), r.out);
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /error: the data root .* is your home directory or contains it/);
+  assert.ok(!fs.existsSync(path.join(w.home, 'data')), 'nothing written under the home directory');
+  assert.ok(!fs.existsSync(path.join(w.home, 'modes')), 'nothing written under the home directory');
+  assert.ok(!w.log().some((l) => l.startsWith('git pull') || l.startsWith('npm')), w.log().join('\n'));
+});
+
 test('a data root that does not exist yet, named with a trailing slash in CAREER_OPS_ROOT, is that folder, not its parent (review of R19-scripts-b-L3-01)', () => {
   const { w, D } = fresh({ keychain: true });
   const root = path.join(w.home, 'new-root');
@@ -2394,6 +2419,27 @@ test('a token that was not stored (the Keychain prompt was cancelled) is a pendi
   assert.equal(r.status, 3, r.out);
   assert.doesNotMatch(r.out, /Keychain item stored\./);
   assert.match(r.out, /\d+\. Store the Claude token yourself/);
+});
+
+test('a token stored empty (Enter at both hidden prompts) is a pending action and no daily job, not "stored" (R30-scripts-b-L2-02)', () => {
+  const { w, D } = fresh();
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--no-start', '--no-h1b-index', '--onboard', 'none'], { tty: 'y\ny\ny\ny\n', env: { FAKE_SECURITY_TOKEN: '' } });
+  assert.equal(r.status, 3, r.out);
+  assert.doesNotMatch(r.out, /Keychain item stored\./);
+  assert.match(r.out, /\d+\. Store the Claude token yourself/);
+  assert.equal(w.calls('launchd-install').length, 0, 'the daily job is not installed on an empty token');
+  const reads = w.calls('security').filter((l) => l.startsWith('security find-generic-password') && l.includes(' -w'));
+  assert.equal(reads.length, 1, 'only the item this run created is read, once');
+});
+
+test('a token stored by this run is read back once and counts as stored (R30-scripts-b-L2-02)', () => {
+  const { w, D } = fresh();
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = w.run(['--dir', D, '--no-start', '--no-h1b-index', '--onboard', 'none'], { tty: 'y\ny\ny\ny\n' });
+  assert.match(r.out, /Keychain item stored\./);
+  assert.ok(!r.out.includes(SECRET));
+  assert.ok(w.calls('launchd-install').length > 0, r.out);
 });
 
 test('a headless onboarding run that fails says so and still prints how to finish interactively', () => {

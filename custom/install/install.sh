@@ -329,10 +329,7 @@ try {
   const { claudeVersionGate, contractApprovedVersions } = await import(process.env.CONFINEMENT);
   approved = contractApprovedVersions();
   // Semver order on x.y.z, then a release above its own pre-releases (2.1.296-beta.1 < 2.1.296).
-  const core = (v) => String(v).split("-")[0];
-  const tagged = (v) => String(v).includes("-");
-  const atLeast = (a, b) => (core(a) === core(b) ? !tagged(a) || tagged(b) : versionAtLeast(core(a), core(b)));
-  newest = approved.filter((v) => atLeast(v, process.env.HEADLESS_MIN)).reduce((best, v) => (best && atLeast(best, v) ? best : v), "");
+  newest = approved.filter((v) => versionAtLeast(v, process.env.HEADLESS_MIN)).reduce((best, v) => (best && versionAtLeast(best, v) ? best : v), "");
   try {
     gate = claudeVersionGate(process.env.CLAUDE_BIN, approved);
   } catch (err) {
@@ -797,6 +794,9 @@ if ! lib node-supported "$NODE_VERSION" "$NODE_RANGE"; then
 fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
+# Again now node can read a .career-ops-data marker, before the daily lock or the log is taken under the root.
+DATA="$(effective_data_root)"
+refuse_unconfinable_root "$DATA"
 validate_inputs
 check_projects fetch
 
@@ -887,6 +887,7 @@ fi
 
 if [ "$DRY_RUN" = 0 ]; then
   DATA="$(effective_data_root)"
+  refuse_unconfinable_root "$DATA"
   LOG_FILE="$DATA/data/install/install-$(date +%Y-%m-%d).log"
   mkdir -p "$(dirname "$LOG_FILE")"
   printf '%s' "$LOG_BUF" >> "$LOG_FILE"
@@ -955,6 +956,7 @@ else
     fi
   fi
   DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+  refuse_unconfinable_root "$DATA"
   mkdir -p "$DATA"
   # same-path resolves letter case too (realpathSync.native), as pwd -P does not on a case-insensitive volume.
   if [ -n "$DATA_ROOT_ARG" ] && ! lib same-path "$DATA" "$DATA_REQ"; then
@@ -1095,10 +1097,14 @@ else
         say "  Now paste the token at the hidden Keychain prompt (macOS asks twice)."
         security add-generic-password -U -a "${USER:-$(id -un)}" -s "$KEYCHAIN_SERVICE" -w <&3 >&4 2>&4 || true
         say "  Clear your terminal scrollback now (Cmd+K) so the token is not left on screen."
+        # Only the item this run just created is read back, so an empty paste counts as missing, as every consumer
+        # reads it. An item that existed before this run is never read.
+        keychain_read_token
+        KEYCHAIN_TOKEN=""
       else
         warn "  claude setup-token did not finish."
+        keychain_check
       fi
-      keychain_check
       if [ "$KEYCHAIN_RC" = 0 ]; then
         KEYCHAIN_OK=1
         say "  Keychain item stored."
