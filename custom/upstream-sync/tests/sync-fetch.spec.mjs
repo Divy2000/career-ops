@@ -1625,18 +1625,28 @@ test('a Keychain read that never answers (locked keychain, unlock prompt nobody 
   const home = path.join(w.base, 'home');
   mkdirSync(home);
   // A security that waits forever, as one blocked on an unanswered unlock dialog does (one process, as security is).
-  const childPid = path.join(w.base, 'security.pid');
+  // Every command line it has, the script's and the sleep's it becomes, names its own path: under load the alarm can
+  // fire before the script has run a line, so the check below finds it by that path rather than by a pid it wrote.
+  // runSync writes the stub to two folders on PATH; both are under the world's base.
+  const stubs = [path.join(w.base, 'bin', 'security'), path.join(home, '.local/bin', 'security')];
+  const stubPattern = stubs.map((s) => s.replace(/[^\w/-]/g, '\\$&')).join('|');
   try {
     const started = Date.now();
-    const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: '2' }, security: `echo $$ > "${childPid}"\nexec /bin/sleep 100000` });
+    const res = runSync(w, { home, inherited: { CC_KEYCHAIN_TIMEOUT: '2' }, security: 'exec -a "$0-waiting" /bin/sleep 100000' });
     assert.ok(Date.now() - started < 30_000, `the sync waited ${Date.now() - started} ms for the Keychain`);
     assert.equal(res.status, 1, res.log);
     assert.match(res.log, /^!!! Could not read Keychain item career-ops-claude-token: security did not answer within 2 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run\.$/m);
     assert.doesNotMatch(res.log, /not found|setup-token/);
     const lock = spawnSync('/usr/bin/lockf', ['-k', '-t', '0', path.join(home, '.career-ops-sync.lockf'), '/usr/bin/true']);
     assert.equal(lock.status, 0, 'the sync lock is free once the run has failed');
-    assert.notEqual(spawnSync('/bin/kill', ['-0', readFileSync(childPid, 'utf8').trim()]).status, 0, 'nothing the Keychain read started is left running');
-  } finally { rmSync(w.base, { recursive: true, force: true }); }
+    const orphan = spawnSync('/usr/bin/pgrep', ['-f', stubPattern], { encoding: 'utf8' });
+    assert.equal(orphan.stdout, '', 'nothing the Keychain read started is left running');
+    assert.equal(orphan.status, 1, orphan.stderr);
+  } finally {
+    // A run that failed above may have left the stub sleeping: stop it so it does not outlive the test.
+    spawnSync('/usr/bin/pkill', ['-KILL', '-f', stubPattern]);
+    rmSync(w.base, { recursive: true, force: true });
+  }
 });
 
 // 4294967296 wraps to alarm(0) in perl, which would wait forever: the wait is capped at an hour.
