@@ -17,6 +17,8 @@ const INITIAL: Settings = { logos: false, retention: 200, claudeConcurrency: 1, 
 let settings: Settings;
 let puts: Array<{ ifMatch: string | null; patch: Partial<Settings>; status: number }>;
 let held: Array<() => void> | null;
+/** When set, each read waits here until the test lets it answer. */
+let heldGets: Array<() => void> | null;
 let roots: Root[];
 
 const etag = (s: Settings = settings) => `c:${JSON.stringify(s)}`;
@@ -28,6 +30,7 @@ beforeEach(() => {
   settings = structuredClone(INITIAL);
   puts = [];
   held = null;
+  heldGets = null;
   roots = [];
   localStorage.clear();
   vi.resetModules();
@@ -38,7 +41,10 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
-      if (url === '/api/settings/app' && method === 'GET') return json(200, { ...settings, problem: null, etag: etag() });
+      if (url === '/api/settings/app' && method === 'GET') {
+        if (heldGets) await new Promise<void>((answer) => heldGets!.push(answer));
+        return json(200, { ...settings, problem: null, etag: etag() });
+      }
       if (url === '/api/settings/app' && method === 'PUT') {
         const patch = JSON.parse(String(init!.body)) as Partial<Settings>;
         const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -58,6 +64,7 @@ beforeEach(() => {
   );
 });
 afterEach(async () => {
+  for (const answer of [...(heldGets ?? []), ...(held ?? [])]) answer();
   for (const r of roots) await act(async () => r.unmount());
   document.body.innerHTML = '';
   vi.unstubAllGlobals();
@@ -153,6 +160,25 @@ describe('app settings invariants: liveness when versions repeat (R34-feat-c-L1-
       expect(taken.status).toBe(200);
     });
   }
+});
+
+describe('app settings invariants: a refusal is a read of the file (invariant 5)', () => {
+  it('Given a save refused as changed elsewhere, when a sibling tab saves before the refetch answers, then the next save is taken', async () => {
+    const [tabA, tabB] = [await openTab(), await openTab()];
+    outside({ retention: 900 });
+    await refetch(tabB);
+    heldGets = [];
+    await act(async () => box(tabA).click());
+    await until(() => puts.length === 1 && /changed since you loaded it/.test(alerts(tabA)), 'tab A refused');
+    expect(puts[0]!.status).toBe(409);
+    await act(async () => box(tabB).click());
+    await until(() => puts.length === 2, 'tab B taken');
+    expect(puts[1]!.status).toBe(200);
+    // Tab A still shows the refusal's read: the file as it was before tab B's write, which is this browser's own.
+    await act(async () => box(tabA).click());
+    await until(() => puts.length === 3, 'tab A saved again');
+    expect(puts[2]!.status).toBe(200);
+  });
 });
 
 /** mulberry32: a small seeded PRNG, so a failing sequence can be replayed from its seed. */
