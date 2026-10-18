@@ -4,7 +4,7 @@ import type { ServerConfig } from '../config.js';
 import { BusyError, liveWorkOn, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
 import { englishModeOf, listLaunchableModeIds, sessionRefusal } from '../claude/modes.js';
 import { isReportGated } from '../claude/honesty.js';
-import type { SessionMeta } from '../claude/sessions.js';
+import type { AppRowIdentity, SessionMeta } from '../claude/sessions.js';
 import { readPipeline } from '../domains/pipeline.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { dedupUrlKey } from '../../shared/dedup-url.js';
@@ -21,6 +21,7 @@ import { plainPostingUrl } from '../../shared/posting-url.js';
 import { sponsorCheckRefusal } from '../../shared/company-slug.js';
 import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
+import { rowsSetUnder } from '../actions/registry.js';
 
 const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
 const prompt = z.string().min(1).max(20_000);
@@ -61,6 +62,19 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   // turn after done, a fork or a retry). It goes when the last session naming it is deleted; the startup age sweep
   // removes any left behind. Only a regular file in the uploads folder ever goes, and a failure is logged, never
   // thrown: the delete it follows has already happened.
+  // The row an app session starts on, so the page holding its number later can tell it apart. A number with no row, or
+  // with several, pins none; a tracker that cannot be read pins none either, as the session can still run without it.
+  const appRowAt = async (value: string | null): Promise<AppRowIdentity | null> => {
+    const n = /^\s*(\d+)\s*$/.exec(value ?? '')?.[1];
+    if (!n) return null;
+    try {
+      const rows = await rowsSetUnder(opts.cfg, Number(n));
+      return rows.length === 1 ? rows[0]! : null;
+    } catch (err) {
+      app.log.warn({ err, row: n }, 'could not read the tracker row a session targets; it is started without the row pinned');
+      return null;
+    }
+  };
   const dropUpload = (meta: { target?: { type?: string; value?: string | null } }) => {
     const value = meta.target?.type === 'text' ? meta.target.value : null;
     if (!value) return;
@@ -295,6 +309,10 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const upload = uploadTarget(opts.cfg.dataRoot, parsed.data.target.value);
       if (upload.kind === 'refused') return reply.code(400).send({ error: upload.reason });
       if (upload.kind === 'upload') parsed.data.target = { type: 'text', value: upload.path };
+    }
+    if (parsed.data.target.type === 'app') {
+      const row = await appRowAt(parsed.data.target.value);
+      parsed.data.target = { type: 'app', value: parsed.data.target.value, ...(row ? { row } : {}) };
     }
     const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
     let userPrompt = promptWithTarget(parsed.data.prompt, parsed.data.target);

@@ -257,7 +257,7 @@ async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<{ rows: 
 }
 
 /** The rows set-status.mjs --row n chooses from: every parseable line whose number reads as n, as the page shows it. */
-async function rowsSetUnder(ctx: ActionContext, n: number): Promise<RowIdentity[]> {
+export async function rowsSetUnder(ctx: Pick<ActionContext, 'codeRoot' | 'dataRoot'>, n: number): Promise<RowIdentity[]> {
   const [tp, file] = await Promise.all([importCore<DeleteParse>(ctx.codeRoot, 'tracker-parse.mjs'), resolveTrackerFile(ctx.codeRoot, ctx.dataRoot)]);
   let text: string;
   try {
