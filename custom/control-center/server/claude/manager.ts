@@ -534,16 +534,16 @@ export class SessionManager {
    * Runs `fn` on the session's record while no turn can start, run or finish on it in any server process: under its turn
    * claim, after the idle check (a turn still finishing included) on the record read under that claim. `fn` runs
    * synchronously, so nothing starts between the check and its act. Throws BusyError for a busy session; returns undefined,
-   * without running `fn`, for one that no longer exists.
+   * without running `fn`, for one that no longer exists or cannot be read (a malformed id, a torn meta.json).
    */
   whileIdle<T>(id: string, fn: (meta: SessionMeta) => T): T | undefined {
-    const before = this.store.read(id);
+    const before = this.read(id);
     if (before === null) return undefined;
     this.assertIdle(before);
     const unclaimTurn = this.claimTurn(id);
     try {
       // Read again under the claim: another server process may have started a turn since.
-      const meta = this.store.read(id);
+      const meta = this.read(id);
       if (meta === null) return undefined;
       this.assertIdle(meta);
       return fn(meta);
