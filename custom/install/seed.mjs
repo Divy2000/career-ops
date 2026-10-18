@@ -199,9 +199,15 @@ function placeOne(kind, base, bytes, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
   const ext = path.extname(base);
   const stem = base.slice(0, base.length - ext.length);
-  const family = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(-\\d+)?${ext.replace('.', '\\.')}$`);
+  // The family is `base` itself and every `stem-N.ext` uniqueDestName can give it, compared as plain text: a file name
+  // may hold any character, so no part of it is read as a pattern.
+  const inFamily = (n) => {
+    if (n === base) return true;
+    if (n.length <= stem.length + 1 + ext.length || !n.startsWith(`${stem}-`) || !n.endsWith(ext)) return false;
+    return /^\d+$/.test(n.slice(stem.length + 1, n.length - ext.length));
+  };
   const names = fs.readdirSync(destDir);
-  const twin = names.filter((n) => family.test(n)).find((n) => fs.readFileSync(path.join(destDir, n)).equals(bytes));
+  const twin = names.filter(inFamily).find((n) => fs.readFileSync(path.join(destDir, n)).equals(bytes));
   if (twin) {
     out('present', kind, path.join(destDir, twin));
     return path.join(destDir, twin);
