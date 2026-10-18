@@ -7,8 +7,9 @@ import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
 import { cliScriptPath, importCore } from '../core/adapter.js';
 import { execNoShell, type Exec } from './system.js';
+import { isLockTimeout, withFileLock } from '../lib/file-lock.js';
 import { etagMatches } from './config.js';
-import { BLACKLIST_DATE, blacklistOverCap, blacklistRowSchema, blacklistUnreadRow, readBlacklist, writeBlacklist, type NormalizeTextKey } from '../domains/blacklist.js';
+import { BLACKLIST_DATE, BLACKLIST_REL, blacklistOverCap, blacklistRowSchema, blacklistUnreadRow, readBlacklist, writeBlacklist, type NormalizeTextKey } from '../domains/blacklist.js';
 import { listPlugins } from '../domains/plugins.js';
 import { LOG_JOBS, type ScheduleJob, type ScheduleService } from '../system/schedule.js';
 import type { DailyJobWatch } from '../system/daily.js';
@@ -47,29 +48,42 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     }
     const body = z.object({ confirm: z.literal(true), rows: z.array(blacklistRowSchema).max(2000) }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid rows: company, since (YYYY-MM-DD), scope (company|domain) and reason without pipes', issues: body.error.issues });
-    // Loaded before the read: no await may sit between the ETag check and the write.
+    // Loaded before the lock: no await may sit between the ETag check and the write.
     const { normalizeTextKey } = await importCore<{ normalizeTextKey: NormalizeTextKey }>(cfg.codeRoot, 'tracker-parse.mjs');
-    const current = readBlacklist(cfg.dataRoot);
-    if (!etagMatches(current.etag, req.headers['if-match'])) return reply.code(409).send({ error: 'data/blacklist.md changed since you loaded it', current });
-    // Rewriting the file into one table would drop these cells: they are moved by hand first.
-    if (current.unkept.length) return reply.code(422).send({ error: `data/blacklist.md has cells the editor has no column for, which a save would drop: ${current.unkept.join('; ')}. Move them into the main table's columns by hand, then save again.` });
-    // New rows need YYYY-MM-DD; a legacy cell already in the file ("Sept 2025", empty) is kept as it is.
-    const legacy = new Set(current.rows.map((r) => r.since));
-    const badDate = body.data.rows.find((r) => !BLACKLIST_DATE.test(r.since) && !legacy.has(r.since));
-    if (badDate) return reply.code(400).send({ error: `since must be YYYY-MM-DD for ${badDate.company} (got ${badDate.since || 'nothing'})` });
-    // A domain row already in the file (IBM.com.) is kept as it is: only new ones need a bare hostname.
-    const knownDomains = new Set(current.rows.filter((r) => r.scope === 'domain').map((r) => r.company));
-    const badHost = body.data.rows.find((r) => r.scope === 'domain' && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(r.company) && !knownDomains.has(r.company));
-    if (badHost) return reply.code(400).send({ error: `domain scope needs a bare hostname suffix such as example.com (got ${badHost.company})` });
-    const overCap = blacklistOverCap(body.data.rows, current.rows);
-    if (overCap) return reply.code(400).send({ error: overCap });
-    // Extra cells fill the file's own extra columns (names come from the file, never the request).
-    const overfull = body.data.rows.find((r) => (r.extra?.length ?? 0) > current.extraColumns.length);
-    if (overfull) return reply.code(400).send({ error: `${overfull.company} has more cells than data/blacklist.md has columns (${current.extraColumns.length} extra)` });
-    // A row the scanner keys to nothing or to a key listed above it is never read: saving it would show a dead entry.
-    const unread = blacklistUnreadRow(body.data.rows, current.rows, normalizeTextKey);
-    if (unread) return reply.code(400).send({ error: unread });
-    const written = writeBlacklist(cfg.dataRoot, body.data.rows, current.preamble, current.postamble, current.extraColumns);
+    // The read, the ETag check and the write hold the file's cross-process lock, so the other server child of a
+    // blue/green handover cannot write between them.
+    const save = (): { status: number; body: Record<string, unknown> } | { written: ReturnType<typeof writeBlacklist> } => {
+      const current = readBlacklist(cfg.dataRoot);
+      if (!etagMatches(current.etag, req.headers['if-match'])) return { status: 409, body: { error: 'data/blacklist.md changed since you loaded it', current } };
+      // Rewriting the file into one table would drop these cells: they are moved by hand first.
+      if (current.unkept.length) return { status: 422, body: { error: `data/blacklist.md has cells the editor has no column for, which a save would drop: ${current.unkept.join('; ')}. Move them into the main table's columns by hand, then save again.` } };
+      // New rows need YYYY-MM-DD; a legacy cell already in the file ("Sept 2025", empty) is kept as it is.
+      const legacy = new Set(current.rows.map((r) => r.since));
+      const badDate = body.data.rows.find((r) => !BLACKLIST_DATE.test(r.since) && !legacy.has(r.since));
+      if (badDate) return { status: 400, body: { error: `since must be YYYY-MM-DD for ${badDate.company} (got ${badDate.since || 'nothing'})` } };
+      // A domain row already in the file (IBM.com.) is kept as it is: only new ones need a bare hostname.
+      const knownDomains = new Set(current.rows.filter((r) => r.scope === 'domain').map((r) => r.company));
+      const badHost = body.data.rows.find((r) => r.scope === 'domain' && !/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(r.company) && !knownDomains.has(r.company));
+      if (badHost) return { status: 400, body: { error: `domain scope needs a bare hostname suffix such as example.com (got ${badHost.company})` } };
+      const overCap = blacklistOverCap(body.data.rows, current.rows);
+      if (overCap) return { status: 400, body: { error: overCap } };
+      // Extra cells fill the file's own extra columns (names come from the file, never the request).
+      const overfull = body.data.rows.find((r) => (r.extra?.length ?? 0) > current.extraColumns.length);
+      if (overfull) return { status: 400, body: { error: `${overfull.company} has more cells than data/blacklist.md has columns (${current.extraColumns.length} extra)` } };
+      // A row the scanner keys to nothing or to a key listed above it is never read: saving it would show a dead entry.
+      const unread = blacklistUnreadRow(body.data.rows, current.rows, normalizeTextKey);
+      if (unread) return { status: 400, body: { error: unread } };
+      return { written: writeBlacklist(cfg.dataRoot, body.data.rows, current.preamble, current.postamble, current.extraColumns) };
+    };
+    let saved: ReturnType<typeof save>;
+    try {
+      saved = await withFileLock(cfg.codeRoot, path.join(cfg.dataRoot, BLACKLIST_REL), save, { timeoutMs: 5000 });
+    } catch (err) {
+      if (!isLockTimeout(err)) throw err;
+      return reply.code(503).header('retry-after', '1').send({ error: `${BLACKLIST_REL} is busy (another save is writing it), try again in a moment` });
+    }
+    if (!('written' in saved)) return reply.code(saved.status).send(saved.body);
+    const { written } = saved;
     bus.publish('data.changed', { domain: 'config' });
     return { ok: true, etag: written.etag, rows: written.rows, path: written.path };
   });
@@ -136,7 +150,15 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     const body = appSettingsPatchSchema.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid settings', issues: body.error.issues });
     const ifMatch = req.headers['if-match'];
-    const written = updateSettings(cfg.dataRoot, body.data, { reset: req.query.reset === '1', ifMatch: typeof ifMatch === 'string' ? ifMatch : undefined });
+    // updateSettings checks and writes synchronously; the cross-process lock keeps the other server child of a
+    // blue/green handover from writing between them.
+    let written: ReturnType<typeof updateSettings>;
+    try {
+      written = await withFileLock(cfg.codeRoot, path.join(cfg.dataRoot, SETTINGS_REL), () => updateSettings(cfg.dataRoot, body.data, { reset: req.query.reset === '1', ifMatch: typeof ifMatch === 'string' ? ifMatch : undefined }), { timeoutMs: 5000 });
+    } catch (err) {
+      if (!isLockTimeout(err)) throw err;
+      return reply.code(503).header('retry-after', '1').send({ error: `${SETTINGS_REL} is busy (another save is writing it), try again in a moment` });
+    }
     if (!written.ok && written.code === 'settings-changed') {
       // The page shows these current values next, so the runner takes them as the GET would.
       opts.applySettings(written.current);

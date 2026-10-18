@@ -8,9 +8,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
-import { importCore } from '../core/adapter.js';
-
-type PipelineLock = { withPipelineLock: <T>(p: string, fn: () => T | Promise<T>, o?: { timeoutMs?: number; retryMs?: number }) => Promise<T> };
+import { isLockTimeout, withFileLock } from '../lib/file-lock.js';
 
 export const USER_FILES = {
   cv: 'cv.md',
@@ -83,20 +81,17 @@ export async function fileRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
     const body = z.object({ text: z.string().max(2_000_000) }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid body', issues: body.error.issues });
     const ifMatch = typeof req.headers['if-match'] === 'string' ? req.headers['if-match'].replace(/^"|"$/g, '') : undefined;
+    // The read-compare-write holds the file's cross-process lock: the other server child of a blue/green handover saves
+    // the same files, and for article-digest.md it is the lock custom/projects/import.mjs --write and the projects save
+    // route hold, so an editor save never lands inside their window. A lock held too long is a 503 busy with
+    // retry-after, as on the projects route: the client reads 409 as an ETag conflict.
     let out: WriteOutcome;
-    if (key.data === 'articleDigest') {
-      // The read-compare-write holds article-digest.md's lock, the one custom/projects/import.mjs --write and the
-      // projects save route hold, so an editor save never lands inside their window. A lock held too long is a 503
-      // busy with retry-after, as on the projects route: the client reads 409 as an ETag conflict.
-      const { withPipelineLock } = await importCore<PipelineLock>(cfg.codeRoot, 'pipeline-lock.mjs');
-      try {
-        out = await withPipelineLock(path.join(cfg.dataRoot, USER_FILES.articleDigest), () => writeUserFile(cfg.dataRoot, 'articleDigest', body.data.text, ifMatch), { timeoutMs: 5000, retryMs: 50 });
-      } catch (err) {
-        if ((err as Error).name !== 'LockTimeoutError') throw err;
-        return reply.code(503).header('retry-after', '1').send({ error: 'article-digest.md is busy (an import or a projects save is writing it), try again in a moment' });
-      }
-    } else {
-      out = writeUserFile(cfg.dataRoot, key.data, body.data.text, ifMatch);
+    try {
+      out = await withFileLock(cfg.codeRoot, path.join(cfg.dataRoot, USER_FILES[key.data]), () => writeUserFile(cfg.dataRoot, key.data, body.data.text, ifMatch), { timeoutMs: 5000 });
+    } catch (err) {
+      if (!isLockTimeout(err)) throw err;
+      const busy = key.data === 'articleDigest' ? 'article-digest.md is busy (an import or a projects save is writing it)' : `${USER_FILES[key.data]} is busy (another save is writing it)`;
+      return reply.code(503).header('retry-after', '1').send({ error: `${busy}, try again in a moment` });
     }
     if (!out.ok) return reply.code(409).send({ error: 'the file changed since you loaded it', current: out.conflict });
     bus.publish('data.changed', { domain: 'config' });

@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
+import { isLockTimeout, withFileLock } from '../lib/file-lock.js';
 import { cliScriptPath } from '../core/adapter.js';
 import { execNoShell, type Exec } from './system.js';
 import { etagOf } from '../domains/files.js';
@@ -54,25 +55,20 @@ export function etagMatches(currentEtag: string | null, header: unknown): boolea
 }
 
 export type SaveInput = { raw: string } | { ops: YamlOp[] };
-export type SaveResult = { status: 200; body: { ok: true; etag: string; path: string; warnings: unknown; validatorExit: number } } | { status: 400 | 409 | 422; body: Record<string, unknown> };
+export type SaveResult = { status: 200; body: { ok: true; etag: string; path: string; warnings: unknown; validatorExit: number } } | { status: 400 | 409 | 422 | 503; body: Record<string, unknown> };
 
-// One save at a time per file: the validator takes seconds, and two saves that both
-// passed the If-Match check before it would otherwise both be written.
-const saveLocks = new Map<string, Promise<unknown>>();
-
-function withSaveLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
-  const run = (saveLocks.get(file) ?? Promise.resolve()).then(fn, fn);
-  const settled = run.catch(() => undefined);
-  saveLocks.set(file, settled);
-  void settled.then(() => {
-    if (saveLocks.get(file) === settled) saveLocks.delete(file);
-  });
-  return run;
-}
+// One save at a time per file, across every server process: the validator takes seconds, and two saves that both
+// passed the If-Match check before it would otherwise both be written. A waiter outlasts one validator run (30s).
+const SAVE_LOCK_TIMEOUT_MS = 35_000;
 
 /** Validates through the core CLI on a temp file and renames atomically; nothing is written on failure. */
-export function saveConfigFile(cfg: ServerConfig, exec: Exec, bus: EventBus, key: ConfigKey, input: SaveInput, ifMatch: unknown): Promise<SaveResult> {
-  return withSaveLock(path.join(cfg.dataRoot, CONFIG_FILES[key].rel), () => saveConfigFileLocked(cfg, exec, bus, key, input, ifMatch));
+export async function saveConfigFile(cfg: ServerConfig, exec: Exec, bus: EventBus, key: ConfigKey, input: SaveInput, ifMatch: unknown): Promise<SaveResult> {
+  try {
+    return await withFileLock(cfg.codeRoot, path.join(cfg.dataRoot, CONFIG_FILES[key].rel), () => saveConfigFileLocked(cfg, exec, bus, key, input, ifMatch), { timeoutMs: SAVE_LOCK_TIMEOUT_MS });
+  } catch (err) {
+    if (!isLockTimeout(err)) throw err;
+    return { status: 503, body: { error: `${CONFIG_FILES[key].rel} is busy (another save is still being validated), try again in a moment` } };
+  }
 }
 
 async function saveConfigFileLocked(cfg: ServerConfig, exec: Exec, bus: EventBus, key: ConfigKey, input: SaveInput, ifMatch: unknown): Promise<SaveResult> {
@@ -139,6 +135,7 @@ export async function configRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     const body = bodySchema.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid body: send {raw} or {ops:[{op, path, value}]}', issues: body.error.issues });
     const r = await saveConfigFile(cfg, exec, bus, key.data, body.data, req.headers['if-match']);
+    if (r.status === 503) reply.header('retry-after', '1');
     return reply.code(r.status).send(r.body);
   });
 
@@ -157,6 +154,7 @@ export async function configRoutes(app: FastifyInstance, opts: { cfg: ServerConf
       .map(([k, v]) => (v === null ? { op: 'delete', path: ['followup_cadence', k] } : { op: 'set', path: ['followup_cadence', k], value: v }));
     if (ops.length === 0) return reply.code(400).send({ error: 'no cadence keys given' });
     const r = await saveConfigFile(cfg, exec, bus, 'profile', { ops }, req.headers['if-match']);
+    if (r.status === 503) reply.header('retry-after', '1');
     return reply.code(r.status).send(r.body);
   });
 
@@ -165,16 +163,29 @@ export async function configRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     if (!body.success) return reply.code(400).send({ error: 'invalid body: {enabled: boolean}', issues: body.error.issues });
     const known = (await listPlugins(cfg.codeRoot, cfg.dataRoot, cfg.pluginsLocalDir)).plugins.find((p) => p.id === req.params.id);
     if (!known) return reply.code(404).send({ error: `no plugin ${req.params.id}` });
-    const current = readPluginsConfig(cfg.dataRoot);
-    if (!etagMatches(current.etag, req.headers['if-match'])) return reply.code(409).send({ error: 'config/plugins.yml changed since you loaded it', current: { ...current, doc: undefined } });
-    let raw: string;
+    // The read, If-Match check and write hold the file's cross-process lock, so the other server child cannot write between them.
+    const write = (): { status: number; body: Record<string, unknown> } | { raw: string } => {
+      const current = readPluginsConfig(cfg.dataRoot);
+      if (!etagMatches(current.etag, req.headers['if-match'])) return { status: 409, body: { error: 'config/plugins.yml changed since you loaded it', current: { ...current, doc: undefined } } };
+      let raw: string;
+      try {
+        raw = applyYamlOps(current.raw, [{ op: 'set', path: ['plugins', known.id, 'enabled'], value: body.data.enabled }]);
+      } catch (err) {
+        if (err instanceof YamlOpsError) return { status: 422, body: { error: `${err.message}; fix config/plugins.yml by hand first` } };
+        throw err;
+      }
+      writeFileAtomic(path.join(cfg.dataRoot, PLUGINS_CONFIG_REL), raw, dataRootOnly(cfg.dataRoot));
+      return { raw };
+    };
+    let out: ReturnType<typeof write>;
     try {
-      raw = applyYamlOps(current.raw, [{ op: 'set', path: ['plugins', known.id, 'enabled'], value: body.data.enabled }]);
+      out = await withFileLock(cfg.codeRoot, path.join(cfg.dataRoot, PLUGINS_CONFIG_REL), write, { timeoutMs: 5000 });
     } catch (err) {
-      if (err instanceof YamlOpsError) return reply.code(422).send({ error: `${err.message}; fix config/plugins.yml by hand first` });
-      throw err;
+      if (!isLockTimeout(err)) throw err;
+      return reply.code(503).header('retry-after', '1').send({ error: 'config/plugins.yml is busy (another save is writing it), try again in a moment' });
     }
-    writeFileAtomic(path.join(cfg.dataRoot, PLUGINS_CONFIG_REL), raw, dataRootOnly(cfg.dataRoot));
+    if (!('raw' in out)) return reply.code(out.status).send(out.body);
+    const { raw } = out;
     bus.publish('data.changed', { domain: 'config' });
     return { ok: true, id: known.id, enabled: body.data.enabled, etag: etagOf(raw), path: PLUGINS_CONFIG_REL };
   });
