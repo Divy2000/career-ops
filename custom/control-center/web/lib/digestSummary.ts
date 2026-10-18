@@ -181,24 +181,41 @@ function firstSentence(spans: DigestSpan[]): DigestSpan[] {
   return spans;
 }
 
+/** Ends kept text with an ellipsis after its trailing spaces; a link label never takes it. */
+function ellipsize(out: DigestSpan[]): DigestSpan[] {
+  while (out.length > 0) {
+    const last = out[out.length - 1]!;
+    const text = last.text.trimEnd();
+    if (text !== '') {
+      out[out.length - 1] = { ...last, text };
+      break;
+    }
+    out.pop();
+  }
+  const last = out[out.length - 1];
+  if (last && !last.href) out[out.length - 1] = { ...last, text: `${last.text}…` };
+  else out.push({ text: '…' });
+  return out;
+}
+
 /** Clips rendered text to the limit. A link is kept whole or dropped; plain text is cut with an ellipsis. */
 function clip(spans: DigestSpan[]): DigestSpan[] {
   const out: DigestSpan[] = [];
-  let used = 0;
-  for (const s of spans) {
-    const room = MAX_CHARS - used;
-    if (s.text.length <= room) {
-      out.push(s);
-      used += s.text.length;
+  for (const piece of pieces(spans)) {
+    const room = MAX_CHARS - piece.start;
+    const whole = spans.slice(piece.first, piece.last + 1);
+    if (piece.end - piece.start <= room) {
+      out.push(...whole);
       continue;
     }
+    const s = spans[piece.first]!;
     if (s.href) {
-      if (out.length === 0) out.push(s);
-      else out[out.length - 1] = { ...out[out.length - 1]!, text: `${out[out.length - 1]!.text.trimEnd()}…` };
-    } else {
-      out.push({ ...s, text: `${s.text.slice(0, Math.max(room, 0)).trimEnd()}…` });
+      // A link longer than the limit on its own is still the line; cut, it would mislabel its target.
+      if (out.length === 0) return whole;
+      return ellipsize(out);
     }
-    return out;
+    out.push({ ...s, text: s.text.slice(0, Math.max(room, 0)) });
+    return ellipsize(out);
   }
   return out;
 }

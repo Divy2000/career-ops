@@ -112,6 +112,16 @@ describe('summarizeDigest', () => {
     expect(spansText(boldLong).endsWith('…')).toBe(true);
   });
 
+  it('drops a link of several spans whole when it crosses the limit, never showing part of its label (R34-feat-b-L2-02)', () => {
+    expect(summarizeDigest(`- ${'a'.repeat(140)} [the final *rule on wage-weighted selection*](https://example.test/r)`)[0]).toEqual([{ text: `${'a'.repeat(140)}…` }]);
+    expect(summarizeDigest(`- ${'a'.repeat(150)} [x **y** z](https://example.test/r)`)[0]).toEqual([{ text: `${'a'.repeat(150)} ` }, { text: 'x ', href: 'https://example.test/r' }, { text: 'y', bold: true, href: 'https://example.test/r' }, { text: ' z', href: 'https://example.test/r' }]);
+  });
+
+  it('puts the ellipsis after the kept text, outside any link label and past trailing spaces (R34-feat-b-L2-02)', () => {
+    expect(summarizeDigest(`- [${'a'.repeat(100)}](https://example.test/1)[${'b'.repeat(80)}](https://example.test/2)`)[0]).toEqual([{ text: 'a'.repeat(100), href: 'https://example.test/1' }, { text: '…' }]);
+    expect(lines(`- ${'**word** '.repeat(40)}end.`)).toEqual([`${'word '.repeat(32).trimEnd()}…`]);
+  });
+
   it('counts rendered text, not markdown syntax, against the limit', () => {
     const link = `[${'a'.repeat(100)}](${LONG}${'/x'.repeat(100)})`;
     expect(lines(`- ${link}`)[0]).toBe('a'.repeat(100));
