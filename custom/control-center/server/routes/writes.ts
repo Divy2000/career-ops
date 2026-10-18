@@ -5,7 +5,8 @@ import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import { importCore } from '../core/adapter.js';
 import { applyInboxSkip, pipelineRef, postingUrl } from '../domains/inboxSkip.js';
-import { appendOffers, editFollowups, FollowupsBusyError, PipelineBusyError } from '../domains/writers.js';
+import { appendOffers, editFollowups, FollowupsBusyError, PipelineBusyError, type FollowupRefusal } from '../domains/writers.js';
+import type { FollowupEdit } from '../domains/followups-edit.js';
 import { readApplyDocuments, readDocuments } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import type { DailyJobWatch } from '../system/daily.js';
@@ -81,7 +82,7 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
   const followupsReply = async (reply: { code: (n: number) => { header: (k: string, v: string) => { send: (b: unknown) => unknown }; send: (b: unknown) => unknown } }, fn: () => Promise<Awaited<ReturnType<typeof editFollowups>>>) => {
     try {
       const r = await fn();
-      if (!r.ok) return reply.code(r.error === 'not-found' ? 404 : r.error === 'stale' ? 409 : 400).send({ error: r.error });
+      if (!r.ok) return reply.code('status' in r && r.status !== undefined ? r.status : r.error === 'not-found' ? 404 : r.error === 'stale' ? 409 : 400).send({ error: r.error });
       return { ok: true, ...(r.num !== undefined ? { num: r.num } : {}) };
     } catch (err) {
       if (err instanceof FollowupsBusyError) return reply.code(409).header('retry-after', '1').send({ error: err.message });
@@ -89,13 +90,29 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
     }
   };
 
-  app.post<{ Body: Record<string, unknown> }>('/api/followups/log', async (req, reply) => {
-    const parsed = z.object({ appNum: z.number().int().positive(), date: DATE, channel: z.string().max(60), contact: z.string().max(200).default(''), notes: z.string().max(1000).default('') }).safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
+  // A tracker delete reindexes the rows, so the number a page read can name another application by the time it writes:
+  // expectCompany/expectRole are the row the page showed, and a write naming a row no longer under that number is refused
+  // as stale, as tracker.setStatus and the follow-up Delete refuse theirs. Checked in the write's turn in the queue.
+  const expectedRow = { expectCompany: z.string().optional(), expectRole: z.string().optional() };
+  type ExpectedRow = { expectCompany?: string; expectRole?: string };
+  const expectsRow = (p: ExpectedRow) => p.expectCompany !== undefined || p.expectRole !== undefined;
+  const rowUnder = async (appNum: number, expect: ExpectedRow): Promise<{ company: string; role: string } | FollowupRefusal> => {
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
-    const row = tracker.kind === 'ok' ? tracker.rows.find((r) => r.num === parsed.data.appNum) : undefined;
-    if (!row) return reply.code(404).send({ error: `no tracker row #${parsed.data.appNum}` });
-    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, { op: 'log.add', ...parsed.data, company: row.company, role: row.role }));
+    const rows = tracker.kind === 'ok' ? tracker.rows.filter((r) => r.num === appNum) : [];
+    if (!expectsRow(expect)) return rows[0] ?? { ok: false, error: `no tracker row #${appNum}`, status: 404 };
+    const row = rows.find((r) => (expect.expectCompany === undefined || r.company === expect.expectCompany) && (expect.expectRole === undefined || r.role === expect.expectRole));
+    return row ?? { ok: false, error: 'stale' };
+  };
+  const guarded = (appNum: number, expect: ExpectedRow, edit: (row: { company: string; role: string }) => FollowupEdit) => async (): Promise<FollowupEdit | FollowupRefusal> => {
+    const row = await rowUnder(appNum, expect);
+    return 'ok' in row ? row : edit(row);
+  };
+
+  app.post<{ Body: Record<string, unknown> }>('/api/followups/log', async (req, reply) => {
+    const parsed = z.object({ appNum: z.number().int().positive(), date: DATE, channel: z.string().max(60), contact: z.string().max(200).default(''), notes: z.string().max(1000).default(''), ...expectedRow }).safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
+    const { expectCompany, expectRole, ...log } = parsed.data;
+    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, guarded(log.appNum, { expectCompany, expectRole }, (row) => ({ op: 'log.add', ...log, company: row.company, role: row.role }))));
   });
 
   app.delete<{ Body: Record<string, unknown> }>('/api/followups/log', async (req, reply) => {
@@ -106,15 +123,18 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
   });
 
   app.post<{ Body: Record<string, unknown> }>('/api/followups/override', async (req, reply) => {
-    const parsed = z.object({ appNum: z.number().int().positive(), date: DATE }).safeParse(req.body ?? {});
+    const parsed = z.object({ appNum: z.number().int().positive(), date: DATE, ...expectedRow }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, { op: 'pin.set', appNum: parsed.data.appNum, date: parsed.data.date, setOn: localDate() }));
+    const { appNum, date } = parsed.data;
+    const edit: FollowupEdit = { op: 'pin.set', appNum, date, setOn: localDate() };
+    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, expectsRow(parsed.data) ? guarded(appNum, parsed.data, () => edit) : edit));
   });
 
   app.delete<{ Body: Record<string, unknown> }>('/api/followups/override', async (req, reply) => {
-    const parsed = z.object({ appNum: z.number().int().positive() }).safeParse(req.body ?? {});
+    const parsed = z.object({ appNum: z.number().int().positive(), ...expectedRow }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, { op: 'pin.clear', appNum: parsed.data.appNum }));
+    const edit: FollowupEdit = { op: 'pin.clear', appNum: parsed.data.appNum };
+    return followupsReply(reply, () => editFollowups(cfg.codeRoot, cfg.dataRoot, expectsRow(parsed.data) ? guarded(parsed.data.appNum, parsed.data, () => edit) : edit));
   });
 
   app.get<{ Params: { n: string } }>('/api/tracker/:n/documents', async (req, reply) => {

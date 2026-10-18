@@ -21,7 +21,12 @@ function urgencyTone(u: string): 'danger' | 'warn' | 'neutral' | 'info' {
   return 'neutral';
 }
 
+const isStale = (err: unknown) => (err as { body?: { error?: unknown } } | null)?.body?.error === 'stale';
+
 export function LogForm({ entry, onDone, onBusyChange }: { entry: FollowupCadenceEntry; onDone: (msg: string) => void; onBusyChange?: (busy: boolean) => void }) {
+  // A tracker delete reindexes the rows, so the entry under this row number can become another application while the
+  // form is open: the form stays on the one it was opened for, and the server refuses the number if it moved.
+  const [target] = useState(() => ({ num: entry.num, company: entry.company, role: entry.role }));
   const [date, setDate] = useState(localDate());
   const [channel, setChannel] = useState('Email');
   const [contact, setContact] = useState('');
@@ -34,17 +39,18 @@ export function LogForm({ entry, onDone, onBusyChange }: { entry: FollowupCadenc
     onBusyChange?.(true);
     setError(null);
     try {
-      const r = await apiSend<{ num: number }>('POST', '/api/followups/log', { appNum: entry.num, date, channel, contact, notes });
-      onDone(`Logged follow-up #${r.num} for ${entry.company}`);
+      const r = await apiSend<{ num: number }>('POST', '/api/followups/log', { appNum: target.num, expectCompany: target.company, expectRole: target.role, date, channel, contact, notes });
+      onDone(`Logged follow-up #${r.num} for ${target.company}`);
     } catch (err) {
-      setError(describeError(err));
+      setError(isStale(err) ? `${target.company} is no longer row #${target.num} in the tracker, so nothing was logged. Cancel and log it from the reloaded list.` : describeError(err));
     } finally {
       setBusy(false);
       onBusyChange?.(false);
     }
   };
   return (
-    <div className="card stack" role="dialog" aria-label={`Log follow-up for ${entry.company}`}>
+    <div className="card stack" role="dialog" aria-label={`Log follow-up for ${target.company}`}>
+      <strong>Log follow-up for {target.company}</strong>
       <div className="row gap">
         <label>
           <span className="muted">Date</span> <input type="date" aria-label="Follow-up date" value={date} onChange={(e) => setDate(e.target.value)} />
@@ -95,7 +101,7 @@ export function CadenceTab() {
   const pinning = useRef(new Set<number>());
   const removing = useRef(false);
   const pin = async (...args: Parameters<typeof pinAsked>) => {
-    const [appNum] = args;
+    const appNum = args[0].num;
     if (pinning.current.has(appNum)) return;
     pinning.current.add(appNum);
     try {
@@ -104,15 +110,21 @@ export function CadenceTab() {
       pinning.current.delete(appNum);
     }
   };
-  const pinAsked = async (appNum: number, date: string | null) => {
+  const pinAsked = async (row: PinRowRef, date: string | null) => {
+    const body = { appNum: row.num, expectCompany: row.company, expectRole: row.role };
     // Clearing removes a date the user chose: it asks first, as a delete does.
     if (!date && !(await confirm({ title: 'Clear the pinned follow-up date?', body: 'The next follow-up goes back to the cadence date. data/follow-ups.md is rewritten.', confirmLabel: 'Clear pin', danger: true }))) return;
     try {
-      if (date) await apiSend('POST', '/api/followups/override', { appNum, date });
-      else await apiSend('DELETE', '/api/followups/override', { appNum });
+      if (date) await apiSend('POST', '/api/followups/override', { ...body, date });
+      else await apiSend('DELETE', '/api/followups/override', body);
       setMessage(date ? `Next follow-up pinned to ${date}` : 'Pin cleared');
       void refresh();
     } catch (err) {
+      if (isStale(err)) {
+        setMessage(`Could not update pin: ${row.company} is no longer row #${row.num} in the tracker, so nothing was changed. The list is reloaded.`);
+        void refresh();
+        return;
+      }
       setMessage(`Could not update pin: ${describeError(err)}`);
     }
   };
@@ -133,7 +145,7 @@ export function CadenceTab() {
       setMessage(`Deleted follow-up #${num}`);
       void refresh();
     } catch (err) {
-      if ((err as { body?: { error?: unknown } } | null)?.body?.error === 'stale') {
+      if (isStale(err)) {
         setMessage(`Could not delete: follow-up #${num} changed since this page loaded, so nothing was deleted. The list is reloaded.`);
         void refresh();
         return;
@@ -370,6 +382,7 @@ export function FollowupsPage() {
 }
 
 /** A logged row as the page last saw it: a delete is refused once the row with this num reads differently. */
+type PinRowRef = { num: number; company: string; role: string };
 type FollowupRowRef = { num: number; appNum: number; date: string; channel: string; contact: string; notes: string };
 
 /** Logged follow-ups; a legacy bullet line (num null) has no row number to delete by, so it has no Delete. */
@@ -390,7 +403,7 @@ export function FollowupHistory({ company, followups, onDelete }: { company: str
   );
 }
 
-function RowGroup({ e, open, onToggle, logging, logLocked, onLog, onSaving, onLogged, onPin, onDelete }: { e: FollowupCadenceEntry; open: boolean; onToggle: () => void; logging: boolean; logLocked: boolean; onLog: () => void; onSaving: (busy: boolean) => void; onLogged: (m: string) => void; onPin: (appNum: number, date: string | null) => void; onDelete: (row: FollowupRowRef) => void }) {
+function RowGroup({ e, open, onToggle, logging, logLocked, onLog, onSaving, onLogged, onPin, onDelete }: { e: FollowupCadenceEntry; open: boolean; onToggle: () => void; logging: boolean; logLocked: boolean; onLog: () => void; onSaving: (busy: boolean) => void; onLogged: (m: string) => void; onPin: (row: PinRowRef, date: string | null) => void; onDelete: (row: FollowupRowRef) => void }) {
   return (
     <>
       <tr>
@@ -421,10 +434,10 @@ function RowGroup({ e, open, onToggle, logging, logLocked, onLog, onSaving, onLo
             <button type="button" aria-label={`Log follow-up for ${e.company}`} onClick={onLog} disabled={logLocked} title={logLocked ? 'Another follow-up is being saved' : undefined}>
               Log
             </button>
-            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e.num, localDatePlusDays(7))}>
+            <button type="button" aria-label={`Pin next follow-up for ${e.company} in 7 days`} onClick={() => onPin(e, localDatePlusDays(7))}>
               +7d
             </button>
-            <button type="button" aria-label={`Clear pinned date for ${e.company}`} onClick={() => onPin(e.num, null)} disabled={!e.nextOverride}>
+            <button type="button" aria-label={`Clear pinned date for ${e.company}`} onClick={() => onPin(e, null)} disabled={!e.nextOverride}>
               Clear pin
             </button>
           </div>

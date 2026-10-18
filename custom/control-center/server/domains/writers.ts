@@ -120,8 +120,17 @@ export class FollowupsBusyError extends Error {}
 /** The pipeline or scan-history lock stayed held past the writer's wait (exit 75 from the child). */
 export class PipelineBusyError extends Error {}
 
-export function editFollowups(codeRoot: string, dataRoot: string, edit: FollowupEdit): Promise<FollowupEditResult> {
+/** A write refused before it reaches follow-ups.md; status overrides the route's mapping of the error code. */
+export type FollowupRefusal = { ok: false; error: string; status?: number };
+
+/**
+ * edit may be a function that resolves the edit, or refuses it, once this request's turn in the queue comes: a check of
+ * the tracker made there is not outdated by the follow-up writes queued ahead of it.
+ */
+export function editFollowups(codeRoot: string, dataRoot: string, edit: FollowupEdit | (() => Promise<FollowupEdit | FollowupRefusal>)): Promise<FollowupEditResult | FollowupRefusal> {
   return serialized(async () => {
+    const resolved = typeof edit === 'function' ? await edit() : edit;
+    if ('ok' in resolved) return resolved;
     const code = `
 import fs from 'node:fs';
 import path from 'node:path';
@@ -159,7 +168,7 @@ try {
 `;
     const file = path.join(dataRoot, 'data', 'follow-ups.md');
     const target = containedTarget(file, dataRootOnly(dataRoot));
-    const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { path: file, target, edit, timeoutMs: 5000 }, timeoutMs: 30_000 });
+    const r = await runModule(code, { cwd: codeRoot, env: env(dataRoot), input: { path: file, target, edit: resolved, timeoutMs: 5000 }, timeoutMs: 30_000 });
     if (r.code === 75) throw new FollowupsBusyError('follow-ups file is busy, try again in a moment');
     // A refused edit (no such row, bad date) is ok:false with exit 0; any other exit is a failure the client cannot fix.
     if (r.code !== 0) {
