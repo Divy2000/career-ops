@@ -13,6 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
+import { gitTestEnv } from '../../test-support/git-env.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const INSTALL_REL = 'custom/install/install.sh';
@@ -34,9 +35,9 @@ export function checkRef(argv = process.argv.slice(2), env = process.env) {
  */
 function installerAt(ref, { explicit }) {
   if (!ref) return { file: path.join(ROOT, INSTALL_REL), label: 'the working tree' };
-  const present = spawnSync('git', ['-C', ROOT, 'rev-parse', '-q', '--verify', `${ref}^{commit}`], { encoding: 'utf8' }).status === 0;
+  const present = spawnSync('git', ['-C', ROOT, 'rev-parse', '-q', '--verify', `${ref}^{commit}`], { encoding: 'utf8', env: gitTestEnv() }).status === 0;
   if (!present && !explicit) return { skip: `${ref} is not in this clone; fetch it to check it too: git fetch origin tag ${ref}` };
-  const shown = spawnSync('git', ['-C', ROOT, 'show', `${ref}:${INSTALL_REL}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  const shown = spawnSync('git', ['-C', ROOT, 'show', `${ref}:${INSTALL_REL}`], { encoding: 'utf8', env: gitTestEnv(), maxBuffer: 16 * 1024 * 1024 });
   assert.equal(shown.status, 0, `could not read ${INSTALL_REL} at ${ref}: ${shown.stderr.trim()} (fetch the tag first: git fetch origin tag ${ref})`);
   const file = path.join(tempDir('readme-flags-'), INSTALL_REL);
   mkdirSync(path.dirname(file), { recursive: true });
@@ -164,6 +165,17 @@ test('given the pinned tag is missing locally (a shallow clone, the sync worktre
   assert.deepEqual(installerAt(missing, { explicit: false }), { skip: `${missing} is not in this clone; fetch it to check it too: git fetch origin tag ${missing}` });
   assert.throws(() => installerAt(missing, { explicit: true }), new RegExp(`could not read ${INSTALL_REL} at ${missing}: .*git fetch origin tag ${missing}`));
   assert.match(readFileSync(installerAt('HEAD', { explicit: false }).file, 'utf8'), /^#!/);
+});
+
+test('Given GIT_DIR exported at another repository, when the check reads a ref, then it still reads this checkout (R35-tests-custom-X-01)', (t) => {
+  const other = tempDir('readme-flags-other-');
+  assert.equal(spawnSync('git', ['init', '-q', other], { env: gitTestEnv() }).status, 0);
+  const saved = process.env.GIT_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved; });
+  process.env.GIT_DIR = path.join(other, '.git');
+  const head = spawnSync('git', ['-C', ROOT, 'show', `HEAD:${INSTALL_REL}`], { encoding: 'utf8', env: gitTestEnv(), maxBuffer: 16 * 1024 * 1024 }).stdout;
+  assert.equal(readFileSync(installerAt('HEAD', { explicit: true }).file, 'utf8'), head);
+  assert.equal(installerAt('HEAD', { explicit: false }).skip, undefined, 'the default ref was looked up in the other repository');
 });
 
 test('by default the check covers the working tree and the tag bootstrap.sh pins, which README users install (SW4-tests-07)', () => {

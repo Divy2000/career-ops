@@ -84,9 +84,9 @@ test('a Keychain item whose access is denied (exit 51) is reported as denied, ne
 });
 
 test('a Keychain check that waits on an unanswered unlock prompt gives up after CC_KEYCHAIN_TIMEOUT seconds and says so (R23-tests-custom-L3-01)', () => {
-  const started = Date.now();
+  // No wall-clock budget, which a loaded machine overran: the hang (30 s) ends with the item found, and is shorter
+  // than the default bound (60 s), so only a check killed at CC_KEYCHAIN_TIMEOUT reports the timeout below.
   const { r } = lockedKeychainRun({ FAKE_SECURITY_HANG: '30', CC_KEYCHAIN_TIMEOUT: '1' });
-  assert.ok(Date.now() - started < 25_000, `the install waited ${Date.now() - started} ms for the Keychain`);
   assert.match(r.out, /Could not read Keychain item career-ops-claude-token: security did not answer within 1 s\. The login keychain is probably locked and waiting at an unlock prompt nobody answered\. Unlock it with: security unlock-keychain, then re-run the installer\./);
 });
 
