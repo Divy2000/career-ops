@@ -169,3 +169,28 @@ test('a failing clone is reported and install.sh never runs', () => {
   assert.notEqual(r.status, 0);
   assert.ok(!w.log().some((l) => l.startsWith('install-sh')));
 });
+
+test('a repository URL with a credential in its userinfo is shown without it, in the banner and the no-terminal error, and cloned as given (R32-scripts-b-L2-02)', () => {
+  const secretUrl = 'https://me:ghp_SECRET@github.com/Divy2000/career-ops.git';
+  const shown = 'https://github.com/Divy2000/career-ops.git';
+  const w = world();
+  const confirmed = w.run(['--no-start'], { script: BOOTSTRAP_SH, tty: 'y\n', env: { CAREER_OPS_REPO_URL: secretUrl } });
+  assert.equal(confirmed.status, 0, confirmed.out);
+  assert.ok(confirmed.out.split('\n').includes(`  repository: ${shown}`), confirmed.out);
+  assert.doesNotMatch(confirmed.out, /ghp_SECRET/);
+  assert.ok(w.log().includes(`git clone --branch fork-install-v3 ${secretUrl} ${path.join(w.home, 'career-ops')}`), w.log().join('\n'));
+  const noTty = world().run([], { script: BOOTSTRAP_SH, env: { CAREER_OPS_REPO_URL: secretUrl } });
+  assert.equal(noTty.status, 1, noTty.out);
+  assert.match(noTty.out, /git clone https:\/\/github\.com\/Divy2000\/career-ops\.git &&/);
+  assert.doesNotMatch(noTty.out, /ghp_SECRET/);
+});
+
+test('an existing checkout whose origin holds a credential is refused without printing it (R32-scripts-b-L2-02)', () => {
+  const w = world();
+  const dest = path.join(w.home, 'career-ops');
+  w.makeCheckout(dest, { origin: 'https://me:ghp_SECRET@github.com/career-ops-hq/career-ops.git' });
+  const r = w.run([], { script: BOOTSTRAP_SH, tty: 'y\n', env: { CAREER_OPS_REPO_URL: 'https://you:ghp_OTHER@github.com/Divy2000/career-ops.git' } });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /is https:\/\/github\.com\/career-ops-hq\/career-ops\.git, not the fork https:\/\/github\.com\/Divy2000\/career-ops\.git\./);
+  assert.doesNotMatch(r.out, /ghp_/);
+});

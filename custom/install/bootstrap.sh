@@ -12,6 +12,10 @@ main() {
       -e 's#^[^@/]+@##' -e 's#/+$##' -e 's#\.git$##' | tr '[:upper:]' '[:lower:]'
   }
 
+  # A repository URL as shown: an https://user:token@host URL loses its userinfo, which can hold a credential (the same
+  # rule as redact_url in install.sh). Only what is printed is redacted; git clone gets the URL as given.
+  redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^@/]*@#\1#'; }
+
   # A --dir value as install.sh's abspath reads it (~ and ~/ are home, a relative path is under the current folder), so
   # both scripts name one checkout even when the shell left a quoted ~ alone.
   abspath() {
@@ -48,7 +52,7 @@ main() {
     existing=1
     origin="$(git -C "$dir" remote get-url origin 2>/dev/null)" || origin=""
     if [ "$(norm_repo "$origin")" != "$(norm_repo "$repo")" ]; then
-      echo "error: origin of $dir is ${origin:-unset}, not the fork $repo. Pick another --dir, or fix the remote." >&2
+      echo "error: origin of $dir is $(redact_url "${origin:-unset}"), not the fork $(redact_url "$repo"). Pick another --dir, or fix the remote." >&2
       return 1
     fi
     if [ ! -f "$dir/custom/install/install.sh" ]; then
@@ -58,7 +62,7 @@ main() {
   fi
 
   echo "career-ops (H-1B-aware fork) bootstrap"
-  echo "  repository: $repo"
+  echo "  repository: $(redact_url "$repo")"
   echo "  pinned tag: $ref"
   if [ "$existing" = 1 ]; then
     echo "  use:        the existing checkout at $dir and its own installer (checked out: $(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)), not the pinned tag"
@@ -69,7 +73,7 @@ main() {
   echo "Nothing has been downloaded yet. The installer asks before each system change."
 
   if ! { : <"$tty_dev"; } 2>/dev/null; then
-    echo "error: this needs a terminal to confirm. Download the script, read it, and run it yourself, or: git clone $repo && bash career-ops/custom/install/install.sh" >&2
+    echo "error: this needs a terminal to confirm. Download the script, read it, and run it yourself, or: git clone $(redact_url "$repo") && bash career-ops/custom/install/install.sh" >&2
     return 1
   fi
   printf 'Continue? [y/N] ' >&2
