@@ -118,7 +118,9 @@ export function TrackerPage() {
   const search = route.useSearch();
   const navigate = useNavigate({ from: '/tracker' });
   const q = useTracker();
-  const [selected, setSelected] = useState<number | null>(null);
+  // The previewed row by number and identity: a delete elsewhere reindexes the tracker, and the preview (its open
+  // Discard picker with it) follows the row the user picked, not the one that inherits its number.
+  const [selected, setSelected] = useState<{ num: number; row: RowIdentity } | null>(null);
   // Each ticked number with the row it was ticked on: a delete elsewhere reindexes the tracker, and a number that now
   // holds another row is not that row's selection (Compare runs a paid session on these).
   const [checked, setChecked] = useState<Map<number, RowIdentity>>(new Map());
@@ -139,7 +141,8 @@ export function TrackerPage() {
   const data = q.data;
   const rows = useMemo(() => (data?.kind === 'ok' ? data.rows : []), [data]);
   const visible = useMemo(() => sortRows(filterRows(rows, search.tab, search.q), search.sort, search.dir), [rows, search]);
-  const current = visible.find((r) => r.num === selected) ?? null;
+  const current = selected === null ? null : (visible.find((r) => r.num === selected.num && sameRow(selected.row, r)) ?? visible.find((r) => sameRow(selected.row, r)) ?? null);
+  const select = (r: TrackerRow | undefined) => setSelected(r ? { num: r.num, row: rowIdentity(r) } : null);
   const visibleCols = COLUMNS.filter((c) => !c.optional || cols.has(c.key));
   const isChecked = (r: TrackerRow) => {
     const ticked = checked.get(r.num);
@@ -163,8 +166,8 @@ export function TrackerPage() {
     // A focused control inside the table (an Open link, a sort button, a checkbox) keeps its own keys: Enter there
     // activates it instead of opening the selected row.
     if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('a, button, input, select, textarea, summary, [contenteditable="true"]')) return;
-    const idx = visible.findIndex((r) => r.num === selected);
-    const pick = (i: number) => setSelected(visible[Math.max(0, Math.min(visible.length - 1, i))]?.num ?? null);
+    const idx = current === null ? -1 : visible.indexOf(current);
+    const pick = (i: number) => select(visible[Math.max(0, Math.min(visible.length - 1, i))]);
     switch (e.key) {
       case 'j':
       case 'ArrowDown':
@@ -281,7 +284,7 @@ export function TrackerPage() {
                 </thead>
                 <tbody>
                   {groups.map((g) => (
-                    <GroupRows key={g.status ?? 'all'} status={g.status} rows={g.rows} cols={visibleCols} selected={selected} onSelect={setSelected} isChecked={isChecked} onCheck={toggleChecked} />
+                    <GroupRows key={g.status ?? 'all'} status={g.status} rows={g.rows} cols={visibleCols} selected={current?.num ?? null} onSelect={select} isChecked={isChecked} onCheck={toggleChecked} />
                   ))}
                 </tbody>
               </table>
@@ -298,7 +301,7 @@ export function TrackerPage() {
                   <StatusPill status={current.status} />
                 </div>
                 <div style={{ marginTop: 12 }}>
-                  <StatusControl key={current.num} row={current} onHired={setHired} />
+                  <StatusControl key={`${current.num}\0${current.company}\0${current.role}\0${current.report}`} row={current} onHired={setHired} />
                 </div>
                 <dl className="kv" style={{ marginTop: 12 }}>
                   <dt>Archetype</dt>
@@ -363,7 +366,7 @@ export function TrackerPage() {
   );
 }
 
-function GroupRows({ status, rows, cols, selected, onSelect, isChecked, onCheck }: { status: string | null; rows: TrackerRow[]; cols: typeof COLUMNS; selected: number | null; onSelect: (n: number) => void; isChecked: (r: TrackerRow) => boolean; onCheck: (r: TrackerRow) => void }) {
+function GroupRows({ status, rows, cols, selected, onSelect, isChecked, onCheck }: { status: string | null; rows: TrackerRow[]; cols: typeof COLUMNS; selected: number | null; onSelect: (r: TrackerRow) => void; isChecked: (r: TrackerRow) => boolean; onCheck: (r: TrackerRow) => void }) {
   return (
     <>
       {status && (
@@ -374,7 +377,7 @@ function GroupRows({ status, rows, cols, selected, onSelect, isChecked, onCheck 
         </tr>
       )}
       {rows.map((r) => (
-        <tr key={r.num} className={r.num === selected ? 'is-selected' : ''} onClick={() => onSelect(r.num)} aria-selected={r.num === selected}>
+        <tr key={r.num} className={r.num === selected ? 'is-selected' : ''} onClick={() => onSelect(r)} aria-selected={r.num === selected}>
           <td onClick={(e) => e.stopPropagation()}>
             <input type="checkbox" aria-label={`Select ${r.company}`} checked={isChecked(r)} onChange={() => onCheck(r)} />
           </td>

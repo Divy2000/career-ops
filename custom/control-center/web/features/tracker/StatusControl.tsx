@@ -5,6 +5,7 @@ import { describeError } from '../../lib/actions';
 import type { TrackerRow } from '@shared/api';
 import { HiredDialog } from './HiredDialog';
 import { reasonLabel } from '../../lib/format';
+import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 
 export const STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'] as const;
 /** The TUI picker's codes (dashboard/internal/ui/screens/pipeline.go canonicalDiscardReasons), shown as words. */
@@ -52,6 +53,10 @@ export function StatusMessage({ message }: { message: string | null }) {
   );
 }
 
+const DISCARD_PREFIX = 'DISCARD: ';
+// tracker.setStatus refuses a note over STATUS_NOTE_MAX characters, so a longer reason is refused before Confirm.
+const REASON_MAX = STATUS_NOTE_MAX - DISCARD_PREFIX.length;
+
 /** Discarded and SKIP need a reason (TUI parity); it is committed as a `DISCARD: reason` note. */
 export function DiscardReasonPicker({ state, row, busy, onConfirm, onCancel }: { state: string; row: TrackerRow; busy: boolean; onConfirm: (note: string) => void; onCancel: () => void }) {
   const [reason, setReason] = useState('');
@@ -62,6 +67,7 @@ export function DiscardReasonPicker({ state, row, busy, onConfirm, onCancel }: {
   const reasons = new Map<string, string>();
   for (const value of [...predicted, ...DISCARD_REASONS]) if (!reasons.has(reasonLabel(value))) reasons.set(reasonLabel(value), value);
   const chosenReason = reason === '__other' ? otherText.trim() : reason;
+  const tooLong = chosenReason.length > REASON_MAX;
   return (
     <div className="card" role="dialog" aria-label="Discard reason picker">
       <p className="muted">Why {state === 'SKIP' ? 'skip' : 'discard'} this one?</p>
@@ -75,8 +81,13 @@ export function DiscardReasonPicker({ state, row, busy, onConfirm, onCancel }: {
         <option value="__other">Other</option>
       </select>
       {reason === '__other' && <input aria-label="Other reason" placeholder="Reason" value={otherText} onChange={(e) => setOtherText(e.target.value)} />}
+      {tooLong && (
+        <p role="alert" className="danger-text small">
+          A reason can be at most {REASON_MAX} characters ({chosenReason.length} now).
+        </p>
+      )}
       <div className="row gap" style={{ marginTop: 8 }}>
-        <button type="button" disabled={!chosenReason || busy} onClick={() => onConfirm(`DISCARD: ${chosenReason}`)}>
+        <button type="button" disabled={!chosenReason || tooLong || busy} onClick={() => onConfirm(`${DISCARD_PREFIX}${chosenReason}`)}>
           Confirm {state}
         </button>
         <button type="button" onClick={onCancel}>
