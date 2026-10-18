@@ -90,11 +90,17 @@ const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 
 const CITATION_WORDS = new Set(['fed', 'reg', 'sec', 'pub', 'rev', 'pt']);
 const CITATION_NEXT = /^\p{Lu}\p{L}{0,3}\.$/u;
 const CAPITALIZED = /^\p{Lu}/u;
+// A lone capital after these is a lettered part ("Schedule A.", "Part B."), not a middle initial.
+const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 'appendix', 'exhibit', 'form', 'annex', 'item', 'tier', 'type', 'class', 'category', 'group']);
 
-/** Where the first sentence of `text` ends (after its . ! or ?), or -1: a period after an abbreviation, or before a lowercase word or a number ("Oct. 15"), is no end. */
-function sentenceEnd(text: string): number {
+/**
+ * Where the first sentence of `text` ends (after its . ! or ?), or -1: a period after an abbreviation, or before a lowercase
+ * word or a number ("Oct. 15"), is no end. Ends before `from` are skipped: that text is context for the words before a period.
+ */
+function sentenceEnd(text: string, from = 0): number {
   for (const m of text.matchAll(/[.!?](?=\s|$)/g)) {
     const i = m.index!;
+    if (i < from) continue;
     const nextWord = /^\s+(\S+)/.exec(text.slice(i + 1))?.[1];
     if (text[i] === '.') {
       // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
@@ -104,7 +110,8 @@ function sentenceEnd(text: string): number {
       if (ABBREVIATIONS.has(word.toLowerCase())) continue;
       if (CITATION_WORDS.has(word.toLowerCase()) && nextWord !== undefined && CITATION_NEXT.test(nextWord)) continue;
       // A middle initial sits between two capitalized words ("Donald J. Trump"); "schedule B. Employers" ends.
-      if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(words.pop() ?? '') && nextWord !== undefined && CAPITALIZED.test(nextWord)) continue;
+      const before = words.pop() ?? '';
+      if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(before) && !LETTERED_PARTS.has(before.toLowerCase()) && nextWord !== undefined && CAPITALIZED.test(nextWord)) continue;
     }
     if (nextWord === undefined || !/[\p{Ll}\d]/u.test(nextWord[0]!)) return i + 1;
   }
@@ -120,9 +127,11 @@ function firstSentence(spans: DigestSpan[]): DigestSpan[] {
   for (let i = 0; i < spans.length; ) {
     const s = spans[i]!;
     if (!s.href) {
-      const end = sentenceEnd(s.text);
+      // The text kept so far holds no sentence end, but its last words decide whether a period here is one ("[Donald](u) J.").
+      const before = spansText(out);
+      const end = sentenceEnd(before + s.text, before.length);
       if (end !== -1) {
-        out.push({ ...s, text: s.text.slice(0, end) });
+        out.push({ ...s, text: s.text.slice(0, end - before.length) });
         return out;
       }
       out.push(s);
@@ -133,9 +142,10 @@ function firstSentence(spans: DigestSpan[]): DigestSpan[] {
     while (j < spans.length && spans[j]!.href === s.href) j++;
     const link = spans.slice(i, j);
     const label = spansText(link);
+    const before = spansText(out);
     out.push(...link);
-    const end = sentenceEnd(label + spansText(spans.slice(j)));
-    if (end !== -1 && end <= label.length) return out;
+    const end = sentenceEnd(before + label + spansText(spans.slice(j)), before.length);
+    if (end !== -1 && end <= before.length + label.length) return out;
     i = j;
   }
   return out;

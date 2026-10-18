@@ -49,6 +49,13 @@ describe('summarizeDigest', () => {
     expect(lines('- Filings are due under schedule B. Employers must update them.')).toEqual(['Filings are due under schedule B.']);
   });
 
+  it('ends the first sentence at a lettered form part, and reads an initial after a link with the link in view (R33-shared-comp-X-01 fix-check 2)', () => {
+    expect(lines('- File it under Schedule A. Employers must update them.')).toEqual(['File it under Schedule A.']);
+    expect(lines('- Medicare Part B. Later text.')).toEqual(['Medicare Part B.']);
+    expect(lines('- President [Donald](https://example.test/p) J. Trump signed it. Later text.')).toEqual(['President Donald J. Trump signed it.']);
+    expect(lines('- President Donald [J.](https://example.test/p) Trump signed it. Later text.')).toEqual(['President Donald J. Trump signed it.']);
+  });
+
   it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
     expect(lines('- The rule applies in the U.S. Employers must file by Monday.')).toEqual(['The rule applies in the U.S. Employers must file by Monday.']);
   });
