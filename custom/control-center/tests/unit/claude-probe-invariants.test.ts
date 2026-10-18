@@ -26,6 +26,41 @@ function prng(seed: number) {
 const pick = <T,>(rand: () => number, xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)] as T;
 const SEED = Number(process.env.PROBE_INVARIANT_SEED ?? 0x5eed34);
 
+/**
+ * A preload under which a timer or spawnSync timeout of one of `delays` ms fires as soon as `readyDir` holds an entry
+ * (the process under test has recorded its pid), so a timeout path runs in a test without racing that process's start.
+ */
+function timeoutsOnReady(root: string, delays: number[], readyDir: string) {
+  const preload = path.join(root, `on-ready-${delays.join('-')}.mjs`);
+  fs.writeFileSync(
+    preload,
+    `import cp from 'node:child_process';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const delays = ${JSON.stringify(delays)};
+const ready = () => fs.readdirSync(${JSON.stringify(readyDir)}).length > 0;
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) => {
+  if (!delays.includes(ms)) return realSetTimeout(fn, ms, ...rest);
+  const poll = setInterval(() => {
+    if (!ready()) return;
+    clearInterval(poll);
+    fn(...rest);
+  }, 20);
+  return poll;
+};
+const realSpawnSync = cp.spawnSync;
+cp.spawnSync = (cmd, argv, opts) => {
+  if (!opts || !delays.includes(opts.timeout)) return realSpawnSync(cmd, argv, opts);
+  // spawnSync blocks, so the old synchronous version check can only be bounded: long enough for the pid to appear.
+  return realSpawnSync(cmd, argv, { ...opts, timeout: 3_000 });
+};
+syncBuiltinESMExports();
+`,
+  );
+  return preload;
+}
+
 describe('invariant 1: the probes resolve CC_CLAUDE_BIN exactly as supervisor/preflight.ts does', () => {
   /** A fixture with some PATH dirs, a home with ~/.local/bin, and executables or plain files at chosen spots. */
   function fixture() {
@@ -421,23 +456,6 @@ process.kill = (pid, signal) => (pid < 0 && signal === 'SIGKILL' ? true : realKi
     expect(code, stderr).toBe(130);
   }, 60_000);
 
-  /** A preload that shortens the named timer and spawnSync timeouts (in ms) to 300 ms, so a timeout path runs in a test. */
-  function shortTimeouts(box: Box, delays: number[]) {
-    const preload = path.join(box.root, `short-${delays.join('-')}.mjs`);
-    fs.writeFileSync(
-      preload,
-      `import cp from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
-const short = (ms) => (${JSON.stringify(delays)}.includes(ms) ? 300 : ms);
-const realSetTimeout = globalThis.setTimeout;
-globalThis.setTimeout = (fn, ms, ...rest) => realSetTimeout(fn, short(ms), ...rest);
-const realSpawnSync = cp.spawnSync;
-cp.spawnSync = (cmd, argv, opts) => realSpawnSync(cmd, argv, opts && typeof opts.timeout === 'number' ? { ...opts, timeout: short(opts.timeout) } : opts);
-syncBuiltinESMExports();
-`,
-    );
-    return preload;
-  }
   /** The pids recorded under `dir` whose process is still alive (not a zombie). */
   const aliveIn = (dir: string) =>
     fs.readdirSync(dir).map((n) => fs.readFileSync(path.join(dir, n), 'utf8').trim()).filter(Boolean).filter((pid) => {
@@ -469,7 +487,7 @@ syncBuiltinESMExports();
     // recreates the call's project folder under ~/.claude/projects after the cleanup.
     const claude = path.join(box.bin, 'claude');
     fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n( sleep 1; mkdir -p "$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"; exec sleep 60 ) </dev/null >/dev/null 2>&1 &\necho $! > "${pids}/member-$$"\nexec sleep 60\n`, { mode: 0o755 });
-    const preload = shortTimeouts(box, [300_000]);
+    const preload = timeoutsOnReady(box.root, [300_000], pids);
     fs.appendFileSync(
       preload,
       `const realKill = process.kill.bind(process);
@@ -498,7 +516,7 @@ process.kill = (pid, signal) => {
     const pids = path.join(box.root, 'pids');
     fs.mkdirSync(pids);
     const claude = hangingVersion(box, pids);
-    const r = spawnSync(process.execPath, [box.script], { encoding: 'utf8', timeout: 30_000, env: probeEnv(box, claude, shortTimeouts(box, [30_000])) });
+    const r = spawnSync(process.execPath, [box.script], { encoding: 'utf8', timeout: 30_000, env: probeEnv(box, claude, timeoutsOnReady(box.root, [30_000], pids)) });
     const alive = aliveIn(pids);
     killAll(alive);
     expect(fs.readdirSync(pids), r.stderr).toEqual(['version-child']);
@@ -544,22 +562,6 @@ describe('claude-probe.mjs ends every CLI process group it starts (invariant 11)
   }
   type GroupBox = ReturnType<typeof box>;
   const env = (b: GroupBox, claude: string, preload?: string) => ({ ...process.env, ...(preload ? { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } : {}), HOME: path.join(b.root, 'home'), TMPDIR: path.join(b.root, 'tmp'), PATH: `${b.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude });
-  function shortTimeouts(b: GroupBox, delays: number[]) {
-    const preload = path.join(b.root, 'short.mjs');
-    fs.writeFileSync(
-      preload,
-      `import cp from 'node:child_process';
-import { syncBuiltinESMExports } from 'node:module';
-const short = (ms) => (${JSON.stringify(delays)}.includes(ms) ? 300 : ms);
-const realSetTimeout = globalThis.setTimeout;
-globalThis.setTimeout = (fn, ms, ...rest) => realSetTimeout(fn, short(ms), ...rest);
-const realSpawnSync = cp.spawnSync;
-cp.spawnSync = (cmd, argv, opts) => realSpawnSync(cmd, argv, opts && typeof opts.timeout === 'number' ? { ...opts, timeout: short(opts.timeout) } : opts);
-syncBuiltinESMExports();
-`,
-    );
-    return preload;
-  }
   const alive = (dir: string) =>
     fs.readdirSync(dir).map((n) => fs.readFileSync(path.join(dir, n), 'utf8').trim()).filter((pid) => {
       const ps = spawnSync('ps', ['-o', 'stat=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
@@ -584,7 +586,7 @@ syncBuiltinESMExports();
       const b = box();
       const claude = path.join(b.bin, 'claude');
       fs.writeFileSync(claude, `#!/bin/sh\nPIDS="${b.pids}"\n${body}\n`, { mode: 0o755 });
-      const r = spawnSync(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe.mjs')], { encoding: 'utf8', timeout: 20_000, env: env(b, claude, shortTimeouts(b, [timeout])) });
+      const r = spawnSync(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe.mjs')], { encoding: 'utf8', timeout: 20_000, env: env(b, claude, timeoutsOnReady(b.root, [timeout], b.pids)) });
       const left = alive(b.pids);
       reap(left);
       expect(fs.readdirSync(b.pids).length, r.stderr).toBeGreaterThan(0);
