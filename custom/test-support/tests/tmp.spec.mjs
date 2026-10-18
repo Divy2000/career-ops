@@ -139,6 +139,18 @@ test('uses a temp dir', () => { fs.writeFileSync(path.join(tempDir('kept-'), 'f'
   assert.deepEqual(r.leftovers, []);
 });
 
+test('Given a spec that loads tmp.mjs removes its own private temp dir, its run passes instead of crashing on ENOENT at exit (R34-flake-tmpguard FC-02)', () => {
+  const r = runFixtureSpec(`import { test } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import ${JSON.stringify(TMP_MJS)};
+test('removes the temp dir', () => { fs.rmSync(os.tmpdir(), { recursive: true, force: true }); });
+`);
+  assert.equal(r.status, 0, r.output);
+  assert.doesNotMatch(r.output, /ENOENT/);
+  assert.deepEqual(r.leftovers, []);
+});
+
 test('specsWithoutTmpCheck lists the specs whose imports never reach tmp.mjs, following relative helpers and ignoring imports commented out by line or block (R34-flake-tmpguard)', () => {
   const dir = tempDir('tmp-check-graph-');
   const support = path.join(dir, 'test-support');

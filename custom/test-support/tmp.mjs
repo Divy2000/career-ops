@@ -25,7 +25,14 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 process.on('exit', () => {
   if (ownTmpRemoved) return;
-  const left = fs.readdirSync(OWN_TMP).sort();
+  let left;
+  try {
+    left = fs.readdirSync(OWN_TMP).sort();
+  } catch (err) {
+    // A spec that removed the dir itself left nothing in it; any other error is a real failure to check.
+    if (err.code === 'ENOENT') return;
+    throw err;
+  }
   fs.rmSync(OWN_TMP, { recursive: true, force: true });
   if (!left.length) return;
   process.stderr.write(`test-support/tmp.mjs: this spec left ${left.length} entr${left.length === 1 ? 'y' : 'ies'} in its temp dir (now removed): ${left.join(', ')}\n`);
