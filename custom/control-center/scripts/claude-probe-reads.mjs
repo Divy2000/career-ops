@@ -20,40 +20,17 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { childEnv } from '../server/system/child-env.ts';
+import { claudeBinFromEnv, probeInherited, readKeychainToken } from './probe-cli.mjs';
+import { recordReadProbe, writeContract } from './probe-reads-record.mjs';
+import { runGroup, stopGroups } from './probe-proc.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..');
 const GUARD_HOOK = path.join(PACKAGE_ROOT, 'server', 'claude', 'guard-hook.mjs');
 const CONTRACT_FILE = path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json');
-/**
- * The claude binary, resolved as supervisor/preflight.ts resolveClaudeBin does so the probe tests the one the app runs:
- * an absolute path as given, a relative one with a slash joined textually to the folder npm was started in (INIT_CWD,
- * else the cwd), a bare name looked up on PATH, then ~/.local/bin, then (for `claude` only) Homebrew and /usr/local.
- * A bare name found nowhere stays as it is, so the spawn reports ENOENT.
- */
-function resolveClaudeBin(bin) {
-  if (path.isAbsolute(bin)) return bin;
-  if (bin.includes('/')) {
-    const from = process.env.INIT_CWD;
-    const base = from && path.isAbsolute(from) ? from : process.cwd();
-    return [base.replace(/\/+$/, ''), ...bin.split('/').filter((seg) => seg !== '.' && seg !== '')].join('/');
-  }
-  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  const fallbacks = bin === 'claude' ? ['/opt/homebrew/bin/claude', '/usr/local/bin/claude'] : [];
-  const executable = (file) => {
-    try {
-      fs.accessSync(file, fs.constants.X_OK);
-      return fs.statSync(file).isFile();
-    } catch {
-      return false;
-    }
-  };
-  return [...dirs.map((d) => path.join(d, bin)), path.join(os.homedir(), '.local', 'bin', bin), ...fallbacks].find((c) => path.isAbsolute(c) && executable(c)) ?? bin;
-}
-const claudeBin = resolveClaudeBin(process.env.CC_CLAUDE_BIN?.trim() || 'claude');
+const claudeBin = claudeBinFromEnv();
 const args = process.argv.slice(2);
 const only = (() => {
   const i = args.indexOf('--only');
@@ -80,31 +57,6 @@ const SHAPE = {
 };
 
 // ---- token: Keychain -> child env only ----
-/**
- * The OAuth token, read as supervisor/preflight.ts reads it: bounded, because a locked keychain waits at an unlock
- * prompt nobody may answer (over SSH, before login), and missing only on exit 44 (errSecItemNotFound) or a blank value.
- * Any other failure leaves the item where it is, so the probe says it could not be read rather than send the user to
- * recreate a token that is fine. Exits 1 with the reason; never prints the token.
- */
-function readKeychainToken() {
-  const KEYCHAIN_TIMEOUT_MS = 8000;
-  const r = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8', timeout: KEYCHAIN_TIMEOUT_MS, killSignal: 'SIGKILL' });
-  const unreadable = (why) => `Could not read Keychain item career-ops-claude-token: ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
-  let problem = null;
-  if (r.error?.code === 'ETIMEDOUT') problem = unreadable(`security timed out after ${KEYCHAIN_TIMEOUT_MS / 1000}s`);
-  else if (r.error?.code === 'ENOENT') problem = 'Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin).';
-  else if (r.error) problem = unreadable(`security could not be run (${r.error.message})`);
-  else if (r.status === 44 || (r.status === 0 && !r.stdout.trim())) problem = 'Keychain item career-ops-claude-token not found';
-  else if (r.status !== 0) {
-    const tail = String(r.stderr ?? '').trim().slice(-200);
-    problem = unreadable(`security failed (${r.status === null ? `signal ${r.signal}` : `exit ${r.status}`}${tail ? `: ${tail}` : ''})`);
-  }
-  if (problem) {
-    console.error(problem);
-    process.exit(1);
-  }
-  return r.stdout.trim();
-}
 const TOKEN = readKeychainToken();
 const redact = (s) => String(s ?? '').split(TOKEN).join('[redacted]');
 
@@ -224,49 +176,25 @@ function prepare(name, opts, sessionId) {
 }
 
 // Production starts the server from a plain shell: no nested-session or provider variables reach the CLI.
-// The CLI calls still running, which a SIGINT or SIGTERM stops before the cleanup.
+// The CLI processes (cases and --version) whose process group may still have a member, which finish() stops before
+// the cleanup.
 const running = new Set();
-// Each call leads its own process group, so its hooks and Bash-tool commands die with it.
-function killCall(child) {
-  try {
-    process.kill(-child.pid, 'SIGKILL');
-  } catch {
-    child.kill('SIGKILL');
-  }
-}
-/**
- * Kills each call's process group until it has no process left, or the deadline passes. One group kill is not enough
- * under load: a member forked while it ran can miss it, and one preempted mid-write still acts after it, so a cleanup
- * right after the kill can race a call that creates a project folder or transcript behind it. Returns the PIDs of the
- * groups that may remain.
- */
-async function stopCalls(children, ms) {
-  const pending = new Set([...children].filter((c) => Number.isInteger(c.pid)));
-  for (const child of children) if (!pending.has(child)) child.kill('SIGKILL');
-  const deadline = Date.now() + ms;
-  for (;;) {
-    for (const child of pending) {
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch (err) {
-        if (err?.code === 'ESRCH') pending.delete(child);
-      }
-    }
-    if (!pending.size || Date.now() >= deadline) return [...pending].map((c) => c.pid);
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
-// Set once a signal stops the probe: no new call starts, and the main flow leaves the cleanup and exit to the signal.
+// The signal that stopped the probe, once one has: no new call starts, and finish() keeps that signal's exit code.
 let stopping = null;
+// Every call or group that did not run to its end (spawn failed, never started, killed): --record refuses while any is.
+const incomplete = [];
 // What the app gives a Claude session (server/system/child-env.ts over server/claude/invocation.ts buildEnv), with every
 // CLAUDE* nested-session variable dropped as well. The Keychain token is the only Claude or Anthropic credential a call
 // gets; other variables the shell exports pass, as they do to the app's sessions.
-const INHERITED = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
+const INHERITED = probeInherited();
 
 function runClaude(name, opts) {
   const sessionId = crypto.randomUUID();
   const prep = prepare(name, opts, sessionId);
-  if (stopping) return Promise.resolve({ name, sessionId, status: null, stdout: '', stderr: 'not started: the probe is stopping', events: [], hook: [], prep });
+  if (stopping) {
+    incomplete.push(`${name} (not started)`);
+    return Promise.resolve({ name, sessionId, status: null, stdout: '', stderr: 'not started: the probe is stopping', events: [], hook: [], prep });
+  }
   const argv = ['-p', opts.prompt, '--output-format', 'stream-json', '--verbose', '--session-id', sessionId, '--permission-mode', 'dontAsk'];
   if (opts.shape !== 'today') argv.push('--restricted');
   if (opts.tools) argv.push('--tools', opts.tools.join(','));
@@ -287,68 +215,43 @@ function runClaude(name, opts) {
     CC_TURN_DIR: prep.dir,
     ...(opts.configDir ? { CLAUDE_CONFIG_DIR: opts.configDir } : {}),
   }, INHERITED);
-  return new Promise((resolve) => {
-    const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-    running.add(child);
-    child.on('close', () => running.delete(child));
-    let stdout = '';
-    let stderr = '';
-    // On EMFILE/ENFILE Node reports the spawn failure before it creates the pipes, so they can be null.
-    child.stdout?.on('data', (d) => (stdout += d));
-    child.stderr?.on('data', (d) => (stderr += d));
-    const timer = setTimeout(() => killCall(child), 300_000);
-    let settled = false;
-    // A spawn failure (ENOENT, EAGAIN, EMFILE) emits 'error'; unheard it would crash the probe past its cleanup.
-    // An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' still settles that case.
-    child.on('error', (err) => {
-      stderr += `\n${err?.message ?? err}`;
-      if (child.pid !== undefined || settled) return;
-      settled = true;
-      clearTimeout(timer);
+  return runGroup(claudeBin, argv, { cwd: CODE, env, timeoutMs: 300_000, track: running }).then((r) => {
+    const { stdout } = r;
+    let stderr = `${r.stderr}${r.error ? `\n${r.error.message}` : ''}`;
+    const spawnFailed = r.child.pid === undefined;
+    if (spawnFailed) incomplete.push(`${name} (spawn failed: ${r.error?.code ?? r.error?.message})`);
+    else if (r.error?.code === 'ETIMEDOUT') incomplete.push(`${name} (timed out)`);
+    else if (r.status === null) incomplete.push(`${name} (killed by ${r.signal})`);
+    if (r.left.length) incomplete.push(`${name} (process group ${r.left.join(', ')} still running after the kill)`);
+    /**
+     * The one place a call's result is made, once its process group is gone. It never throws: a full volume (ENOSPC) or
+     * no descriptors left (EMFILE) fails its reads and writes, and a throw here would skip the cleanup, so each file step
+     * reports its failure into the case's stderr instead.
+     */
+    const fileStep = (what, fn, fallback) => {
       try {
-        fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
-      } catch (writeErr) {
-        // Out of descriptors (EMFILE) this write fails too; the case must still settle so cleanup runs.
-        stderr += `\nstderr.txt not written: ${writeErr?.message ?? writeErr}`;
+        return fn();
+      } catch (err) {
+        stderr += `\n${what}: ${err?.message ?? err}`;
+        return fallback;
       }
-      resolve({ name, sessionId, status: null, stdout: '', stderr: redact(stderr).slice(-2000), events: [], hook: [], prep });
-    });
-    child.on('close', (status) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const events = stdout.split('\n').filter(Boolean).map((l) => {
-        try {
-          return JSON.parse(l);
-        } catch {
-          return { type: 'unparsed', line: l.slice(0, 300) };
-        }
-      });
-      // A full volume (ENOSPC) or no descriptors left (EMFILE) fails these reads and writes; unheard, the throw would
-      // crash the probe past its cleanup, so the case settles with the failure in its stderr instead.
-      let hook = [];
+    };
+    const events = stdout.split('\n').filter(Boolean).map((l) => {
       try {
-        hook = fs.existsSync(prep.hookLog)
-          ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
-              try {
-                return JSON.parse(l);
-              } catch {
-                return null;
-              }
-            }).filter(Boolean)
-          : [];
-      } catch (readErr) {
-        stderr += `\nhook log not read: ${readErr?.message ?? readErr}`;
+        return JSON.parse(l);
+      } catch {
+        return { type: 'unparsed', line: l.slice(0, 300) };
       }
-      for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) {
-        try {
-          fs.writeFileSync(path.join(prep.dir, file), redact(text));
-        } catch (writeErr) {
-          stderr += `\n${file} not written: ${writeErr?.message ?? writeErr}`;
-        }
-      }
-      resolve({ name, sessionId, status, stdout: redact(stdout), stderr: redact(stderr).slice(-2000), events, hook, prep });
     });
+    const hook = fileStep('hook log not read', () => (fs.existsSync(prep.hookLog) ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean) : []), []);
+    for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) fileStep(`${file} not written`, () => fs.writeFileSync(path.join(prep.dir, file), redact(text)));
+    return { name, sessionId, status: r.status, stdout: redact(stdout), stderr: redact(stderr).slice(-2000), events, hook, prep };
   });
 }
 
@@ -535,8 +438,12 @@ async function webfetchGroup(name, hook) {
     `https://httpbin.org/redirect-to?url=${encodeURIComponent(`http://127.0.0.1:${p}/e`)}`,
   ];
   const prompt = `${STRICT}\n${urls.map((u, i) => `${i + 1}. Call the WebFetch tool with url ${u} and prompt "Return the page text verbatim"`).join('\n')}`;
-  const r = await runClaude(name, { hook, tools: ['Read', 'WebFetch'], allow: ['WebFetch'], prompt });
-  await server.close();
+  let r;
+  try {
+    r = await runClaude(name, { hook, tools: ['Read', 'WebFetch'], allow: ['WebFetch'], prompt });
+  } finally {
+    await server.close();
+  }
   const mine = hits.slice(before);
   const per = urls.map((u) => ({ url: u.replace(String(p), 'PORT'), calls: attempt(r, 'WebFetch', (i) => i.url === u).map((c) => ({ isError: c.isError, text: c.text.slice(0, 160) })) }));
   return { r, mine, per, canaries: { CW1: leaked(r, K.CW1), CDU: leaked(r, K.CDU), CLOCAL: leaked(r, K.CLOCAL) } };
@@ -677,9 +584,25 @@ function reportCleanup(failures) {
   if (failures.length) console.error(redact(`${failures.map((f) => `cleanup failed: ${f}`).join('\n')}\nremove those by hand if they remain`));
   return failures.length === 0;
 }
-// Node's default SIGINT/SIGTERM/SIGHUP action exits without running the finally below, leaving the canaries behind,
-// and the calls, in their own process groups, get no terminal signal of their own. They are killed outright so
-// none writes a transcript after cleanTranscripts has run.
+let finishing = null;
+// The exit code of the signal that stopped the probe; read at exit, so it wins even over a finish() already under way.
+let signalCode = null;
+/**
+ * The only way the run ends once the layout may exist: stop every running call's process group (a group that threw
+ * can leave a sibling call running), then clean up once and exit. A signal's code wins over `code`; otherwise a failed
+ * cleanup step turns the exit into 1.
+ */
+function finish(code) {
+  finishing ??= stopGroups(running).then((left) => {
+    if (left.length) console.error(`calls still running after the kill (process groups ${left.join(', ')}); their transcripts may remain`);
+    const clean = reportCleanup(cleanup());
+    process.exit(signalCode ?? (clean ? code : 1));
+  });
+  return finishing;
+}
+// Node's default SIGINT/SIGTERM/SIGHUP action exits without cleaning up, leaving the canaries behind, and the calls,
+// in their own process groups, get no terminal signal of their own. They are killed outright so none writes a
+// transcript after cleanTranscripts has run.
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
   process.on(signal, () => {
     // A second signal does not wait for the calls to go.
@@ -687,18 +610,17 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
       reportCleanup(cleanup());
       process.exit(code);
     }
+    stopping = signal;
+    signalCode = code;
     console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);
-    stopping = stopCalls(running, 5_000).then((left) => {
-      if (left.length) console.error(`calls still running after the kill (process groups ${left.join(', ')}); their transcripts may remain`);
-      reportCleanup(cleanup());
-      process.exit(code);
-    });
+    void finish(code);
   });
 }
 try {
   buildLayout();
-  const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
+  const v = await runGroup(claudeBin, ['--version'], { timeoutMs: 30_000, track: running, env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
   if (v.error) throw new Error(`claude not runnable at ${claudeBin}: ${v.error.message}`);
+  if (v.left.length) throw new Error(`claude --version at ${claudeBin} left process group ${v.left.join(', ')} running after the kill`);
   summary.version = ((v.stdout ?? '').match(/\d+\.\d+\.\d+/) ?? [null])[0];
   // Every case and --record need a working CLI with a known version; a null one would be recorded as approved.
   if (v.status !== 0 || !summary.version) {
@@ -715,6 +637,7 @@ try {
   for (let i = 0; i < todo.length; i += 3) outcomes.push(...(await Promise.all(todo.slice(i, i + 3).map((g) => g.run().catch((err) => ({ error: redact(err?.stack ?? err), ids: g.ids }))))));
   for (const o of outcomes) {
     if (o.error) {
+      incomplete.push(`group ${o.ids.join(',')} (threw)`);
       for (const id of o.ids) {
         summary.cases[id] = 'fail';
         summary.details[id] = { why: o.error };
@@ -728,30 +651,16 @@ try {
     Object.assign(summary.info, o.info ?? {});
   }
   summary.runs = fs.readdirSync(GUARD).filter((d) => fs.existsSync(path.join(GUARD, d, 'settings.json'))).length;
-  // Cases a signal cut short fail without having run: recording them would replace the last real record.
-  if (stopping) throw new Error('stopped by a signal; nothing recorded');
   if (RECORD) {
-    // A targeted re-run (--only) merges into the record of the same version; a new version needs every case.
-    const prev = contract.claude.readProbe;
-    const merging = only && prev?.version === summary.version;
-    if (only && !merging) throw new Error(`--record with --only needs an existing record for ${summary.version}; run every case first`);
-    const cases = { ...(merging ? prev.cases : {}), ...summary.cases };
-    const info = { ...(merging ? prev.info : {}), ...summary.info };
-    const history = [...(merging ? (prev.history ?? []) : []), { probedAt: summary.probedAt, cases: Object.keys(summary.cases).filter((id) => id !== 'C0').sort(), runs: summary.runs }];
-    const gatePassed = Object.entries(cases).every(([id, r]) => id === 'C0' || r === 'pass' || r === 'info');
-    if (gatePassed && !approved.includes(summary.version)) contract.claude.approvedVersions = [...approved, summary.version];
-    cases.C0 = (contract.claude.approvedVersions ?? []).includes(summary.version) ? 'pass' : 'fail';
+    // Cases a signal or a failed call cut short fail without having run: recording them would replace the last real record.
+    const { contract: next, cases } = recordReadProbe(contract, { ...summary, model: MODEL, only, stopped: Boolean(stopping), incomplete });
     summary.cases.C0 = cases.C0;
-    contract.claude.readProbe = { version: summary.version, probedAt: summary.probedAt, model: MODEL, shape: SHAPE, cases, info, history };
-    fs.writeFileSync(CONTRACT_FILE, `${JSON.stringify(contract, null, 2)}\n`);
-  }
+    writeContract(CONTRACT_FILE, next);
+  } else if (stopping) throw new Error('stopped by a signal; nothing recorded');
   exitCode = Object.values(summary.cases).every((r) => r === 'pass' || r === 'info') ? 0 : 1;
 } catch (err) {
   console.error(redact(err?.stack ?? err));
   exitCode = 1;
-} finally {
-  // Stopped by a signal: its handler cleans up once the calls are gone and exits with the signal's code.
-  if (stopping) await stopping;
-  if (!reportCleanup(cleanup())) exitCode = 1;
 }
-process.exit(exitCode);
+// Stopped by a signal, the handler's finish is already under way and its code wins.
+await finish(exitCode);

@@ -162,7 +162,8 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
     const box = sandbox();
     const claude = path.join(box.bin, 'claude');
     fs.writeFileSync(claude, '#!/bin/sh\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
-    // Out of descriptors: spawn reports EMFILE with no pipes and no 'close', and the error write fails the same way.
+    // Out of descriptors once the version is known: every case spawn reports EMFILE with no pipes and no 'close', and
+    // the error write fails the same way.
     const preload = path.join(box.root, 'emfile.mjs');
     fs.writeFileSync(
       preload,
@@ -170,7 +171,9 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
-cp.spawn = () => {
+const realSpawn = cp.spawn;
+cp.spawn = (cmd, argv, ...rest) => {
+  if (argv?.[0] === '--version') return realSpawn(cmd, argv, ...rest);
   const child = Object.assign(new EventEmitter(), { pid: undefined, stdout: null, stderr: null, kill: () => false });
   process.nextTick(() => child.emit('error', Object.assign(new Error('spawn claude EMFILE'), { code: 'EMFILE' })));
   return child;
@@ -418,7 +421,7 @@ describe('claude-probe-reads.mjs --record', () => {
     const pkg = path.join(box.root, 'pkg');
     fs.mkdirSync(path.join(pkg, 'scripts'), { recursive: true });
     fs.mkdirSync(path.join(pkg, 'server', 'core'), { recursive: true });
-    fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs'), path.join(pkg, 'scripts', 'claude-probe-reads.mjs'));
+    for (const f of fs.readdirSync(path.join(PACKAGE_ROOT, 'scripts')).filter((n) => n === 'claude-probe-reads.mjs' || n.startsWith('probe-'))) fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', f), path.join(pkg, 'scripts', f));
     for (const dir of ['claude', 'system']) fs.symlinkSync(path.join(PACKAGE_ROOT, 'server', dir), path.join(pkg, 'server', dir));
     const contract = path.join(pkg, 'server', 'core', 'contract.json');
     fs.copyFileSync(path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json'), contract);
