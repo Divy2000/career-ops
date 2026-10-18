@@ -210,11 +210,10 @@ async function main() {
     child.on('error', (err) => { if (!stopping) reject(err); });
     child.on('close', (status, signal) => {
       if (running === child) running = null;
-      // generate-pdf.mjs removes its own temp HTML in a finally on a clean exit, but a killed child can exit without
-      // running it (a group signal Playwright swallows), so clean up when the child was killed (its close signal) or
-      // when this stop killed a density render. It is NOT killed while the final publish render runs (it is let finish
-      // so the input and the PDF agree), so cleaning then would only delete a concurrent render's live temp.
-      if (signal || (stopping && !restoreInput)) for (const f of ownTemps(tempLog)) rmSync(f, { force: true });
+      // generate-pdf.mjs removes its own temp HTML in a finally, but a stopped child can exit without running it (a
+      // second SIGINT makes Playwright exit at once, by signal or by exit code). The log lists only this child's temps
+      // and the child is gone by its close, so they are removed here on every exit; on a clean one they are gone already.
+      for (const f of ownTemps(tempLog)) rmSync(f, { force: true });
       child.result = { status, signal, stdout, stderr };
       if (stopping) return;
       if (flooded) reject(new Error(`generate-pdf.mjs printed more than ${MAX_OUTPUT / 1024 / 1024} MiB of output; stopped it`));

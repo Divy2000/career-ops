@@ -458,6 +458,32 @@ test('given a final render that publishes the PDF and then exits non-zero, when 
   assert.deepEqual(scratchIn(root), []);
 });
 
+test('given a final generate-pdf.mjs that exits 130 once its temp HTML is written (a second Ctrl-C while publishing), when run, then that full CV copy is not left beside the input (R33-scripts-a-X-01)', { timeout: 240000 }, () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  // Only the final generate-pdf.mjs exits, through process.exit as Playwright's second-SIGINT handler does, so its
+  // finally that removes the temp HTML never runs and the close carries an exit code, not a signal.
+  const preload = path.join(root, 'exit-after-temp.mjs');
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}import fsp from 'node:fs/promises';
+import { basename } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+if (isFinal) {
+  const writeFile = fsp.writeFile;
+  fsp.writeFile = async (file, ...rest) => {
+    await writeFile(file, ...rest);
+    if (typeof file === 'string' && basename(file).startsWith('.career-ops-render-')) process.exit(130);
+  };
+  syncBuiltinESMExports();
+}
+`);
+  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  });
+  assert.equal(r.status, 130, r.stdout + r.stderr);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'no temp HTML is left beside the input');
+  assert.deepEqual(scratchIn(root), []);
+});
+
 test('given a generate-pdf.mjs that prints more than 16 MiB, when run, then the render stops with an error instead of buffering it all (R11-scripts-a-L1-02 review)', { timeout: 240000 }, () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);

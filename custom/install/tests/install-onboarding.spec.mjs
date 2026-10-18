@@ -374,6 +374,21 @@ test('--onboard headless whose Keychain read fails leaves an earlier run\'s draf
   assert.doesNotMatch(r.out, /Moved the drafts/);
 });
 
+test('--onboard headless refused because Claude Code changed in place leaves an earlier run\'s drafts where Resume from drafts reads them (R33-scripts-b-L1-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  const draft = path.join(data, 'data', 'install', 'onboarding-draft');
+  fs.mkdirSync(draft, { recursive: true });
+  fs.writeFileSync(path.join(draft, 'article-digest.md'), '# from an earlier run\n');
+  const resume = md(w, 'resume.md', '# Me\n');
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env: { FAKE_CLAUDE_LATER_VERSION: '2.1.300', FAKE_CLAUDE_LATER_AFTER: '2' } });
+  assert.equal(w.log().some((l) => l.startsWith('claude -p') || l.startsWith('claude-env')), false, r.out);
+  assert.match(r.out, /Claude Code changed while onboarding was being prepared/);
+  assert.equal(fs.readFileSync(path.join(draft, 'article-digest.md'), 'utf8'), '# from an earlier run\n');
+  assert.deepEqual(fs.readdirSync(path.dirname(draft)).filter((n) => n.startsWith('onboarding-draft.prev-')), []);
+  assert.doesNotMatch(r.out, /Moved the drafts/);
+});
+
 test('a token the headless read finds empty or cannot read keeps the daily job and the Control Center off, as step 7 would (R23-scripts-b-L2-01 review)', () => {
   for (const [env, why] of [[{ FAKE_SECURITY_TOKEN: ' ' }, /The Keychain item is missing, so the job would fail every morning/], [{ FAKE_SECURITY_READ_EXIT: '36' }, /The Keychain item could not be read, so the job would fail every morning/]]) {
     const { w, D } = fresh({ keychain: true });

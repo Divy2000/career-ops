@@ -84,8 +84,10 @@ LOG="$STATE_DIR/$TODAY.log"
 exec >>"$LOG" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
 
+# The message goes in as an argument, never into the script text: a caller's text (a JSON.parse error quoting the
+# source, a path) can hold double quotes or backslashes, which would end the AppleScript string and drop the notification.
 notify() {
-  osascript -e "display notification \"$1\" with title \"career-ops upstream sync\"" >/dev/null 2>&1 || true
+  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "career-ops upstream sync"' -e 'end run' -- "$1" >/dev/null 2>&1 || true
   echo "NOTIFY: $1"
 }
 fail() {
@@ -109,7 +111,6 @@ echo "fork is $BEHIND commit(s) behind upstream/main"
 
 # Only exit 44 (errSecItemNotFound) or an empty token means the item is missing, as the Control Center reads it: any
 # other failure (a locked keychain, no UI to prompt) leaves a stored token that is fine, so it never asks for a new one.
-# No double quotes in these messages: notify passes them to osascript inside a quoted string.
 SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fail "cannot create a temporary file for the Keychain read"
 # A run stopped during the read (launchd stop, Ctrl-C) exits through the EXIT trap, which removes the file.
 trap 'rm -f "$SECURITY_ERR"' EXIT
