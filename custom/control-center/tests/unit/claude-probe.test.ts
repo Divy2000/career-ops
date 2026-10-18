@@ -237,6 +237,51 @@ syncBuiltinESMExports();
     }, 40_000);
   }
 
+  it('given a call process the first SIGKILL of its group misses, when the probe gets SIGTERM, then it cleans up only once the group is gone (R31-flake-claude-probe)', async () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    // Under load a group kill can miss a member (one forked while the kill ran) or land after it already acted: that
+    // member creates its project folder after the kill was sent. Modelled here by a first group SIGKILL that misses.
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nsleep 0.5\nmkdir -p "$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"\nexec sleep 60\n`, { mode: 0o755 });
+    const preload = path.join(box.root, 'kill-misses.mjs');
+    fs.writeFileSync(
+      preload,
+      `const realKill = process.kill.bind(process);
+const missed = new Set();
+process.kill = (pid, signal) => {
+  if (pid < 0 && signal === 'SIGKILL' && !missed.has(pid)) {
+    missed.add(pid);
+    return true;
+  }
+  return realKill(pid, signal);
+};
+`,
+    );
+    const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
+      env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    expect(fs.readdirSync(box.calls).length, stderr).toBeGreaterThan(0);
+    child.kill('SIGTERM');
+    const code = await exited;
+    // Long enough for a call the probe left running to reach its mkdir.
+    await new Promise((r) => setTimeout(r, 1_000));
+    const alive = fs.readdirSync(box.calls).filter((pid) => {
+      const ps = spawnSync('ps', ['-o', 'stat=,command=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
+      return ps !== '' && !ps.startsWith('Z');
+    });
+    for (const pid of alive) process.kill(Number(pid), 'SIGKILL');
+    expect(code, stderr).toBe(143);
+    expect(alive).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+    expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+  }, 40_000);
+
   /** A preload under which removing the home canary dir fails with EBUSY. */
   function homeRmFails(box: ReturnType<typeof sandbox>) {
     const preload = path.join(box.root, 'rm-fails.mjs');
