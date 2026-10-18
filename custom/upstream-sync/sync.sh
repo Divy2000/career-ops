@@ -229,7 +229,8 @@ REGATE="$(cd "$LIVE" && CC_CLAUDE_BIN="$CLAUDE_BIN" sync_claude_bin 2.1.288)" ||
 # Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
 # Its reply streams to the day log as before (tee) and is kept in memory, where its closing verdict is read.
 # --strict-mcp-config starts none of the user's or the project's MCP servers, which would inherit the token.
-CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" "$CLAUDE_BIN" -p "$PROMPT" \
+# DISABLE_AUTOUPDATER keeps the gated version for the whole session, as every other Claude launch does.
+CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" DISABLE_AUTOUPDATER=1 "$CLAUDE_BIN" -p "$PROMPT" \
   --model "$MODEL" \
   --effort medium \
   --permission-mode dontAsk \

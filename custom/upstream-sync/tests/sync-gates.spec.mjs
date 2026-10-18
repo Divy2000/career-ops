@@ -940,3 +940,14 @@ test('control_center_checks reads the vitest summary even when the caller export
   const r = spawnSync('bash', ['-c', `source "${LIB}"\ncontrol_center_checks "${dir}/cc.log"`], { cwd: dir, env: { PATH: `${bin}:/usr/bin:/bin`, FORCE_COLOR: '1' }, encoding: 'utf8' });
   assert.equal(r.status, 0, readFileSync(path.join(dir, 'cc.log'), 'utf8'));
 });
+
+test('the headless sync Claude runs with its autoupdater off, so a long session cannot replace the approved binary mid-run (R31-scripts-b-X-02)', () => {
+  const dir = tempDir('sync-claude-autoupdate-');
+  const bin = path.join(dir, 'bin');
+  const seen = path.join(dir, 'env.txt');
+  stub(bin, 'claude', `env > "${seen}"`);
+  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log" CLAUDE_BIN=claude\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(readFileSync(seen, 'utf8'), /^DISABLE_AUTOUPDATER=1$/m);
+});
