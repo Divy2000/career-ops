@@ -272,3 +272,30 @@ fs.writeFileSync(path.join(os.tmpdir(), 'leaked-file'), 'x');
     child.kill('SIGKILL');
   }
 });
+
+test('Given a spec that loads tmp.mjs removed its own temp dir and is then killed by SIGTERM, it still dies by SIGTERM instead of crashing on ENOENT (R34-mut-04)', async () => {
+  const { child, fresh, closed } = startFixture(`import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import ${JSON.stringify(TMP_MJS)};
+fs.rmSync(os.tmpdir(), { recursive: true, force: true });
+setInterval(() => {}, 1000);
+fs.writeFileSync(path.join(FRESH, 'ready'), String(process.pid));
+`);
+  try {
+    const ready = path.join(fresh, 'ready');
+    const deadline = Date.now() + 30_000;
+    while (!fs.existsSync(ready) || !fs.readFileSync(ready, 'utf8')) {
+      assert.ok(Date.now() < deadline, 'the fixture never started');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    fs.rmSync(ready);
+    child.kill('SIGTERM');
+    const r = await closed;
+    assert.equal(r.signal, 'SIGTERM', r.output);
+    assert.doesNotMatch(r.output, /ENOENT/);
+    assert.deepEqual(r.leftovers, []);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
