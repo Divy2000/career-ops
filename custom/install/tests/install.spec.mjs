@@ -700,8 +700,13 @@ test('under a real pseudo-terminal the same questions work through /dev/tty (pyt
 
 test('an installer that hangs under the pty ends with pty_run\'s own timeout and the transcript, not a silent kill (R11-tests-custom-L1-06)', { skip: WORLD_PTY_SKIP }, () => {
   const { w } = fresh();
+  // A python3 that takes 3 s to start, as on a loaded machine: pty_run's deadline counts from its own start, so the
+  // outcome must not depend on how long the interpreter took to get there.
+  fs.writeFileSync(path.join(w.bin, 'python3'), '#!/bin/bash\nsleep 3\nPATH="${PATH#*:}" exec python3 "$@"\n', { mode: 0o755 });
   const hang = w.write('hang.sh', 'echo "waiting for an answer that never comes"\nexec sleep 60\n');
-  const r = w.runInPty([], { steps: [], script: hang, timeout: 8_000 });
+  // pty_run's deadline is 1 s and the spawnSync backstop keeps runInPty's default, so the deadline under test fires
+  // first by a margin no machine load closes; a backstop only 2 s behind it killed pty_run first under load.
+  const r = w.runInPty([], { steps: [], script: hang, env: { PTY_RUN_TIMEOUT: '1' } });
   assert.equal(r.status, 1, r.out);
   assert.match(r.out, /waiting for an answer that never comes/);
   assert.match(r.out, /pty_run: timed out after [0-9.]+ s; killed the command/);
