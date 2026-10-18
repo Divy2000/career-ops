@@ -89,53 +89,34 @@ export function blacklistScannerKey(row: Pick<BlacklistRow, 'company' | 'scope'>
 }
 
 /**
- * The first row of `rows` the scanner would never read: one whose key is empty, or a second row under a key (the
- * scanner keeps the first). Rows like these the file already holds pass, so a save that leaves them as they are (in any
- * order) is not refused: each row of the file excuses one saved row with the same company and scope, and a key keeps
- * no more rows than the file has under it. Every row of a key with more than one row needs its excuse, the first one
- * too, since any order of them is savable and the scanner then reads only whichever comes first. Null when none.
+ * The first row of `rows` the scanner would never read: one whose key is empty, or one of several rows under a key (the
+ * scanner keeps only the first, and any order of them is savable). Such a row is let through only when the file holds a
+ * row with the same company and scope, one for one, so a save never adds a dead row but keeps the ones the file has. A
+ * key with a single row is always read. Null when none.
  */
 export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[], norm: NormalizeTextKey): string | null {
   const id = (r: Pick<BlacklistRow, 'company' | 'scope'>) => `${r.scope}\0${r.company}`;
   const held = new Map<string, number>();
-  const heldIds = new Map<string, number>();
-  for (const r of existing) {
-    const { key } = blacklistScannerKey(r, norm);
-    held.set(key, (held.get(key) ?? 0) + 1);
-    heldIds.set(id(r), (heldIds.get(id(r)) ?? 0) + 1);
-  }
-  // Uses up one row of the file with this company and scope; false when none is left.
-  const excuse = (r: BlacklistRow) => {
-    const left = heldIds.get(id(r)) ?? 0;
-    if (left > 0) heldIds.set(id(r), left - 1);
-    return left > 0;
-  };
+  for (const r of existing) held.set(id(r), (held.get(id(r)) ?? 0) + 1);
+  const keyed = rows.map((r) => ({ r, ...blacklistScannerKey(r, norm) }));
   const group = new Map<string, BlacklistRow[]>();
-  for (const r of rows) {
-    const k = blacklistScannerKey(r, norm);
-    if (!k.empty) group.set(k.key, [...(group.get(k.key) ?? []), r]);
-  }
-  const count = new Map<string, number>();
-  for (const r of rows) {
-    const k = blacklistScannerKey(r, norm);
-    if (k.empty) {
-      if (excuse(r)) continue;
-      return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
-    }
-    const members = group.get(k.key)!;
-    if (members.length === 1) continue;
-    const n = (count.get(k.key) ?? 0) + 1;
-    count.set(k.key, n);
-    const cap = Math.max(1, held.get(k.key) ?? 0);
-    const same = (other: BlacklistRow) => `the scanner reads ${r.company} as the same ${r.scope} as ${other.company}, and keeps only the first; remove one of them`;
-    // A key over its cap is refused at the row past it, naming the first; the first row is refused only when it fits.
-    if (n === 1) {
-      if (!excuse(r) && members.length <= cap) return same(members[1]!);
-      continue;
-    }
-    if (n > cap || !excuse(r)) return same(members[0]!);
-  }
-  return null;
+  for (const k of keyed) if (!k.empty) group.set(k.key, [...(group.get(k.key) ?? []), k.r]);
+  // Each dead row uses up one row of the file with its company and scope; the ones left over are new.
+  const fresh = keyed.filter((k) => {
+    if (!k.empty && group.get(k.key)!.length === 1) return false;
+    const left = held.get(id(k.r)) ?? 0;
+    held.set(id(k.r), left - 1);
+    return left <= 0;
+  });
+  if (!fresh.length) return null;
+  // A duplicate is named at its last new row, against another row of its key: the first one, or the second when it is the first.
+  const last = new Map(fresh.map((k) => [k.key, k]));
+  const blamed = fresh.find((k) => k.empty || last.get(k.key) === k)!;
+  const { r } = blamed;
+  if (blamed.empty) return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
+  const members = group.get(blamed.key)!;
+  const other = members[0] === r ? members[1]! : members[0]!;
+  return `the scanner reads ${r.company} as the same ${r.scope} as ${other.company}, and keeps only the first; remove one of them`;
 }
 
 export interface BlacklistParsed {
