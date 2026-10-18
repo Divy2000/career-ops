@@ -517,7 +517,7 @@ for (const value of ['0', 'soon', '3601', '4294967296']) {
   });
 }
 
-jobTest('a run cancelled while the Keychain read waits stops the security it started too', async () => {
+jobTest('a run cancelled while the Keychain read waits stops the security it started too and removes the read\'s stderr file', async () => {
   const w = dailyWorld();
   const securityPid = path.join(w.T, 'security.pid');
   fs.writeFileSync(path.join(w.T, 'bin', 'security'), `#!/bin/bash\necho $$ > ${JSON.stringify(securityPid)}\nexec /bin/sleep 100000\n`, { mode: 0o755 });
@@ -526,9 +526,16 @@ jobTest('a run cancelled while the Keychain read waits stops the security it sta
   for (let i = 0; i < 600 && !fs.existsSync(securityPid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.ok(fs.existsSync(securityPid), 'the Keychain read never started');
   const pid = Number(readFileSync(securityPid, 'utf8'));
+  const keychainErr = () => fs.readdirSync(w.tmp).filter((f) => f.startsWith('run-daily-keychain.'));
+  assert.equal(keychainErr().length, 1, 'the Keychain read holds its stderr file while it waits');
   // The Control Center's cancel: SIGTERM to the job's process group.
   process.kill(-child.pid, 'SIGTERM');
   await exited;
+  // The lock holder is a child of the bash that exited and finishes its EXIT trap on its own; the pid file goes last.
+  const pidfile = path.join(w.data, 'data', 'immigration', '.run-daily.pid');
+  for (let i = 0; i < 100 && fs.existsSync(pidfile); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(fs.existsSync(pidfile), false, 'the cancelled run never finished its EXIT trap');
+  assert.deepEqual(keychainErr(), [], 'the cancelled run left the Keychain read\'s stderr file behind');
   for (let i = 0; i < 100 && alive(pid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
   const left = alive(pid);
   if (left) process.kill(pid, 'SIGKILL');
