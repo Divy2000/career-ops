@@ -1,5 +1,6 @@
-// Pipeline > Inbox: Add URLs keeps its box locked while the add is on its way, so a URL typed meanwhile is not cleared
-// unsent (R31-feat-b-L1-02).
+// Pipeline > Inbox: a saved-JD Evaluate JD start that fails after its row was filtered away still shows its failure
+// when the row is shown again (R31-feat-b-L1-01), and Add URLs keeps its box locked while the add is on its way, so
+// a URL typed meanwhile is not cleared unsent (R31-feat-b-L1-02).
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -18,15 +19,18 @@ const READ: PipelineRead = { kind: 'ok', path: 'data/pipeline.md', etag: 'e', ro
 
 let host: HTMLElement;
 let root: Root;
+let answerStart: ((r: Response) => void) | null;
 let answerAdd: ((r: Response) => void) | null;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 beforeEach(async () => {
+  answerStart = null;
   answerAdd = null;
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/pipeline') return json(READ);
+      if (url === '/api/sessions' && init?.method === 'POST') return new Promise<Response>((resolve) => (answerStart = resolve));
       if (url === '/api/pipeline/urls') return new Promise<Response>((resolve) => (answerAdd = resolve));
       return json([]);
     }),
@@ -46,6 +50,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+const rowOf = (company: string) => [...host.querySelectorAll('tbody tr')].find((tr) => tr.textContent?.includes(company));
 const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim().startsWith(text))!;
 
 async function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
@@ -55,6 +60,22 @@ async function type(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+
+describe('an Evaluate JD start whose row is filtered away before it answers', () => {
+  it('shows the failure on the row once the row is shown again', async () => {
+    await act(async () => rowOf('Acme')!.querySelector<HTMLButtonElement>('button[aria-label="Evaluate JD for Acme"]')!.click());
+    await until(() => answerStart, 'the session start');
+    const filter = host.querySelector<HTMLInputElement>('input[aria-label="Filter inbox"]')!;
+    await type(filter, 'Open');
+    await until(() => !rowOf('Acme'), 'the row filtered away');
+
+    await act(async () => answerStart!(json({ error: 'already evaluating this posting' }, 409)));
+    await type(host.querySelector<HTMLInputElement>('input[aria-label="Filter inbox"]')!, '');
+    await until(() => rowOf('Acme'), 'the row shown again');
+
+    expect(rowOf('Acme')!.querySelector('[role="alert"]')?.textContent).toContain('Could not start the evaluation');
+  });
+});
 
 describe('Add URLs while the add is on its way', () => {
   it('locks the box, so a URL typed meanwhile is not cleared unsent', async () => {
