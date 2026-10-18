@@ -37,7 +37,7 @@ rules:
     languages: [typescript, javascript]
     severity: ERROR
     message: >-
-      `env:` here is process.env (or a spread of it), so the child gets the server's CC_TOKEN and CC_SESSION_SECRET and
+      `env:` here is process.env, a spread of it, an alias of either, or undefined (Node then inherits process.env), so the child gets the server's CC_TOKEN and CC_SESSION_SECRET and
       any ANTHROPIC_*/CLAUDE_CODE_* credential the shell exported. Build it with childEnv(...)
       (server/system/child-env.ts), or probeEnv(process.env) in code the supervisor loads.
     paths:
@@ -50,6 +50,23 @@ rules:
           - pattern: '$FN(..., {..., env: {..., ...process.env, ...}, ...}, ...)'
           - pattern: '$O.$FN(..., {..., env: process.env, ...}, ...)'
           - pattern: '$O.$FN(..., {..., env: {..., ...process.env, ...}, ...}, ...)'
+          # env: undefined makes Node inherit process.env just like no env at all.
+          - pattern: '$FN(..., {..., env: undefined, ...}, ...)'
+          - pattern: '$O.$FN(..., {..., env: undefined, ...}, ...)'
+          # An alias of process.env (or of a spread of it) is the same leak.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $V = process.env;
+                      ...
+                  - pattern-inside: |
+                      $V = {..., ...process.env, ...};
+                      ...
+              - pattern-either:
+                  - pattern: '$FN(..., {..., env: $V, ...}, ...)'
+                  - pattern: '$O.$FN(..., {..., env: $V, ...}, ...)'
+                  - pattern: '$FN(..., {..., $V, ...}, ...)'
+                  - pattern: '$O.$FN(..., {..., $V, ...}, ...)'
       - metavariable-regex:
           metavariable: $FN
           regex: ^(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)$

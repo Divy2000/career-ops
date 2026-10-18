@@ -38,6 +38,23 @@ manager.fork('s1');
 spawn('node', ['x.mjs'], { env: process.env });
 // ruleid: child-process-env-raw-process-env
 cp.spawnSync('claude', ['--version'], { encoding: 'utf8', env: { ...process.env, DISABLE_AUTOUPDATER: '1' } });
+// ruleid: child-process-env-raw-process-env
+spawn('node', ['x.mjs'], { env: undefined });
+function aliasRaw() {
+  const env = process.env;
+  // ruleid: child-process-env-raw-process-env
+  spawn('node', ['x.mjs'], { env });
+}
+function aliasSpread() {
+  const env2 = { ...process.env, EXTRA: '1' };
+  // ruleid: child-process-env-raw-process-env
+  execFile('node', ['x.mjs'], { env: env2 }, () => undefined);
+}
+function aliasFiltered() {
+  const env3 = childEnv({ EXTRA: '1' });
+  // ok: child-process-env-raw-process-env
+  spawn('node', ['x.mjs'], { env: env3 });
+}
 // ok: child-process-env-raw-process-env
 spawn('node', ['x.mjs'], { env: childEnv() });
 // ok: child-process-env-raw-process-env
