@@ -280,4 +280,84 @@ syncBuiltinESMExports();
     expect(fs.readdirSync(path.dirname(box.contract))).toEqual(['contract.json']);
     canariesGone(box);
   }, 60_000);
+
+  it('given a case group that throws while its sibling call still runs, when the probe ends, then that call is stopped before cleanup and none outlives the probe (invariant 7)', async () => {
+    const box = sandbox();
+    const calls = path.join(box.root, 'calls');
+    fs.mkdirSync(calls);
+    // C9 starts c9-settings, then c9-control's settings file cannot be written, so the group throws with c9-settings running.
+    const preload = path.join(box.root, 'c9-fails.mjs');
+    fs.writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+fs.writeFileSync = (file, ...rest) => {
+  if (String(file).endsWith('/c9-control/settings.json')) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  return realWrite(file, ...rest);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const r = spawnSync(process.execPath, [box.script, '--only', 'C9'], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+    });
+    // The call may not have recorded its pid before the probe exited; give a left-running one the time to do so.
+    const until = Date.now() + 3_000;
+    while (fs.readdirSync(calls).length === 0 && Date.now() < until) await new Promise((res) => setTimeout(res, 50));
+    const alive = fs.readdirSync(calls).filter((pid) => {
+      const ps = spawnSync('ps', ['-o', 'stat=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
+      return ps !== '' && !ps.startsWith('Z');
+    });
+    for (const pid of alive) process.kill(Number(pid), 'SIGKILL');
+    expect(alive, r.stderr).toEqual([]);
+    expect(r.status, r.stderr).toBe(1);
+    const summary = JSON.parse(r.stdout);
+    expect(summary.cases.C9).toBe('fail');
+    expect(summary.details.C9.why).toMatch(/ENOSPC/);
+    canariesGone(box);
+  }, 60_000);
+
+  it(`given random file faults and call endings (seed ${SEED}), when the probe runs, then every case settles, the summary prints and every canary is removed (invariant 5)`, () => {
+    const rand = prng(SEED);
+    const faults = ['stream.ndjson', 'stderr.txt', 'hook-log.ndjson'] as const;
+    const endings = ['rm -f "$0"\necho "9.9.9 (Claude Code)"', '[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nexit 0', '[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nkill -9 $$'];
+    for (let i = 0; i < 4; i++) {
+      const box = sandbox();
+      const failing = faults.filter(() => rand() < 0.6);
+      const ending = pick(rand, endings);
+      const note = `seed ${SEED} iteration ${i}: faults ${failing.join(',') || 'none'}, ending ${JSON.stringify(ending)}`;
+      const preload = path.join(box.root, 'faults.mjs');
+      fs.writeFileSync(
+        preload,
+        `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const failing = ${JSON.stringify(failing)};
+const hit = (file) => failing.some((f) => String(file).endsWith('/' + f)) && String(file).includes('/guard/');
+const fail = () => { throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' }); };
+for (const name of ['writeFileSync', 'readFileSync', 'existsSync']) {
+  const real = fs[name];
+  fs[name] = (file, ...rest) => (hit(file) && !(name === 'writeFileSync' && String(file).endsWith('hook-log.ndjson')) ? fail() : real(file, ...rest));
+}
+syncBuiltinESMExports();
+`,
+      );
+      const claude = path.join(box.bin, 'claude');
+      fs.writeFileSync(claude, `#!/bin/sh\n${ending}\n`, { mode: 0o755 });
+      const r = spawnSync(process.execPath, [box.script, '--only', 'C1,C8,C14'], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      });
+      expect(r.status, `${note}\n${r.stderr}`).toBe(1);
+      expect(r.stderr, note).not.toMatch(/\n\s+at /);
+      expect(Object.keys(JSON.parse(r.stdout).cases), note).toEqual(expect.arrayContaining(['C0', 'C1', 'C8', 'C14']));
+      canariesGone(box);
+      expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-')), note).toEqual([]);
+    }
+  }, 60_000);
 });

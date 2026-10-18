@@ -208,7 +208,7 @@ async function stopCalls(children, ms) {
     await new Promise((r) => setTimeout(r, 50));
   }
 }
-// Set once a signal stops the probe: no new call starts, and the main flow leaves the cleanup and exit to the signal.
+// The signal that stopped the probe, once one has: no new call starts, and finish() keeps that signal's exit code.
 let stopping = null;
 // Every call or group that did not run to its end (spawn failed, never started, killed): --record refuses while any is.
 const incomplete = [];
@@ -247,7 +247,6 @@ function runClaude(name, opts) {
   return new Promise((resolve) => {
     const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     running.add(child);
-    child.on('close', () => running.delete(child));
     let stdout = '';
     let stderr = '';
     // On EMFILE/ENFILE Node reports the spawn failure before it creates the pipes, so they can be null.
@@ -255,27 +254,25 @@ function runClaude(name, opts) {
     child.stderr?.on('data', (d) => (stderr += d));
     const timer = setTimeout(() => killCall(child), 300_000);
     let settled = false;
-    // A spawn failure (ENOENT, EAGAIN, EMFILE) emits 'error'; unheard it would crash the probe past its cleanup.
-    // An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' still settles that case.
-    child.on('error', (err) => {
-      stderr += `\n${err?.message ?? err}`;
-      if (child.pid !== undefined || settled) return;
-      settled = true;
-      clearTimeout(timer);
-      incomplete.push(`${name} (spawn failed: ${err?.code ?? err?.message ?? err})`);
-      try {
-        fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
-      } catch (writeErr) {
-        // Out of descriptors (EMFILE) this write fails too; the case must still settle so cleanup runs.
-        stderr += `\nstderr.txt not written: ${writeErr?.message ?? writeErr}`;
-      }
-      resolve({ name, sessionId, status: null, stdout: '', stderr: redact(stderr).slice(-2000), events: [], hook: [], prep });
-    });
-    child.on('close', (status, signal) => {
+    /**
+     * The one place a call's result is made, whichever of a spawn failure or 'close' comes first. It never throws: a full
+     * volume (ENOSPC) or no descriptors left (EMFILE) fails its reads and writes, and a throw here would skip the cleanup,
+     * so each file step reports its failure into the case's stderr instead.
+     */
+    const settle = (status, notRun) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (status === null) incomplete.push(`${name} (killed by ${signal})`);
+      running.delete(child);
+      if (notRun) incomplete.push(`${name} (${notRun})`);
+      const fileStep = (what, fn, fallback) => {
+        try {
+          return fn();
+        } catch (err) {
+          stderr += `\n${what}: ${err?.message ?? err}`;
+          return fallback;
+        }
+      };
       const events = stdout.split('\n').filter(Boolean).map((l) => {
         try {
           return JSON.parse(l);
@@ -283,31 +280,23 @@ function runClaude(name, opts) {
           return { type: 'unparsed', line: l.slice(0, 300) };
         }
       });
-      // A full volume (ENOSPC) or no descriptors left (EMFILE) fails these reads and writes; unheard, the throw would
-      // crash the probe past its cleanup, so the case settles with the failure in its stderr instead.
-      let hook = [];
-      try {
-        hook = fs.existsSync(prep.hookLog)
-          ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
-              try {
-                return JSON.parse(l);
-              } catch {
-                return null;
-              }
-            }).filter(Boolean)
-          : [];
-      } catch (readErr) {
-        stderr += `\nhook log not read: ${readErr?.message ?? readErr}`;
-      }
-      for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) {
+      const hook = fileStep('hook log not read', () => (fs.existsSync(prep.hookLog) ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
         try {
-          fs.writeFileSync(path.join(prep.dir, file), redact(text));
-        } catch (writeErr) {
-          stderr += `\n${file} not written: ${writeErr?.message ?? writeErr}`;
+          return JSON.parse(l);
+        } catch {
+          return null;
         }
-      }
+      }).filter(Boolean) : []), []);
+      for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) fileStep(`${file} not written`, () => fs.writeFileSync(path.join(prep.dir, file), redact(text)));
       resolve({ name, sessionId, status, stdout: redact(stdout), stderr: redact(stderr).slice(-2000), events, hook, prep });
+    };
+    // A spawn failure (ENOENT, EAGAIN, EMFILE) emits 'error' with no pid and no 'close'; unheard it would crash the probe
+    // past its cleanup. An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' settles.
+    child.on('error', (err) => {
+      stderr += `\n${err?.message ?? err}`;
+      if (child.pid === undefined) settle(null, `spawn failed: ${err?.code ?? err?.message ?? err}`);
     });
+    child.on('close', (status, signal) => settle(status, status === null ? `killed by ${signal}` : null));
   });
 }
 
@@ -494,8 +483,12 @@ async function webfetchGroup(name, hook) {
     `https://httpbin.org/redirect-to?url=${encodeURIComponent(`http://127.0.0.1:${p}/e`)}`,
   ];
   const prompt = `${STRICT}\n${urls.map((u, i) => `${i + 1}. Call the WebFetch tool with url ${u} and prompt "Return the page text verbatim"`).join('\n')}`;
-  const r = await runClaude(name, { hook, tools: ['Read', 'WebFetch'], allow: ['WebFetch'], prompt });
-  await server.close();
+  let r;
+  try {
+    r = await runClaude(name, { hook, tools: ['Read', 'WebFetch'], allow: ['WebFetch'], prompt });
+  } finally {
+    await server.close();
+  }
   const mine = hits.slice(before);
   const per = urls.map((u) => ({ url: u.replace(String(p), 'PORT'), calls: attempt(r, 'WebFetch', (i) => i.url === u).map((c) => ({ isError: c.isError, text: c.text.slice(0, 160) })) }));
   return { r, mine, per, canaries: { CW1: leaked(r, K.CW1), CDU: leaked(r, K.CDU), CLOCAL: leaked(r, K.CLOCAL) } };
@@ -636,9 +629,24 @@ function reportCleanup(failures) {
   if (failures.length) console.error(redact(`${failures.map((f) => `cleanup failed: ${f}`).join('\n')}\nremove those by hand if they remain`));
   return failures.length === 0;
 }
-// Node's default SIGINT/SIGTERM/SIGHUP action exits without running the finally below, leaving the canaries behind,
-// and the calls, in their own process groups, get no terminal signal of their own. They are killed outright so
-// none writes a transcript after cleanTranscripts has run.
+let finishing = null;
+/**
+ * The only way the run ends once the layout may exist: stop every running call's process group (a group that threw
+ * can leave a sibling call running), then clean up once and exit. The first caller's code wins; a failed cleanup step
+ * turns a normal exit into 1 but leaves a signal's code as it is.
+ */
+function finish(code) {
+  const signalled = Boolean(stopping);
+  finishing ??= stopCalls(running, 5_000).then((left) => {
+    if (left.length) console.error(`calls still running after the kill (process groups ${left.join(', ')}); their transcripts may remain`);
+    const clean = reportCleanup(cleanup());
+    process.exit(clean || signalled ? code : 1);
+  });
+  return finishing;
+}
+// Node's default SIGINT/SIGTERM/SIGHUP action exits without cleaning up, leaving the canaries behind, and the calls,
+// in their own process groups, get no terminal signal of their own. They are killed outright so none writes a
+// transcript after cleanTranscripts has run.
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
   process.on(signal, () => {
     // A second signal does not wait for the calls to go.
@@ -646,12 +654,9 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
       reportCleanup(cleanup());
       process.exit(code);
     }
+    stopping = signal;
     console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);
-    stopping = stopCalls(running, 5_000).then((left) => {
-      if (left.length) console.error(`calls still running after the kill (process groups ${left.join(', ')}); their transcripts may remain`);
-      reportCleanup(cleanup());
-      process.exit(code);
-    });
+    void finish(code);
   });
 }
 try {
@@ -698,9 +703,6 @@ try {
 } catch (err) {
   console.error(redact(err?.stack ?? err));
   exitCode = 1;
-} finally {
-  // Stopped by a signal: its handler cleans up once the calls are gone and exits with the signal's code.
-  if (stopping) await stopping;
-  if (!reportCleanup(cleanup())) exitCode = 1;
 }
-process.exit(exitCode);
+// Stopped by a signal, the handler's finish is already under way and its code wins.
+await finish(exitCode);
