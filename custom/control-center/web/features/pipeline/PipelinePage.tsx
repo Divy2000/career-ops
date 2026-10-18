@@ -83,7 +83,8 @@ function AddUrls({ onDone }: { onDone: (added: number) => void }) {
   }
   return (
     <div className="card stack" role="dialog" aria-label="Add URLs to the pipeline">
-      <textarea aria-label="Posting URLs" rows={4} placeholder="One posting URL per line" value={text} onChange={(e) => setText(e.target.value)} />
+      {/* Locked while the add is on its way: its answer clears the box, which would drop any URL typed meanwhile. */}
+      <textarea aria-label="Posting URLs" rows={4} placeholder="One posting URL per line" value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
       {error && (
         <p role="alert" className="danger-text">
           {error}
