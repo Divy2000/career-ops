@@ -320,3 +320,12 @@ test('specsWithoutTmpCheck lists a spec whose relative imports exist but never r
     'missing-then-tmp.spec.mjs': "import './no-such-helper.mjs';\nimport '../../test-support/tmp.mjs';\n",
   }), ['helper-only.spec.mjs', 'missing.spec.mjs']);
 });
+
+test('specsWithoutTmpCheck lists a spec whose helpers import each other in a cycle that never reaches tmp.mjs (R34-mut-08)', () => {
+  assert.deepEqual(graphFixture({
+    'cycle-a.mjs': "import './cycle-b.mjs';\n",
+    'cycle-b.mjs': "import './cycle-a.mjs';\n",
+    'cycle.spec.mjs': "import './cycle-a.mjs';\nimport './cycle-b.mjs';\n",
+    'cycle-then-tmp.spec.mjs': "import './cycle-a.mjs';\nimport '../../test-support/tmp.mjs';\n",
+  }), ['cycle.spec.mjs']);
+});
