@@ -533,6 +533,13 @@ button.guide-action--on:hover {
   background: linear-gradient(90deg, transparent 0%, var(--skeleton-shine) 50%, transparent 100%) 0 0 / 200% 100%;
   animation: shimmer 1.4s linear infinite;
 }
+/* The global reduced-motion rule matches `*`, which does not reach this pseudo-element, and 1.4s is not a duration token. */
+@media (prefers-reduced-motion: reduce) {
+  .doc-media__frame[data-ready='false']::before {
+    animation: none;
+    background-image: none;
+  }
+}
 button.doc-media__hit,
 button.doc-media__hit:hover,
 button.doc-media__hit:active {
