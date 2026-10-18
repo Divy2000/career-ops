@@ -2530,3 +2530,63 @@ test('the pty tests are skipped, not failed, when python3 is missing or is a stu
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- interrupted runs (R31-scripts-b-L1-01)
+
+/**
+ * Starts the installer with its own TMPDIR, presses Ctrl-C (SIGINT to its process group, as a terminal does) once
+ * `ready()` holds, and returns how it ended plus what it left in that TMPDIR.
+ */
+async function interruptedRun(w, args, { env = {}, script = INSTALL_SH, ready }) {
+  const tmp = path.join(w.T, 'run-tmp');
+  fs.mkdirSync(tmp);
+  let out = '';
+  const child = spawn('bash', [script, ...args], { env: { ...w.env(), ...env, TMPDIR: tmp }, cwd: w.cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', (d) => { out += d; });
+  const ended = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+  const deadline = Date.now() + 60_000;
+  while (!ready(out) && child.exitCode === null && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  assert.equal(child.exitCode, null, `the installer ended before the interruption point:\n${out}`);
+  assert.ok(ready(out), `the installer never reached the interruption point:\n${out}`);
+  process.kill(-child.pid, 'SIGINT');
+  const end = await ended;
+  return { end, out, leftovers: fs.readdirSync(tmp) };
+}
+
+test('Ctrl-C while the installer waits for the daily job\'s lock leaves no lock files in TMPDIR (R31-scripts-b-L1-01)', async () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'data/immigration/logs/.keep': '' } });
+  const job = holdDailyLock(w, D);
+  try {
+    job.waitReady();
+    const r = await interruptedRun(w, args(), { env: { CAREER_OPS_INSTALL_DAILY_WAIT: '60' }, ready: (out) => /The daily job is running; waiting up to 60s/.test(out) });
+    assert.deepEqual(r.leftovers, [], r.out);
+    assert.equal(r.end.code, 130, `${JSON.stringify(r.end)}\n${r.out}`);
+  } finally {
+    job.stop();
+  }
+});
+
+test('Ctrl-C during the Keychain check leaves no Keychain error file in TMPDIR (R31-scripts-b-L1-01)', async () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  const r = await interruptedRun(w, ['--dir', D, '--non-interactive', '--no-h1b-index', '--onboard', 'none'], {
+    env: { FAKE_SECURITY_HANG: '60', CC_KEYCHAIN_TIMEOUT: '60' },
+    ready: () => w.calls('security').some((l) => l.startsWith('security find-generic-password')),
+  });
+  assert.deepEqual(r.leftovers, [], r.out);
+  assert.equal(r.end.code, 130, `${JSON.stringify(r.end)}\n${r.out}`);
+});
+
+test('Ctrl-C during the projects validator clone leaves no scratch clone in TMPDIR (R31-scripts-b-L1-01)', async () => {
+  const { w, args } = fresh();
+  const script = standalone(w);
+  const r = await interruptedRun(w, args('--projects', md(w, 'projects.md', LIBRARY)), {
+    script,
+    env: { FAKE_GIT_CLONE_HANG: '60' },
+    ready: () => w.log().includes('git-clone-hang'),
+  });
+  assert.deepEqual(r.leftovers, [], r.out);
+  assert.equal(r.end.code, 130, `${JSON.stringify(r.end)}\n${r.out}`);
+});
