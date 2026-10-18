@@ -191,12 +191,19 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   // page comes back, and its answers envelope (replayed by the panel) rebuilds the form.
   const remembered = useRememberedSession(applyKey(n));
   const rememberedId = remembered.panel.sessionId;
-  // Another application's draft under a reused number is not this row's: it is let go, and the form starts clean.
+  // Another application's draft under a reused number is not this row's: it is let go, and the form starts clean, as New
+  // draft's does. The number can change owner while the page is open (a delete elsewhere reindexes the tracker), and the
+  // answers drafted for the earlier application must not stay for Fill to send to the new owner's session.
   const foreignDraft = n !== null && startedForOther(rememberedId, identity);
   const sessionId = foreignDraft ? null : rememberedId;
   useEffect(() => {
-    if (foreignDraft && rememberedId) lastSession(applyKey(n)).forget(rememberedId);
-  }, [foreignDraft, rememberedId, n]);
+    if (!foreignDraft || !rememberedId) return;
+    lastSession(applyKey(n)).forget(rememberedId);
+    writeTypedUrl(rememberedId, null);
+    writeDraftDocs(rememberedId, null);
+    writeSessionRow(rememberedId, null);
+    onNewDraft();
+  }, [foreignDraft, rememberedId, n, onNewDraft]);
   const [typedUrl, setUrl] = useState<string | null>(null);
   const storedUrl = readTypedUrl(sessionId);
   // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings

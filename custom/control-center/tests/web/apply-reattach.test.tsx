@@ -815,6 +815,68 @@ describe('Given the row number now belongs to another application (R32-feat-a-L2
   });
 });
 
+// The tracker query refetches after a delete elsewhere, so the number can change owner while the page stays open.
+describe('Given the row number changes owner while its Apply page is open (R33-feat-a-L1-01)', () => {
+  const BETA_12 = { company: 'Beta Labs', role: 'Data Engineer', report: 44 };
+  let reindex: (identity: typeof ROW_12) => void;
+  let turnPosts: string[];
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
+    turnPosts = [];
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (typeof input === 'string' && /^\/api\/sessions\/[^/]+\/turns$/.test(input) && init?.method === 'POST') turnPosts.push(String(init.body));
+      if (input === '/api/sessions/s-apply-beta/turns' && init?.method === 'POST') return json({ ...URL_SESSION, id: 's-apply-beta', status: 'running', target: { type: 'app', value: '12' } });
+      return inner(input, init);
+    });
+  });
+  async function openReindexable() {
+    const { useState } = await import('react');
+    const { ApplyBody } = await import('@web/features/apply/ApplyPage');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    function Shown() {
+      const [identity, setIdentity] = useState(ROW_12);
+      reindex = setIdentity;
+      return createElement(ApplyBody, { n: '12', company: identity.company, postingUrl: 'https://jobs.example.com/acme/1', identity });
+    }
+    const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
+    const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: Shown });
+    router = createRouter({ routeTree: rootRoute.addChildren([apply]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
+    root = createRoot(host);
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(RouterProvider, { router }))));
+    await until(() => applyPanel(), 'the apply session panel');
+  }
+
+  it('When the tracker reindexes, Then the earlier application\'s answers leave the form and its draft\'s kept keys go', async () => {
+    await openReindexable();
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+    expect(fillButton()).toBeDefined();
+    expect(sessionStorage.getItem('cc.apply.row.s-apply-12')).not.toBeNull();
+
+    await act(async () => reindex(BETA_12));
+    await until(() => draftButton(), 'the Draft answers button');
+    expect(host.querySelector('[aria-label="Drafted answers"]')).toBeNull();
+    expect(fillButton()).toBeUndefined();
+    expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
+    expect(sessionStorage.getItem('cc.apply.row.s-apply-12')).toBeNull();
+    expect(sessionStorage.getItem('cc.apply.docs.s-apply-12')).toBeNull();
+  });
+
+  it('When a draft for the new owner stops before its answers, Then Fill cannot send the earlier application\'s answers to it', async () => {
+    await openReindexable();
+    await draftAnswers();
+    await act(async () => reindex(BETA_12));
+    await until(() => draftButton(), 'the Draft answers button');
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-beta'));
+    await act(async () => applyPanel()!.onStatus!('awaiting_user', null));
+    expect(fillButton()).toBeUndefined();
+    expect(host.textContent).not.toContain('Jane Smith');
+    expect(turnPosts).toEqual([]);
+  });
+});
+
 describe('Mark applied does not roll back a row that is further along (R30-feat-a-L2-01)', () => {
   const markApplied = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Mark applied');
 
