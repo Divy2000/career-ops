@@ -292,6 +292,44 @@ describe('pipeline.md rows (scan.mjs formatPipelineOffer)', () => {
     expect(rows[0]).toMatchObject({ location: 'Remote: US', compensation: '120000-160000 USD' });
     expect(rows[1]).toMatchObject({ location: 'Hybrid: Berlin', compensation: null, postedAt: '2026-09-30' });
   });
+
+  // A company or title can be any text, written forms of the labels included: the writer puts them in their columns
+  // before any label, so they must read back from there (R35-srv-dom-b-X-01).
+  const DASH = String.fromCharCode(0x2014);
+  const labelLike = ['note: labs', 'posted: 2026-06-18', 'trust: 80', `rank: 3.2/5 ${DASH} reason`, 'trust: 60 missing_apply_url'];
+  const shapes: Array<[string, Record<string, unknown>]> = [
+    ['three columns', {}],
+    ['a location', { location: 'Remote (US)' }],
+    ['a location and compensation', { location: 'Berlin', salary: { min: 1, max: 2, currency: 'EUR' } }],
+    ['a posted date and a note', { postedAt: Date.parse('2026-09-30T00:00:00Z'), note: 'curated shortlist' }],
+    ['a flagged trust score', { trustScore: 60, trustFlags: ['missing_apply_url'] }],
+  ];
+  const cases = labelLike.flatMap((text) =>
+    shapes.flatMap(([shape, extra]) => [
+      [`company ${JSON.stringify(text)} with ${shape}`, { url: 'https://x.example/1', company: text, title: 'Backend Engineer', ...extra }],
+      [`title ${JSON.stringify(text)} with ${shape}`, { url: 'https://x.example/1', company: 'Acme', title: text, ...extra }],
+      // A label appears once, so the same label twice cannot read as a bare URL's labels.
+      [`company and title both label-like with ${shape}`, { url: 'https://x.example/1', company: text, title: text, ...extra }],
+    ]),
+  ) as Array<[string, Record<string, unknown>]>;
+  it.each(cases)('a %s reads back in its columns', (_name, offer) => {
+    const [line] = format([offer]);
+    const [row] = parsePipeline(`## Pending\n\n${line}\n`);
+    expect(row, line).toMatchObject({ company: offer.company, role: offer.title, note: typeof offer.note === 'string' ? offer.note : null });
+    if (offer.postedAt) expect(row!.postedAt, line).toBe('2026-09-30');
+    if (offer.location) expect(row!.location, line).toBe(offer.location);
+  });
+
+  it.each([
+    ['rank-pipeline on a bare URL row', `- [ ] https://x.example/1 | rank: 4.0/5 ${DASH} fit`, { company: '', role: '', rank: 4 }],
+    ['rank-pipeline after a note on a three-column row', `- [ ] https://x.example/1 | note: labs | Backend Engineer | note: curated | rank: 4.0/5 ${DASH} fit`, { company: 'note: labs', role: 'Backend Engineer', note: 'curated', rank: 4 }],
+    ['labels in the documented order on a bare URL row', '- [ ] https://x.example/1 | posted: 2026-06-18 | trust: 80 | note: friend', { company: '', role: '', postedAt: '2026-06-18', note: 'friend' }],
+    ['labels out of the documented order, as rows on disk carry them', `- [ ] https://x.example/1 | Acme | SWE | Austin | rank: 4.4/5 ${DASH} fit | posted: 2026-09-15`, { company: 'Acme', role: 'SWE', location: 'Austin', rank: 4.4, postedAt: '2026-09-15' }],
+    ['a label-like company and title that repeat one label', '- [ ] https://x.example/1 | note: labs | note: platform', { company: 'note: labs', role: 'note: platform', note: null }],
+    ['a company and a label-like title', `- [ ] https://x.example/1 | Acme | rank: 3.2/5 ${DASH} reason`, { company: 'Acme', role: `rank: 3.2/5 ${DASH} reason`, rank: null }],
+  ])('%s', (_name, line, expected) => {
+    expect(parsePipeline(`## Pending\n\n${line}\n`)[0]).toMatchObject(expected);
+  });
 });
 
 describe('scan-history.tsv (scan.mjs appendToScanHistory)', () => {
