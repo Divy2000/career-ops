@@ -362,6 +362,8 @@ describe('the AI policy pass claim is settled on every exit of a start or fork (
     { name: 'the manager refuses the start and the release throws once', op: 'start', faults: { ...NONE, managerThrows: true, releaseStarting: 1 } },
     { name: 'nothing fails', op: 'fork', faults: NONE },
     { name: 'the handover throws', op: 'fork', faults: { ...NONE, retag: 1 } },
+    { name: 'the fork\'s batch cannot be written after the fork started', op: 'fork', faults: { ...NONE, forkBatch: 1 } },
+    { name: 'the fork\'s batch cannot be written and the claim cannot be given back at first', op: 'fork', faults: { ...NONE, forkBatch: 1, retag: 1 } },
     { name: 'the manager refuses the fork', op: 'fork', faults: { ...NONE, managerThrows: true } },
     { name: 'the manager refuses the fork and the claim cannot be given back at first', op: 'fork', faults: { ...NONE, managerThrows: true, retag: 2 } },
   ];
@@ -380,7 +382,7 @@ describe('the AI policy pass claim is settled on every exit of a start or fork (
     it(`given claim and batch writes that fail at points drawn from seed ${seed}, then the claim settles to one owner`, async () => {
       const rand = prng(seed);
       const op = rand() < 0.5 ? 'start' : 'fork';
-      const faults: Faults = { retag: Math.floor(rand() * 3), releaseStarting: Math.floor(rand() * 3), forkBatch: 0, managerThrows: rand() < 0.3 };
+      const faults: Faults = { retag: Math.floor(rand() * 3), releaseStarting: Math.floor(rand() * 3), forkBatch: op === 'fork' ? Math.floor(rand() * 2) : 0, managerThrows: rand() < 0.3 };
       const label = `seed ${seed}: ${op} ${JSON.stringify(faults)}`;
       try {
         await (op === 'start' ? runStart(faults, label) : runFork(faults, label));
