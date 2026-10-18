@@ -526,6 +526,23 @@ describe('app settings', () => {
       rm.mockRestore();
     }
   });
+  it.each([
+    ['no file', null, true],
+    ['a valid file', JSON.stringify({ claudeConcurrency: 4 }), true],
+    ['one bad value whose valid neighbors equal the defaults', JSON.stringify({ claudeConcurrency: 2, retention: 10 }), true],
+    ['one bad budget with a valid sibling budget', JSON.stringify({ usageBudgets: { fiveHourTokens: -1, sevenDayTokens: 900000 } }), true],
+    ['half-typed JSON', '{"claudeConcurrency": 1,', false],
+    ['JSON that is not an object', '[1, 2]', false],
+    ['only invalid and unknown fields', JSON.stringify({ claudeConcurrency: 9, retention: 'x', future: true }), false],
+    ['only invalid budgets', JSON.stringify({ usageBudgets: { fiveHourTokens: -1, sevenDayTokens: 'many' } }), false],
+  ])('given settings.json with %s, when it is read, then readable is %s (R34-setwatch-FC-01)', (_shape, content, readable) => {
+    const root = tempDir('cc-settings-');
+    if (content !== null) {
+      fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
+      fs.writeFileSync(path.join(root, SETTINGS_REL), content);
+    }
+    expect(readSettings(root).readable).toBe(readable);
+  });
   it('one bad usage budget keeps its valid sibling budget (R17-srv-dom-b-L1-01)', () => {
     const root = tempDir('cc-settings-');
     fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });

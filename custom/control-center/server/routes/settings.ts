@@ -147,7 +147,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
       return reply.code(409).send({ code: written.code, problem: written.problem, error: `${SETTINGS_REL} could not be read (${written.problem}), so saving would replace it with defaults. Fix the file by hand, or save again with ?reset=1 to replace it.` });
     }
     const next = written.settings;
-    opts.applySettings({ settings: next, problem: null, etag: written.etag });
+    opts.applySettings({ settings: next, problem: null, readable: true, etag: written.etag });
     bus.publish('data.changed', { domain: 'config' });
     return { ...next, etag: written.etag };
   });

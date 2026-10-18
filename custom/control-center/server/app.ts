@@ -1,7 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import path from 'node:path';
 import fs from 'node:fs';
-import { isDeepStrictEqual } from 'node:util';
 import { authPlugin, hasSession } from './auth/plugin.js';
 import { PACKAGE_ROOT, type ServerConfig } from './config.js';
 import { systemRoutes } from './routes/system.js';
@@ -28,7 +27,7 @@ import { configRoutes } from './routes/config.js';
 import { settingsRoutes } from './routes/settings.js';
 import { pinnedNodeBin, ScheduleService } from './system/schedule.js';
 import { maybeFakeLaunchd } from './system/fake-launchd.js';
-import { DEFAULT_SETTINGS, readSettings, type SettingsRead } from './domains/settings.js';
+import { readSettings, type SettingsRead } from './domains/settings.js';
 
 /** Action input files a crash or restart left behind are removed after a day, and CV uploads too once no session names them. */
 const STALE_INPUT_MS = 24 * 3_600_000;
@@ -82,12 +81,12 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const runner = new Runner(cfg.dataRoot, bus, runnerOpts);
   // The version of settings.json the runner runs on. Any read that sees another version applies it, so the settings
   // page never shows values the runner is not using; a file with an invalid value applies the valid ones it keeps.
-  // A file with nothing readable (half-typed JSON) keeps the last good settings: it must not drop retention to the
-  // default and prune runs.
+  // A file with nothing readable (half-typed JSON, every value invalid) keeps the last good settings: it must not drop
+  // retention to the default and prune runs.
   let appliedEtag = initialRead.etag;
   const applySettings = (read: SettingsRead) => {
     if (read.etag === appliedEtag) return;
-    if (read.problem !== null && isDeepStrictEqual(read.settings, DEFAULT_SETTINGS)) return;
+    if (!read.readable) return;
     appliedEtag = read.etag;
     runnerOpts.claudeSlots = read.settings.claudeConcurrency;
     runner.store.setRetention(read.settings.retention);

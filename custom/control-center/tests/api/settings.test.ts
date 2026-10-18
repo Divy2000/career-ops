@@ -1226,6 +1226,32 @@ describe('hand edits to settings.json reach the runner (R34-srv-dom-b-L2-01)', (
       await own.close();
     }
   });
+  it('given a hand edit with one invalid value whose valid values equal the defaults, when the page reads it, then the runner uses them (FC-01)', async () => {
+    const own = await makeTestApp();
+    try {
+      writeFile(own, JSON.stringify({ claudeConcurrency: 4 }));
+      await readIn(own);
+      expect(own.runner.claudeSlots).toBe(4);
+      writeFile(own, JSON.stringify({ claudeConcurrency: 2, retention: 10 }));
+      expect(await readIn(own)).toMatchObject({ claudeConcurrency: 2, problem: expect.any(String) });
+      expect(own.runner.claudeSlots).toBe(2);
+    } finally {
+      await own.close();
+    }
+  });
+  it('given a hand edit whose every known value is invalid, when the page reads it, then the runner keeps the last good settings', async () => {
+    const own = await makeTestApp();
+    try {
+      writeFile(own, JSON.stringify({ claudeConcurrency: 3 }));
+      await readIn(own);
+      expect(own.runner.claudeSlots).toBe(3);
+      writeFile(own, JSON.stringify({ claudeConcurrency: 9, retention: 'x', future: true }));
+      expect((await readIn(own)).problem).toEqual(expect.any(String));
+      expect(own.runner.claudeSlots).toBe(3);
+    } finally {
+      await own.close();
+    }
+  });
   it('given a hand edit that leaves settings.json unreadable, when the page reads it, then the runner keeps the last good settings', async () => {
     const own = await makeTestApp();
     try {
