@@ -466,6 +466,34 @@ test('an origin that is not the fork is refused with exit 1', () => {
   assert.equal(w.calls('npm').length, 0);
 });
 
+test('an origin URL carrying credentials is shown and logged without them (R31-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const data = path.join(w.T, 'mydata');
+  w.makeCheckout(D, { origin: 'https://x-access-token:ghp_SECRETVALUE@github.com/Divy2000/career-ops.git' });
+  const r = w.run(['--dir', D, '--data-root', data, '--non-interactive', ...QUIET]);
+  assert.match(r.out, /using the existing checkout \(origin https:\/\/github\.com\/Divy2000\/career-ops\.git\)/, r.out);
+  assert.ok(!r.out.includes('ghp_SECRETVALUE'), r.out);
+  assert.ok(installLogs(data).length > 0);
+  for (const log of installLogs(data)) assert.ok(!fs.readFileSync(log, 'utf8').includes('ghp_SECRETVALUE'));
+});
+
+test('a refused origin carrying credentials is named without them (R31-scripts-b-L2-01)', () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { origin: 'https://user:ghp_SECRETVALUE@github.com/career-ops-hq/career-ops.git' });
+  const r = w.run(args());
+  assert.equal(r.status, 1);
+  assert.match(r.out, /origin of .* is https:\/\/github\.com\/career-ops-hq\/career-ops\.git, not the fork/, r.out);
+  assert.ok(!r.out.includes('ghp_SECRETVALUE'), r.out);
+});
+
+test('a CAREER_OPS_REPO_URL carrying credentials is cloned as given but shown without them (R31-scripts-b-L2-01)', () => {
+  const { w, args } = fresh();
+  const url = 'https://user:ghp_SECRETVALUE@github.com/Divy2000/career-ops.git';
+  const r = w.run(args('--dry-run'), { env: { CAREER_OPS_REPO_URL: url } });
+  assert.match(r.out, /git clone https:\/\/github\.com\/Divy2000\/career-ops\.git /, r.out);
+  assert.ok(!r.out.includes('ghp_SECRETVALUE'), r.out);
+});
+
 test('a non-empty directory that is not a git checkout is refused with exit 1', () => {
   const { w, D, args } = fresh();
   fs.mkdirSync(D);

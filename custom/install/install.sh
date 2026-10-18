@@ -248,6 +248,8 @@ abspath() {
 }
 
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+# A remote URL as shown and logged: an https://user:token@host URL loses its userinfo, which can hold a credential.
+redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^@/]*@#\1#'; }
 
 # ---------------------------------------------------------------- arguments
 
@@ -724,7 +726,7 @@ check_projects() {
     else
       rm -rf "$PROJECTS_SCRATCH"
       PROJECTS_SCRATCH=""
-      printf 'error: could not fetch the projects validator (custom/projects/lib.mjs from %s) to check --projects.\n%s Retry, or run without --projects and import the file later in the Control Center (Profile > Projects).\n' "$FORK_URL" "$PROJECTS_NO_CHANGE" >&2
+      printf 'error: could not fetch the projects validator (custom/projects/lib.mjs from %s) to check --projects.\n%s Retry, or run without --projects and import the file later in the Control Center (Profile > Projects).\n' "$(redact_url "$FORK_URL")" "$PROJECTS_NO_CHANGE" >&2
       exit 1
     fi
   fi
@@ -882,18 +884,18 @@ elif [ "$rc" != 0 ]; then
   die 1 "could not take the daily job's lock $DAILY_LOCK_FAILED (see the lockf error above); nothing in the checkout was changed. Fix that, then re-run this script."
 fi
 if [ -e "$DIR/.git" ]; then
-  origin="$(git -C "$DIR" remote get-url origin 2>/dev/null)" || die 1 "$DIR is a git checkout with no origin remote; expected the fork $FORK_URL."
-  lib same-repo "$origin" "$FORK_URL" || die 1 "origin of $DIR is $origin, not the fork $FORK_URL. Pick another --dir, or fix the remote."
-  say "  using the existing checkout (origin $origin)"
+  origin="$(git -C "$DIR" remote get-url origin 2>/dev/null)" || die 1 "$DIR is a git checkout with no origin remote; expected the fork $(redact_url "$FORK_URL")."
+  lib same-repo "$origin" "$FORK_URL" || die 1 "origin of $DIR is $(redact_url "$origin"), not the fork $(redact_url "$FORK_URL"). Pick another --dir, or fix the remote."
+  say "  using the existing checkout (origin $(redact_url "$origin"))"
   ensure_upstream
   update_checkout
 elif [ -d "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ]; then
   die 1 "$DIR exists, is not empty and is not a git checkout. Choose another --dir."
 elif [ "$DRY_RUN" = 1 ]; then
-  dry "git clone $FORK_URL $DIR${REF:+ and check out $REF}"
+  dry "git clone $(redact_url "$FORK_URL") $DIR${REF:+ and check out $REF}"
   dry "add the upstream remote $UPSTREAM_URL"
 else
-  git clone "$FORK_URL" "$DIR" || die 1 "git clone of $FORK_URL into $DIR failed (offline? see the git error above). Re-run once the network is back."
+  git clone "$FORK_URL" "$DIR" || die 1 "git clone of $(redact_url "$FORK_URL") into $DIR failed (offline? see the git error above). Re-run once the network is back."
   if [ -n "$REF" ] && ! git -C "$DIR" checkout "$REF"; then
     die 1 "could not check out $REF in $DIR (no such tag or branch; see the git error above)."
   fi
