@@ -31,7 +31,7 @@ function addressLabel(url: string): string {
 
 type Definitions = Map<string, string>;
 
-/** Phrasing nodes to spans. Images, footnote references and raw HTML are dropped; a link whose label is its own address shows it compactly. */
+/** Phrasing nodes to spans. Images, footnote references, raw HTML and struck-through (withdrawn) text are dropped; a link whose label is its own address shows it compactly. */
 function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string | undefined, out: DigestSpan[], defs: Definitions): void {
   for (const n of nodes) {
     switch (n.type) {
@@ -46,7 +46,6 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
         flatten(n.children, true, href, out, defs);
         break;
       case 'emphasis':
-      case 'delete':
         flatten(n.children, bold, href, out, defs);
         break;
       case 'link': {
@@ -63,6 +62,7 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
       case 'imageReference':
       case 'footnoteReference':
       case 'html':
+      case 'delete':
         break;
     }
   }
@@ -94,14 +94,16 @@ const CAPITALIZED = /^\p{Lu}/u;
 const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 'appendix', 'exhibit', 'form', 'annex', 'item', 'tier', 'type', 'class', 'category', 'group']);
 
 /**
- * Where the first sentence of `text` ends (after its . ! or ?), or -1: a period after an abbreviation, or before a lowercase
+ * Where the first sentence of `text` ends (after its . ! or ? and any closing quotes or brackets), or -1: a period after an abbreviation, or before a lowercase
  * word or a number ("Oct. 15"), is no end. Ends before `from` are skipped: that text is context for the words before a period.
  */
 function sentenceEnd(text: string, from = 0): number {
-  for (const m of text.matchAll(/[.!?](?=\s|$)/g)) {
+  // Closing quotes and brackets after the punctuation belong to the sentence: 'said "under review." Posts will'.
+  for (const m of text.matchAll(/[.!?]["')\]\u2019\u201d]*(?=\s|$)/gu)) {
     const i = m.index!;
+    const after = i + m[0].length;
     if (i < from) continue;
-    const nextWord = /^\s+(\S+)/.exec(text.slice(i + 1))?.[1];
+    const nextWord = /^\s+(\S+)/.exec(text.slice(after))?.[1];
     if (text[i] === '.') {
       // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
       const words = text.slice(0, i).split(/\s/);
@@ -113,7 +115,7 @@ function sentenceEnd(text: string, from = 0): number {
       const before = words.pop() ?? '';
       if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(before) && !LETTERED_PARTS.has(before.toLowerCase()) && nextWord !== undefined && CAPITALIZED.test(nextWord)) continue;
     }
-    if (nextWord === undefined || !/[\p{Ll}\d]/u.test(nextWord[0]!)) return i + 1;
+    if (nextWord === undefined || !/[\p{Ll}\d]/u.test(nextWord[0]!)) return after;
   }
   return -1;
 }

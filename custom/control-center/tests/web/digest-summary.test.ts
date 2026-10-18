@@ -167,4 +167,35 @@ describe('summarizeDigest', () => {
       { text: '.' },
     ]);
   });
+  it('drops struck-through text, so a withdrawn figure never reads as current policy (R33-weblib-X-01)', () => {
+    expect(lines('- H-1B filing fee is now ~~$5,000~~ $100,000 per petition. Source: [USCIS](https://www.uscis.gov/x)')).toEqual(['H-1B filing fee is now $100,000 per petition.']);
+    expect(lines('- **Fee is ~~proposed~~ final.** Details follow.')).toEqual(['Fee is final.']);
+    expect(summarizeDigest('- See [the ~~draft~~ final rule](https://example.test/r) today.')[0]).toEqual([{ text: 'See ' }, { text: 'the ', href: 'https://example.test/r' }, { text: 'final rule', href: 'https://example.test/r' }, { text: ' today.' }]);
+    expect(lines('- ~~Old guidance withdrawn.~~\n- New guidance applies.')).toEqual(['New guidance applies.']);
+    expect(lines('- Fee is ~~$5,000. It was~~ $100,000. Later text.')).toEqual(['Fee is $100,000.']);
+  });
+
+  it.each([
+    ['a closing double quote', '- State Dept said visa processing is "under review." Consular posts will contact applicants once the review completes.', 'State Dept said visa processing is "under review."'],
+    ['a closing curly quote', '- State Dept said processing is \u201cunder review.\u201d Posts will contact applicants.', 'State Dept said processing is \u201cunder review.\u201d'],
+    ['a closing single quote', "- The officer said 'come back Monday.' Posts will contact applicants.", "The officer said 'come back Monday.'"],
+    ['a closing bracket', '- Fees rise (for petitions filed abroad.) Posts will contact applicants.', 'Fees rise (for petitions filed abroad.)'],
+    ['a closing square bracket', '- Fees rise [see notice.] Posts will contact applicants.', 'Fees rise [see notice.]'],
+    ['a question mark and quote', '- Asked "is the fee final?" Officials declined to say.', 'Asked "is the fee final?"'],
+    ['an exclamation and a bracket', '- Processing paused (again!) Check back Monday.', 'Processing paused (again!)'],
+    ['a quote and a bracket', '- Fees rise ("per the rule.") Posts will contact applicants.', 'Fees rise ("per the rule.")'],
+    ['closing punctuation at the end', '- Status is "under review."', 'Status is "under review."'],
+  ])('ends the first sentence at terminal punctuation followed by %s (R33-weblib-L2-01)', (_shape, body, expected) => {
+    expect(lines(`${body}`)).toEqual([expected]);
+  });
+
+  it.each([
+    ['an abbreviation in brackets', '- Stamping paused (in the U.S.) Later text here.', 'Stamping paused (in the U.S.) Later text here.'],
+    ['a quoted question before lowercase', '- "Is it final?" he asked the officer. Later text.', '"Is it final?" he asked the officer.'],
+    ['a quoted abbreviation', '- The memo says "see Dr." Smith for details. Later text.', 'The memo says "see Dr." Smith for details.'],
+    ['a bracketed abbreviation', '- Per Rule (No.) Five the fee rises. Later text.', 'Per Rule (No.) Five the fee rises.'],
+    ['a quoted word before lowercase', '- Said "go." now. Later text.', 'Said "go." now.'],
+  ])('does not end the first sentence at closing punctuation after %s (R33-weblib-L2-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
 });
