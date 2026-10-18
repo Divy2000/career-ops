@@ -1,20 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { localJdPath } from '@shared/local-jd';
 import { dedupUrlKey } from '@shared/dedup-url';
-import { postingUrl } from '@shared/posting-url';
 import type { SessionMeta } from '@shared/api';
 import { startEvaluateSession, startSavedJdSession, useSessions } from '../../lib/sessions';
 import { isReportGatedMode } from '../pipeline/evaluating';
-
-/**
- * Where a posting reference opens: the saved JD a `local:jds/<file>` reference points at, or an http(s) posting URL.
- * Anything else is undefined, so it renders as text: the reference comes from files other writers fill, and a
- * javascript: or data: URL in href would run in this origin when clicked.
- */
-export const postingHref = (ref: string): string | undefined => {
-  const jd = localJdPath(ref);
-  return jd === null ? postingUrl(ref) ?? undefined : `/api/files/serve?path=${encodeURIComponent(jd)}`;
-};
 
 const ACTIVE = new Set(['queued', 'running', 'awaiting_user']);
 

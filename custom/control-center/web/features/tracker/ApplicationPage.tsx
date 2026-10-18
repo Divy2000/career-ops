@@ -14,7 +14,7 @@ import { reasonLabel } from '../../lib/format';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
 import { sponsorCheckCompany } from '../sponsorship/companyKey';
-import { postingHref } from '../today/evaluate';
+import { postingHref } from '../../lib/posting-href';
 
 /**
  * Where an application's launcher remembers its sessions: the row number with the row's identity. A delete elsewhere
@@ -96,6 +96,7 @@ function Verdict({ report }: { report: ReportFull }) {
 export function ApplicationPage() {
   const { n } = route.useParams();
   const q = useApplication(n);
+  const posting = q.data?.row.url ? postingHref(q.data.row.url) : undefined;
   const [tab, setTab] = useState<Tab>('report');
 
   return (
@@ -118,8 +119,8 @@ export function ApplicationPage() {
                 <StatusPill status={q.data.row.status} />
                 {q.data.row.summary?.legitimacy && <Pill>{q.data.row.summary.legitimacy}</Pill>}
                 <SponsorPill tier={q.data.sponsorship.companyFile?.verdict ?? q.data.sponsorship.companyFile?.dolTier} />
-                {q.data.row.url && (
-                  <a className="button-link" href={postingHref(q.data.row.url)} target="_blank" rel="noreferrer noopener">
+                {posting && (
+                  <a className="button-link" href={posting} target="_blank" rel="noreferrer noopener">
                     Open posting
                   </a>
                 )}
