@@ -279,23 +279,45 @@ test('a start claim in the earlier format is taken over once a day old, even whe
   assert.deepEqual(tryClaim(r, { owner: 'daily:1', batch: null }), { ok: true });
 });
 
-test('many processes claiming at once: exactly one gets it', async () => {
-  const r = root();
-  // Each claimant stays alive until all have answered: a start's claim holds only while its process runs.
-  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:' + process.pid, batch: null }).ok)); process.stdin.resume();`;
+/**
+ * Starts `count` claimants in `dataRoot` and resolves their answers. Each runs `prelude`, loads policy-claim.mjs, writes
+ * ready-<pid> and waits for a go file the parent writes only once every claimant is ready, so all of them claim in the
+ * same instant however slowly each one boots (R30-tests-custom-L1-01). Each claimant stays alive until all have
+ * answered: a start's claim holds only while its process runs.
+ */
+async function claimAtOnce(dataRoot, { count = 8, prelude = '' } = {}) {
+  const go = path.join(dataRoot, 'go');
+  const readyDir = path.join(dataRoot, 'ready');
+  fs.mkdirSync(readyDir);
+  const code = `const fs = (await import('node:fs')).default; ${prelude} const { tryClaim } = await import(${JSON.stringify(MODULE)}); fs.writeFileSync(${JSON.stringify(readyDir)} + '/ready-' + process.pid, ''); while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((res) => setTimeout(res, 1)); process.stdout.write(String(tryClaim(${JSON.stringify(dataRoot)}, { owner: 'starting:' + process.pid, batch: null }).ok)); process.stdin.resume();`;
   const children = [];
   try {
-    const outs = await Promise.all(Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
+    let exited = 0;
+    const outs = Promise.all(Array.from({ length: count }, () => new Promise((resolve, reject) => {
       const child = spawn(process.execPath, ['--input-type=module', '-e', code]);
       children.push(child);
       child.stdout.once('data', (d) => resolve(String(d)));
       child.on('error', reject);
-      child.on('close', () => resolve(''));
+      child.on('close', () => { exited++; resolve(''); });
     })));
-    assert.equal(outs.filter((o) => o === 'true').length, 1, outs.join(','));
+    while (fs.readdirSync(readyDir).length < count) {
+      if (exited) {
+        // The rest are still polling for go, where closing stdin does not reach them.
+        for (const child of children) child.kill();
+        throw new Error(`a claimant exited before it was ready (${fs.readdirSync(readyDir).length}/${count} ready)`);
+      }
+      await new Promise((res) => setTimeout(res, 5));
+    }
+    fs.writeFileSync(go, '');
+    return await outs;
   } finally {
     for (const child of children) child.stdin.end();
   }
+}
+
+test('many processes claiming at once: exactly one gets it', async () => {
+  const outs = await claimAtOnce(root());
+  assert.equal(outs.filter((o) => o === 'true').length, 1, outs.join(','));
 });
 
 test('many processes finding a crashed claimant\'s stale lock at once: exactly one breaks it and gets the claim (R19-scripts-a-L1-02)', async () => {
@@ -306,30 +328,11 @@ test('many processes finding a crashed claimant\'s stale lock at once: exactly o
     fs.mkdirSync(lock);
     const old = new Date(Date.now() - 60_000);
     fs.utimesSync(lock, old, old);
-    const go = path.join(r, 'go');
-    // Every claimant waits for the same instant, so they all judge the old lock stale in the same poll, and each is
-    // descheduled for a moment between that verdict and its removal of the lock, the window in which another claimant
-    // can break the same lock and take a new one.
-    const code = `const fs = (await import('node:fs')).default; const rm = fs.rmSync; fs.rmSync = (p, o) => { if (String(p).endsWith('.lock')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); return rm(p, o); }; const { tryClaim } = await import(${JSON.stringify(MODULE)}); while (!fs.existsSync(${JSON.stringify(go)})) await new Promise((res) => setTimeout(res, 1)); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'starting:' + process.pid, batch: null }).ok)); process.stdin.resume();`;
-    const children = [];
-    try {
-      const ready = [];
-      const outs = Promise.all(Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, ['--input-type=module', '-e', code]);
-        children.push(child);
-        ready.push(new Promise((res) => child.on('spawn', res)));
-        child.stdout.once('data', (d) => resolve(String(d)));
-        child.on('error', reject);
-        child.on('close', () => resolve(''));
-      })));
-      await Promise.all(ready);
-      await new Promise((res) => setTimeout(res, 300));
-      fs.writeFileSync(go, '');
-      const answers = await outs;
-      assert.equal(answers.filter((o) => o === 'true').length, 1, `round ${round}: ${answers.join(',')}`);
-    } finally {
-      for (const child of children) child.stdin.end();
-    }
+    // Every claimant judges the old lock stale in the same poll, and each is descheduled for a moment between that
+    // verdict and its removal of the lock, the window in which another claimant can break the same lock and take a new one.
+    const prelude = `const rm = fs.rmSync; fs.rmSync = (p, o) => { if (String(p).endsWith('.lock')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50); return rm(p, o); };`;
+    const answers = await claimAtOnce(r, { prelude });
+    assert.equal(answers.filter((o) => o === 'true').length, 1, `round ${round}: ${answers.join(',')}`);
   }
 });
 
