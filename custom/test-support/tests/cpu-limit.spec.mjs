@@ -43,3 +43,9 @@ test('Given stdin input and spawn options, they reach the command unchanged', ()
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, `${fs.realpathSync(dir)}\nseen\n`);
 });
+
+test('Given no CPU budget, the command runs under the default 30 s CPU-time limit (R34-mut-01, R34-mut-02)', () => {
+  const r = spawnCpuLimited('bash', [script('ulimit -t\n')]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '30\n');
+});
