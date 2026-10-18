@@ -532,4 +532,20 @@ describe('app settings', () => {
     fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ usageBudgets: { fiveHourTokens: -1, sevenDayTokens: 900000 } }));
     expect(readSettings(root)).toMatchObject({ settings: { usageBudgets: { fiveHourTokens: null, sevenDayTokens: 900000 } }, problem: expect.stringMatching(/usageBudgets\.fiveHourTokens/) });
   });
+  it('given settings.json lacks one usage budget, when it is read and saved, then the missing budget defaults to null with no problem and the save goes through (R34-claude-L2-01)', () => {
+    const root = tempDir('cc-settings-');
+    fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
+    fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ logos: true, usageBudgets: { fiveHourTokens: 100000 } }));
+    expect(readSettings(root)).toMatchObject({ settings: { logos: true, usageBudgets: { fiveHourTokens: 100000, sevenDayTokens: null } }, problem: null });
+    const next = updateSettings(root, { logos: false });
+    expect(next.ok && next.settings).toMatchObject({ logos: false, usageBudgets: { fiveHourTokens: 100000, sevenDayTokens: null } });
+  });
+  it('given settings.json has an empty usage budget object, when it is read, then both budgets default with no problem, and an extra or bad budget is still a problem (R34-claude-L2-01)', () => {
+    const root = tempDir('cc-settings-');
+    fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
+    fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ usageBudgets: {} }));
+    expect(readSettings(root)).toMatchObject({ settings: { usageBudgets: { fiveHourTokens: null, sevenDayTokens: null } }, problem: null });
+    fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ usageBudgets: { sevenDayTokens: 'many' } }));
+    expect(readSettings(root).problem).toMatch(/usageBudgets\.sevenDayTokens/);
+  });
 });

@@ -18,11 +18,15 @@ export type AppSettings = z.infer<typeof appSettingsSchema>;
 
 export const appSettingsPatchSchema = appSettingsSchema.partial().strict();
 
+// What settings.json may hold: any setting may be missing, each budget too, and mergeSettings fills the missing ones.
+const storedSettingsSchema = appSettingsSchema.extend({ usageBudgets: appSettingsSchema.shape.usageBudgets.partial() }).partial();
+type StoredSettings = z.infer<typeof storedSettingsSchema>;
+
 export const DEFAULT_SETTINGS: AppSettings = { logos: false, retention: 500, claudeConcurrency: 2, modelDefault: '', usageBudgets: { fiveHourTokens: null, sevenDayTokens: null } };
 
 export const SETTINGS_REL = 'data/control-center/settings.json';
 
-export function mergeSettings(current: Partial<AppSettings>, patch: Partial<AppSettings>): AppSettings {
+export function mergeSettings(current: StoredSettings, patch: Partial<AppSettings>): AppSettings {
   return {
     ...DEFAULT_SETTINGS,
     ...current,
@@ -53,7 +57,7 @@ export function readSettings(dataRoot: string): SettingsRead {
 function parseSettings(raw: string): { settings: AppSettings; problem: string | null } {
   try {
     const rawValue: unknown = JSON.parse(raw);
-    const parsed = appSettingsSchema.partial().safeParse(rawValue);
+    const parsed = storedSettingsSchema.safeParse(rawValue);
     if (parsed.success) return { settings: mergeSettings(parsed.data, {}), problem: null };
     // One bad value must not reset its valid neighbors: a one-field PUT over such a file keeps every good setting.
     const kept = keepValidSettings(rawValue);
@@ -64,7 +68,7 @@ function parseSettings(raw: string): { settings: AppSettings; problem: string | 
 }
 
 /** Each top-level field parsed alone, so a file with one invalid value keeps the rest instead of falling back to defaults. */
-function keepValidSettings(raw: unknown): Partial<AppSettings> {
+function keepValidSettings(raw: unknown): StoredSettings {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const obj = raw as Record<string, unknown>;
   const out: Record<string, unknown> = {};
@@ -82,7 +86,7 @@ function keepValidSettings(raw: unknown): Partial<AppSettings> {
     }
     out.usageBudgets = kept;
   }
-  return out as Partial<AppSettings>;
+  return out as StoredSettings;
 }
 
 /** The model a new session runs on: the one the request names, else the app default, else null (the CLI default). */
