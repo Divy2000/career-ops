@@ -92,7 +92,7 @@ const CITATION_NEXT = /^\p{Lu}\p{L}{0,3}\.$/u;
 const CAPITALIZED = /^\p{Lu}/u;
 // Closers in every quoting style ("" '' “” „“ «» »« 「」 『』 ...). French spacing puts a space before a closing
 // guillemet ("définitif. »"); a Danish » after a space opens the next sentence, but sits on its word, so the lookahead refuses it.
-const SENTENCE_PUNCTUATION = /[.!?](?: ?[\u00bb\u203a]|[\u00ab\u00bb\u2039\u203a]|["')\]}\u2018\u2019\u201c\u201d\u3009\u300b\u300d\u300f\u3011\u3015\u3017\u3019\u301b\uff02\uff07\uff09\uff3d\uff5d])*(?=\s|$)/gu;
+const SENTENCE_PUNCTUATION = /[.!?](?: [\u00bb\u203a]|[\u00ab\u00bb\u2039\u203a"')\]}\u2018\u2019\u201c\u201d\u3009\u300b\u300d\u300f\u3011\u3015\u3017\u3019\u301b\uff02\uff07\uff09\uff3d\uff5d])*(?=\s|$)/gu;
 const OPENERS = /^[(["'{\u2018\u201a\u201c\u201e\u00ab\u00bb\u2039\u203a\u3008\u300a\u300c\u300e\u3010\u3014\u3016\u3018\u301a\uff02\uff07\uff08\uff3b\uff5b]+/u;
 // A lone capital after these is a lettered part ("Schedule A.", "Part B."), not a middle initial.
 const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 'appendix', 'exhibit', 'form', 'annex', 'item', 'tier', 'type', 'class', 'category', 'group']);

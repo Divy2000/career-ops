@@ -275,4 +275,12 @@ describe('summarizeDigest', () => {
     expect(line!.startsWith('w w w')).toBe(true);
     expect(line!.endsWith('…')).toBe(true);
   }, 60000);
+
+  it('scans a run of guillemets after a period that ends in a word in linear time (R34 fix-check FC-01)', () => {
+    const started = performance.now();
+    expect(lines(`- Rates rose.${'»'.repeat(40)}x later. More.`)).toEqual([`Rates rose.${'»'.repeat(40)}x later.`]);
+    expect(lines(`- **Rates rose.${'›'.repeat(40)}x** later. More.`)).toEqual([`Rates rose.${'›'.repeat(40)}x later.`]);
+    expect(performance.now() - started).toBeLessThan(5000);
+  }, 60000);
 });
+
