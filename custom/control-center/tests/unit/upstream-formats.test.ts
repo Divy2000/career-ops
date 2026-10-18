@@ -105,7 +105,10 @@ describe('oferta report format (modes/oferta.md, examples/sample-report.md)', ()
       .replace(/```yaml\n[\s\S]*?\n```/, '```yaml\n' + yaml + '\n```')
       .replace('{Company}', 'Acme')
       .replace('{Role}', 'Eng')
-      .replace('{X.X/5}', '4.0/5');
+      .replace('{X.X/5}', '4.0/5')
+      // The sections the prompt lists after the Machine Summary ("Then include:").
+      .concat('\n## A) Role Summary\n\n| Field | Value |\n|---|---|\n| **Remote** | Hybrid |\n\n## B) CV Match\n\nGood\n');
+    expect(prompt).toMatch(/^- `## Machine Summary`\n- `## A\) Role Summary`$/m);
     const r = parseReport(md, '002-acme.md', 2);
     expect(r.machine).toMatchObject({ company: 'Acme', final_decision: 'Skip' });
     expect(r).toMatchObject({ finalDecision: 'Skip', discardReasons: ['salary_too_low'], comp: '80-90k EUR', score: 4 });

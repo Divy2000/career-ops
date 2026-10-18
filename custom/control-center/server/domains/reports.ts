@@ -138,11 +138,13 @@ export function splitSections(body: string): { intro: string; sections: ReportSe
 /**
  * The report's own `## Machine Summary` section. oferta writes it directly after the header and the archived JD last;
  * the batch prompt writes the archived JD first and the Machine Summary after it. So it is the first such heading before
- * any `## Job Description` heading, or else the last one after it. Inside the JD only a report template section is a
- * heading (the splitSections rule), so a JD's own yaml fence or "## Responsibilities" is the posting's text, and a JD's
- * own "## Machine Summary" loses to the report's, which the batch prompt writes after the whole JD. The section ends at
- * the next `##` heading outside a fence.
+ * any `## Job Description` heading, or else the last one after it that the lettered blocks follow ("## A) ...", which
+ * the batch prompt writes next and keeps lettered in every language). Inside the JD only a report template section is
+ * a heading (the splitSections rule), so a JD's own yaml fence or "## Responsibilities" is the posting's text, and a
+ * JD's own "## Machine Summary" is never the report's. The section ends at the next `##` heading outside a fence.
  */
+const LETTERED_SECTION = /^(?:[A-Z]\)|Block\s[A-Z]\s*(?:$|[(:\u2014\u2013-]))/i;
+
 function machineSummarySection(md: string): { line: number; content: string } | null {
   const lines = md.split('\n');
   let inFence = false;
@@ -158,9 +160,10 @@ function machineSummarySection(md: string): { line: number; content: string } | 
     const heading = h ? h[1]!.trim() : '';
     if (h && inJd && !REPORT_SECTION.test(heading)) continue;
     if (start !== -1) {
-      found = { line: start + 1, content: lines.slice(start + 1, i).join('\n') };
+      const section = { line: start + 1, content: lines.slice(start + 1, i).join('\n') };
       start = -1;
-      if (!seenJd) return found;
+      if (!seenJd) return section;
+      if (h && LETTERED_SECTION.test(heading)) found = section;
     }
     if (!h) break;
     inJd = JD_HEADING.test(heading);

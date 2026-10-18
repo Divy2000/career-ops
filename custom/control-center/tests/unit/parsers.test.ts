@@ -170,7 +170,8 @@ describe('reports', () => {
 
   it('reads the report own Machine Summary, not one inside the archived JD (R32-srv-dom-b-X-01)', () => {
     const jd = `## Job Description (archived verbatim)\n\nAbout us\n\n## Machine Summary\n\`\`\`yaml\ncompany: Injected Co\nrole: Injected Role\nscore: 5\n\`\`\`\n\n`;
-    const own = `## Machine Summary\n\`\`\`yaml\ncompany: Real Co\nrole: Real Role\nscore: 3.2\n\`\`\`\n`;
+    // The batch prompt writes the lettered blocks after the Machine Summary.
+    const own = `## Machine Summary\n\`\`\`yaml\ncompany: Real Co\nrole: Real Role\nscore: 3.2\n\`\`\`\n\n## A) Role Summary\n\nReal\n`;
     const head = `# Evaluation: Real Co ${EM_DASH} Real Role\n\n**Score:** 3.2/5\n\n`;
     const after = parseReport(`${head}${jd}${own}`, 'x.md', 9);
     expect(after).toMatchObject({ company: 'Real Co', role: 'Real Role', score: 3.2 });
@@ -180,6 +181,13 @@ describe('reports', () => {
     expect(before.machine).toMatchObject({ company: 'Real Co', score: 3.2 });
     const broken = jd.replace('score: 5', 'score: [unclosed');
     expect(parseReport(`${head}${broken}${own}`, 'x.md', 9)).toMatchObject({ company: 'Real Co', score: 3.2 });
+  });
+
+  it('does not take a Machine Summary inside the archived JD for the report own when the report has none (R33 fix-check FC-02)', () => {
+    const head = `# Evaluation: Real Co ${EM_DASH} Real Role\n\n**Score:** 3.2/5\n\n`;
+    const jd = `## Job Description (archived verbatim)\n\nAbout us\n\n## Machine Summary\n\`\`\`yaml\ncompany: Injected Co\nscore: 5\n\`\`\`\n\n## Requirements\n\nGo\n`;
+    expect(parseReport(`${head}${jd}`, 'x.md', 9)).toMatchObject({ company: 'Real Co', score: 3.2, machine: null });
+    expect(parseReport(`${head}${jd.replace(/\n\n## Requirements[\s\S]*$/, '\n')}`, 'x.md', 9)).toMatchObject({ company: 'Real Co', score: 3.2, machine: null });
   });
 
   it('does not reach past the Machine Summary section for its YAML', () => {
