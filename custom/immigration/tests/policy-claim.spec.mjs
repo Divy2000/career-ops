@@ -265,10 +265,10 @@ test('a start claim in the earlier format written in another zone holds while it
 test('a start claim in the earlier format holds when ps cannot run, however old (R28-tests-custom-L1-01 review 2)', () => {
   const r = root();
   plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
-  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); process.stdout.write(String(tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok));`;
-  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, PATH: tempDir('no-ps-') }, encoding: 'utf8' });
-  assert.equal(child.status, 0, child.stderr);
-  assert.equal(child.stdout, 'false');
+  // ps is called by absolute path (R31-srv-core-L2-01), so a PATH without it no longer stops it: the spawn fails instead.
+  const fake = `if (/(^|\\/)ps$/.test(file)) throw Object.assign(new Error('spawn ps ENOENT'), { code: 'ENOENT' });`;
+  const { out } = withRecordedSpawns(`(c) => c.tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok`, { fake });
+  assert.equal(out, false);
 });
 
 test('a start claim in the earlier format is taken over once a day old, even when its text names this process (R28-tests-custom-L1-01 review 3)', () => {
@@ -423,4 +423,45 @@ try { tryClaim(${JSON.stringify(r)}, { owner: 'session:s-1', batch: null }); pro
   assert.equal(child.stdout, 'i/o error');
   assert.match(child.stderr, /could not remove the temp file .*\.policy-pass\.claim\.tmp-\d+: permission denied/);
   assert.equal(readClaim(r), null);
+});
+
+/**
+ * Runs `body` in a child that loads policy-claim.mjs with execFileSync wrapped: each call's file and environment is
+ * recorded, and `fake` (when given) answers instead of the real spawn. Resolves the recorded calls and the body's output.
+ */
+function withRecordedSpawns(body, { fake = '', env = {} } = {}) {
+  const code = `const { createRequire, syncBuiltinESMExports } = await import('node:module');
+const cp = createRequire(import.meta.url)('node:child_process');
+const real = cp.execFileSync; const calls = [];
+cp.execFileSync = (file, args, opts) => { calls.push({ file, args, env: opts?.env ?? null }); ${fake} return real(file, args, opts); };
+syncBuiltinESMExports();
+const claim = await import(${JSON.stringify(MODULE)});
+const out = await (${body})(claim);
+process.stdout.write(JSON.stringify({ calls, out }));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', code], { env: { ...process.env, ...env }, encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  return JSON.parse(child.stdout);
+}
+
+test('given server secrets in the environment, when a claim owner is checked, then ps runs as /bin/ps with only a minimal environment (R31-srv-core-L2-01)', () => {
+  const r = root();
+  const secrets = { CC_TOKEN: 'tok-secret', CC_SESSION_SECRET: 'cookie-secret', ANTHROPIC_API_KEY: 'sk-secret' };
+  const body = `async (c) => {
+    const r = ${JSON.stringify(r)};
+    (await import('node:fs')).default.writeFileSync(r + '/data/immigration/.run-daily.pid', String(process.pid));
+    return [
+      c.ownerLive(r, { owner: 'daily:' + process.pid }),
+      c.ownerLive(r, { owner: 'starting:x', at: new Date().toISOString(), pid: process.pid, pidStart: 0 }),
+    ];
+  }`;
+  const { calls, out } = withRecordedSpawns(body, { env: secrets });
+  // This node process is neither bash running run-daily.sh nor started at the epoch: both checks reached ps and said no.
+  assert.deepEqual(out, [false, false]);
+  const ps = calls.filter((call) => /(^|\/)ps$/.test(call.file));
+  assert.equal(ps.length, 2, JSON.stringify(calls));
+  for (const call of ps) {
+    assert.equal(call.file, '/bin/ps');
+    assert.ok(call.env, `${call.args.join(' ')} inherited the full environment`);
+    assert.deepEqual(Object.keys(call.env).sort(), ['LC_ALL', 'PATH', 'TZ'], call.args.join(' '));
+  }
 });

@@ -109,6 +109,12 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
   return false;
 }
 
+// The Control Center server calls these checks in-process, so ps must not inherit its environment (CC_TOKEN, the
+// session secret, Anthropic credentials) or be looked up through a PATH that npm puts node_modules/.bin on (as
+// server/runner/runner.ts runs it). The pinned locale and zone keep lstart text comparable across callers.
+const PS = '/bin/ps';
+const PS_ENV = { PATH: '/bin:/usr/bin', LC_ALL: 'C', TZ: 'UTC' };
+
 const DAILY_JOB_RE = /^([^ ]*\/)?bash ([^-].*\/)?run-daily\.sh( |$)/;
 
 /**
@@ -119,7 +125,7 @@ const DAILY_JOB_RE = /^([^ ]*\/)?bash ([^-].*\/)?run-daily\.sh( |$)/;
 function isDailyJob(pid) {
   let out;
   try {
-    out = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 });
+    out = execFileSync(PS, ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: PS_ENV });
   } catch (err) {
     // ps exits 1 with no output when no process has the pid (it ended after the liveness check).
     return !(err.status === 1 && !String(err.stdout ?? '').trim());
@@ -137,7 +143,7 @@ const LSTART = /^[A-Z][a-z]{2} +([A-Z][a-z]{2}) +(\d{1,2}) (\d{2}):(\d{2}):(\d{2
 function processStart(pid) {
   let out;
   try {
-    out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } }).trim();
+    out = execFileSync(PS, ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, env: PS_ENV }).trim();
   } catch (err) {
     return err.status === 1 && !String(err.stdout ?? '').trim() ? null : undefined;
   }
