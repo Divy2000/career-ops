@@ -241,12 +241,11 @@ describe('app settings: this browser\'s own saves never conflict with each other
     await act(async () => lastQc.invalidateQueries());
     await until(() => box()?.checked === false, 'the restored value shown');
     await act(async () => box()!.click());
-    await until(() => /changed since you loaded it/.test(alerts(host)) || settings.logos === true, 'the first save answered');
-    if (settings.logos !== true) {
-      await until(() => box()?.checked === false, 'the current value shown after the refusal');
-      await act(async () => box()!.click());
-      await until(() => settings.logos === true, 'the save after the refusal taken');
-    }
+    // Content alone cannot tell this read from one behind a sibling tab, so the first save is refused once.
+    await until(() => /changed since you loaded it/.test(alerts(host)), 'the first save refused');
+    await until(() => box()?.checked === false, 'the current value shown after the refusal');
+    await act(async () => box()!.click());
+    await until(() => settings.logos === true, 'the save after the refusal taken');
     expect(puts.at(-1)!.ifMatch).toBe(`c:${JSON.stringify({ ...settings, logos: false })}`);
   });
 });
