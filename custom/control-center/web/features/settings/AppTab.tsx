@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { apiGet, apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
@@ -8,26 +8,58 @@ import { AppearanceSetting } from '../../components/AppearanceSetting';
 import { useUnsaved } from '../../lib/unsaved';
 import type { AppSettings, AppSettingsRead } from '@shared/api';
 
-export const useAppSettings = () => useQuery({ queryKey: ['system', 'settings'], queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
+const SETTINGS_KEY = ['system', 'settings'];
 
 // The server takes app-settings patches without an ETag, in the order they arrive, so two writes on their way at once
 // could land older last and undo the user's latest choice. Each write waits for the one before it to answer.
 let writeQueue: Promise<unknown> = Promise.resolve();
+
+// Patches sent and not yet answered, oldest first. Every view of the settings shows them over the server's read, so a
+// control changed again before its save answers starts from the user's latest choice, not the last read.
+let unanswered: ReadonlyArray<Partial<AppSettings>> = [];
+const listeners = new Set<() => void>();
+const setUnanswered = (next: ReadonlyArray<Partial<AppSettings>>) => {
+  unanswered = next;
+  for (const l of listeners) l();
+};
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => listeners.delete(l);
+};
+
+const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
+
 const queueWrite = (patch: Partial<AppSettings>) => {
-  const write = writeQueue.then(() => apiSend('PUT', '/api/settings/app', patch));
+  const write = writeQueue.then(() => apiSend<AppSettings>('PUT', '/api/settings/app', patch));
   writeQueue = write.catch(() => undefined);
   return write;
 };
+
+/** The settings as the user last chose them: the server's read with every unanswered save on top. */
+export function useAppSettings(): UseQueryResult<AppSettingsRead> {
+  const q = useQuery({ queryKey: SETTINGS_KEY, queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
+  const patches = useSyncExternalStore(subscribe, () => unanswered);
+  const data = useMemo(() => (q.data ? patches.reduce(applyPatch, q.data) : undefined), [q.data, patches]);
+  return { ...q, data } as UseQueryResult<AppSettingsRead>;
+}
 
 export function useSaveSettings() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const save = async (patch: Partial<AppSettings>, okText: string) => {
     setError(null);
+    setUnanswered([...unanswered, patch]);
     try {
-      await queueWrite(patch);
+      try {
+        const written = await queueWrite(patch);
+        // A read started before this write may answer after it: it is dropped, and the written settings shown until the refetch.
+        await qc.cancelQueries({ queryKey: SETTINGS_KEY });
+        qc.setQueryData<AppSettingsRead>(SETTINGS_KEY, { ...written, problem: null });
+      } finally {
+        setUnanswered(unanswered.filter((p) => p !== patch));
+      }
       toast.success(okText);
-      await Promise.all([qc.invalidateQueries({ queryKey: ['system', 'settings'] }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
+      await Promise.all([qc.invalidateQueries({ queryKey: SETTINGS_KEY }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
       return true;
     } catch (err) {
       setError(`Could not save settings: ${describeError(err)}`);
