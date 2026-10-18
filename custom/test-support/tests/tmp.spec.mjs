@@ -374,3 +374,18 @@ test('specsWithoutTmpCheck ends a block comment only at its own */, so /*/ stays
     'unclosed-comment.spec.mjs': '/*\n' + tmpImport + '\n',
   }), ['slash-star-slash.spec.mjs', 'unclosed-comment.spec.mjs']);
 });
+
+test('specsWithoutTmpCheck tells a regex literal from a division, so a backtick in a regex or after a division is read right, and a division misread as a regex costs only its own line (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'regex-at-start.spec.mjs': '/`/.test(x);\n' + tmpImport + '\n',
+    'regex-after-operator.spec.mjs': 'const re = /`/;\n' + tmpImport + '\n',
+    'regex-after-keyword.spec.mjs': 'function f(s) { return /`/.test(s); }\n' + tmpImport + '\n',
+    'regex-slash-in-class.spec.mjs': 'const re = /[/`]/;\n' + tmpImport + '\n',
+    'regex-escaped-slash.spec.mjs': 'const re = /\\/`/;\n' + tmpImport + '\n',
+    'regex-flags.spec.mjs': 'const re = /a/gi; const t = `\n' + tmpImport + '\n`;\n',
+    'division.spec.mjs': 'const y = a / 2 + `\n' + tmpImport + '\n`;\n',
+    'division-after-paren.spec.mjs': 'const y = (a) / 2 + `\n' + tmpImport + '\n`;\n',
+    'misread-division.spec.mjs': 'const y = n++ / 2;\n' + tmpImport + '\nconst z = a / b;\n',
+  }), ['division-after-paren.spec.mjs', 'division.spec.mjs', 'regex-flags.spec.mjs']);
+});
