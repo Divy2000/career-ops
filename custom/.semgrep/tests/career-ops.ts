@@ -1,3 +1,4 @@
+import { spawn as launch } from 'node:child_process';
 // Rule tests for ../career-ops.yml: `ruleid:` marks the next line as a required finding, `ok:` as a required non-finding.
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import * as cp from 'child_process';
@@ -32,6 +33,26 @@ execFileSync('/bin/ps', ['-o', 'lstart='], { env: { PATH: '/bin:/usr/bin', LC_AL
 spawn('node', [], { cwd: '/', env, shell: false });
 // ok: child-process-env-not-filtered
 manager.fork('s1');
+
+async function dynamicImport() {
+  const { spawn: dynSpawn } = await import('node:child_process');
+  // ruleid: child-process-env-not-filtered
+  dynSpawn('tool', ['arg']);
+  const cp2 = await import('child_process');
+  // ruleid: child-process-env-not-filtered
+  cp2.execFile('tool', ['arg'], () => undefined);
+  // ok: child-process-env-not-filtered
+  dynSpawn('tool', ['arg'], { env: childEnv() });
+}
+function requireForm() {
+  const { execFileSync: run } = require('node:child_process');
+  // ruleid: child-process-env-not-filtered
+  run('tool', ['arg']);
+}
+// ruleid: child-process-env-not-filtered
+launch('tool', ['arg']);
+// ok: child-process-env-not-filtered
+launch('tool', ['arg'], { env: childEnv() });
 
 // ---- child-process-env-raw-process-env
 // ruleid: child-process-env-raw-process-env

@@ -25,6 +25,40 @@ rules:
                   import * as $CP from '$MOD';
                   ...
               - pattern: $CP.$FN(...)
+          # Renamed imports: import { spawn as launch } from 'node:child_process'.
+          - patterns:
+              - pattern-inside: |
+                  import { ..., $FN as $LOCAL, ... } from '$MOD';
+                  ...
+              - pattern: $LOCAL(...)
+          # Dynamic import and require, destructured (optionally renamed) or as a namespace.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const { ..., $FN: $LOCAL, ... } = await import('$MOD');
+                      ...
+                  - pattern-inside: |
+                      const { ..., $FN: $LOCAL, ... } = require('$MOD');
+                      ...
+              - pattern: $LOCAL(...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const { ..., $FN, ... } = await import('$MOD');
+                      ...
+                  - pattern-inside: |
+                      const { ..., $FN, ... } = require('$MOD');
+                      ...
+              - pattern: $FN(...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const $CP = await import('$MOD');
+                      ...
+                  - pattern-inside: |
+                      const $CP = require('$MOD');
+                      ...
+              - pattern: $CP.$FN(...)
       - metavariable-regex:
           metavariable: $MOD
           regex: ^(node:)?child_process$
