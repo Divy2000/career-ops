@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Exec } from '../routes/system.js';
+import { isLockTimeout, withFileLock } from '../lib/file-lock.js';
 
 export interface ScheduleJob {
   label: string;
@@ -158,21 +159,13 @@ interface PlistJson {
   StartCalendarInterval?: { Hour?: number; Minute?: number; Weekday?: number } | Array<{ Hour?: number; Minute?: number; Weekday?: number }>;
 }
 
-// One save per plist at a time, across every ScheduleService in this process: two saves at once (a double click, Save
-// then Disable) would otherwise share the temp plist and interleave their launchctl steps.
 /** launchctl print's exit status for a service launchd does not have loaded ("Could not find service"). */
 const LAUNCHCTL_NO_SUCH_SERVICE = 113;
-const writeLocks = new Map<string, Promise<unknown>>();
-
-function withWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const run = (writeLocks.get(key) ?? Promise.resolve()).then(fn, fn);
-  const settled = run.catch(() => undefined);
-  writeLocks.set(key, settled);
-  void settled.then(() => {
-    if (writeLocks.get(key) === settled) writeLocks.delete(key);
-  });
-  return run;
-}
+// One save per plist at a time, across every server process (the two children of a blue/green handover included): two
+// saves at once (a double click, Save then Disable, one save in each child) would otherwise share the temp plist and
+// interleave their launchctl steps, and one's restore would put its stale plist over the other's. A waiter outlasts
+// one save's launchctl steps.
+const WRITE_LOCK_TIMEOUT_MS = 30_000;
 
 export type ScheduleWriteResult = { ok: true; state: ScheduleState } | { ok: false; status: number; error: string; stderr: string };
 
@@ -242,7 +235,10 @@ export class ScheduleService {
    * otherwise load the plist again at the next login) and bootout.
    */
   write(job: ScheduleJob, input: ScheduleInput): Promise<ScheduleWriteResult> {
-    return withWriteLock(this.plistPath(job), () => this.writeLocked(job, input));
+    return withFileLock(this.deps.codeRoot, this.plistPath(job), () => this.writeLocked(job, input), { timeoutMs: WRITE_LOCK_TIMEOUT_MS }).catch((err: unknown) => {
+      if (!isLockTimeout(err)) throw err;
+      return { ok: false as const, status: 409, error: `another save of the ${job.title} schedule is still running; try again in a moment`, stderr: '' };
+    });
   }
 
   private async writeLocked(job: ScheduleJob, input: ScheduleInput): Promise<ScheduleWriteResult> {
