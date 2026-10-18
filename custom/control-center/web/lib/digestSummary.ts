@@ -31,7 +31,7 @@ function addressLabel(url: string): string {
 
 type Definitions = Map<string, string>;
 
-/** Phrasing nodes to spans. Images, footnote references and raw HTML are dropped; a link whose label is its own address shows it compactly. */
+/** Phrasing nodes to spans. Images, footnote references, raw HTML and struck-through (withdrawn) text are dropped; a link whose label is its own address shows it compactly. */
 function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string | undefined, out: DigestSpan[], defs: Definitions): void {
   for (const n of nodes) {
     switch (n.type) {
@@ -46,7 +46,6 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
         flatten(n.children, true, href, out, defs);
         break;
       case 'emphasis':
-      case 'delete':
         flatten(n.children, bold, href, out, defs);
         break;
       case 'link': {
@@ -63,6 +62,7 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
       case 'imageReference':
       case 'footnoteReference':
       case 'html':
+      case 'delete':
         break;
     }
   }
