@@ -153,6 +153,17 @@ describe('Apply: the chosen documents reach the session', () => {
     expect(fillButton().disabled).toBe(false);
   });
 
+  it('a fill turn answered 404 lets the deleted draft go: the form starts over and the draft\'s link is forgotten (R31-feat-a-L1-01)', async () => {
+    turnAnswer = () => new Response(JSON.stringify({ error: 'no such session' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    const fillButton = await draft();
+    expect(sessionStorage.getItem('cc.apply.typedUrl.s1')).toBe('https://boards.greenhouse.io/acme/jobs/1');
+    await act(async () => fillButton().click());
+    await act(async () => releaseTurn());
+    await until(() => !host.textContent?.includes('Fill real form'), 'the form starting over');
+    expect(JSON.stringify(Object.entries(sessionStorage))).not.toContain('s1');
+    expect((host.querySelector('input[aria-label="Posting URL"]') as HTMLInputElement).disabled).toBe(false);
+  });
+
   it('stays disabled after the fill turn is accepted, until the stream reports how it ended (SW4-web-a-05 review)', async () => {
     // The server answers with the session as it now is: the fill turn running. Its running event comes later.
     turnAnswer = () => json({ id: 's1', status: 'running' });

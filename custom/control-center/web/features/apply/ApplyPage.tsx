@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
-import { apiGet } from '../../lib/api';
+import { ApiError, apiGet } from '../../lib/api';
 import { useApplication } from '../../lib/queries';
 import { useEngine, useSessionStream, useSessions, sendTurn, startTailoredCvSession, type Target } from '../../lib/sessions';
 import { useRememberedSession } from '../../lib/useRememberedSession';
@@ -269,7 +269,10 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
       rememberStatus(s);
       // Deleted elsewhere (or a stale id): its answers cannot be filled any more, so the form starts over like New draft.
       if (s === 'gone') {
-        if (sessionId) writeDraftDocs(sessionId, null);
+        if (sessionId) {
+          writeTypedUrl(sessionId, null);
+          writeDraftDocs(sessionId, null);
+        }
         onNewDraft();
       }
     },
@@ -362,6 +365,12 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
       if (meta.status === 'error') failed();
       setFillNote(meta.status === 'error' ? `Could not send the fill turn: ${meta.error ?? 'the turn failed to start'}` : 'Fill turn sent with your edited answers.');
     } catch (err) {
+      // Deleted elsewhere since the draft: the stream sends no event for that, so the 404 is the news that it is gone.
+      if (err instanceof ApiError && err.status === 404) {
+        onStartFailed();
+        onStatus('gone');
+        return;
+      }
       failed();
       setFillNote(`Could not send the fill turn: ${describeError(err)}`);
     } finally {
