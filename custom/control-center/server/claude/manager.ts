@@ -797,6 +797,10 @@ export class SessionManager {
       this.bus.publish('session.status', { sessionId: id, status: 'cancelled', mode: meta.mode });
       return this.store.read(id)!;
     }
+    // Another server process preparing a turn here holds its claim and decides alone whether it spawns: answering with the
+    // unchanged session would let the turn the user cancelled start. Once it runs, a cancel here stops it. This process's
+    // own claim (a fork waiting for its source's cancelled turn to finish) is not that.
+    if (!this.sending.has(id) && this.turnClaimHeld(id)) throw new BusyError(`session ${id} is starting a turn in another server process; cancel again once it is running`);
     if (turn && (meta.status === 'running' || meta.status === 'queued')) {
       // A turn whose run already ended is being finalized (or about to be): marking it cancelled here would turn a
       // completed turn into "cancelled", keep its pipeline row pending, leave its policy batch unacknowledged and let

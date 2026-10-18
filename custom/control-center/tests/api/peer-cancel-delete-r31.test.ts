@@ -55,3 +55,62 @@ describe('deleting a session whose cancelled turn is still stopping in another s
     }
   });
 });
+
+// R31-claude-L1-02: cancel() only knew the turns this process prepares; one another server process was preparing was
+// answered with the unchanged session, and the paid turn the user cancelled spawned anyway.
+describe('cancelling a turn another server process is preparing (R31-claude-L1-02)', () => {
+  it('given a new session whose first turn a peer prepares, when it is cancelled here, then it is refused as busy and nothing changes', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    try {
+      const meta = newSession(app);
+      peerClaim(app, meta.id);
+      expect(() => app.sessions.cancel(meta.id)).toThrow(/another server process/);
+      expect(app.sessions.read(meta.id)!.status).toBe('queued');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a session whose later turn a peer prepares, when it is cancelled here, then it is refused as busy', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    try {
+      const meta = newSession(app);
+      app.sessions.store.setStatus(meta.id, 'awaiting_user');
+      peerClaim(app, meta.id);
+      expect(() => app.sessions.cancel(meta.id)).toThrow(/another server process/);
+      expect(app.sessions.read(meta.id)!.status).toBe('awaiting_user');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('given a fork here waiting for its source\'s cancelled turn to finish, when the source is cancelled, then it is not refused', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    const active = (app.sessions as unknown as { active: Map<string, unknown> }).active;
+    try {
+      const meta = newSession(app);
+      app.sessions.store.setStatus(meta.id, 'cancelled');
+      active.set(meta.id, {});
+      const forking = app.sessions.fork(meta.id, 'Again?');
+      forking.catch(() => {});
+      expect(app.sessions.cancel(meta.id).status).toBe('cancelled');
+      app.sessions.store.delete(meta.id);
+      active.delete(meta.id);
+      await expect(forking).rejects.toThrow();
+    } finally {
+      active.clear();
+      await app.close();
+    }
+  });
+
+  it('given an idle session nobody is starting a turn on, when it is cancelled, then it is returned unchanged', async () => {
+    const app = await makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
+    try {
+      const meta = newSession(app);
+      app.sessions.store.setStatus(meta.id, 'awaiting_user');
+      expect(app.sessions.cancel(meta.id).status).toBe('awaiting_user');
+    } finally {
+      await app.close();
+    }
+  });
+});
