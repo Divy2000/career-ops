@@ -6,6 +6,10 @@ printf '%s\0' "$@" > "$STUB_LOG.claude.argv"
 case "${1:-}" in
   setup-token) echo "FAKE-SECRET-123"; exit "${FAKE_CLAUDE_SETUP_TOKEN_EXIT:-0}" ;;
   --version)
+    # The environment a version probe got: the autoupdater setting and the non-empty credential names it inherited, never values.
+    creds=""
+    for var in $(compgen -e); do case "$var" in ANTHROPIC_* | CLAUDE_CODE_*_TOKEN* | CLAUDE_CODE_*_KEY* | CLAUDE_CODE_*_CERT* | CLAUDE_CODE_*HEADER*) [ -z "${!var}" ] || creds="$creds $var" ;; esac; done
+    echo "claude-version-env DISABLE_AUTOUPDATER=${DISABLE_AUTOUPDATER-} creds=${creds# }" >> "$STUB_LOG"
     # FAKE_CLAUDE_LATER_VERSION: what an update in place reports, from the --version call after FAKE_CLAUDE_LATER_AFTER.
     asked=$(grep -c '^claude --version ' "$STUB_LOG")
     if [ -n "${FAKE_CLAUDE_LATER_VERSION:-}" ] && [ "$asked" -gt "${FAKE_CLAUDE_LATER_AFTER:-0}" ]; then echo "$FAKE_CLAUDE_LATER_VERSION (Claude Code)"; exit 0; fi
