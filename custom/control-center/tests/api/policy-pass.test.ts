@@ -353,6 +353,54 @@ describe('the policy-pass claim the daily job honours too (SW8-server-01 review)
     });
   });
 
+  describe('a start claim whose cleanup failed once (R30-w4srv-claim-stuck)', () => {
+    const LOCK_BUSY = () => {
+      throw new Error('.policy-pass.claim.lock is held by another claimant; try again');
+    };
+    const SLOW_PASS = [INIT, { __sleep: 1500 }, result('Pass done.')];
+
+    it('given the handover and one release of the start claim throw, when the pass is started, then the start claim is released later without a restart', async () => {
+      writePending([item(11)]);
+      const retag = vi.spyOn(policyClaim, 'retag').mockImplementationOnce(LOCK_BUSY);
+      const realRelease = policyClaim.release;
+      let failed = 0;
+      const release = vi.spyOn(policyClaim, 'release').mockImplementation((root, owner) => {
+        if (owner.startsWith('starting:') && failed++ === 0) return LOCK_BUSY();
+        return realRelease(root, owner);
+      });
+      try {
+        const res = await withScenario({ events: SLOW_PASS }, start);
+        expect(res.statusCode, res.body).toBe(409);
+        const session = res.json().session as { id: string };
+        expect((await settle(session.id)).meta.status).toBe('cancelled');
+        for (let i = 0; i < 200 && claim(); i++) await wait(50);
+        expect(failed).toBeGreaterThan(1);
+        expect(claim()).toBeNull();
+      } finally {
+        release.mockRestore();
+        retag.mockRestore();
+      }
+    });
+
+    it('given a fork that fails and a claim that cannot be given back at first, when a paused pass is forked, then the claim goes back to the paused pass later', async () => {
+      writePending([item(12)]);
+      const a = (await withScenario({ events: PAUSE }, start)).json() as { id: string };
+      expect((await settle(a.id)).meta.status).toBe('awaiting_user');
+      const forkFails = vi.spyOn(SessionManager.prototype, 'fork').mockRejectedValueOnce(new NotFoundError('no such session to fork'));
+      const retag = vi.spyOn(policyClaim, 'retag').mockImplementationOnce(LOCK_BUSY);
+      try {
+        expect((await fork(a.id)).statusCode).toBe(404);
+        for (let i = 0; i < 200 && claim()?.owner !== `session:${a.id}`; i++) await wait(50);
+        expect(claim()?.owner).toBe(`session:${a.id}`);
+      } finally {
+        retag.mockRestore();
+        forkFails.mockRestore();
+      }
+      expect((await del(a.id)).statusCode).toBe(200);
+      expect(claim()).toBeNull();
+    });
+  });
+
   it('a pass is refused while a daily run the app started is still queued (no lock, no pidfile yet)', async () => {
     const blocker = t.runner.start({ actionId: 'test.noisy', label: 'noisy', cost: 'free', resources: ['pipeline'], claude: false, params: {}, cmd: { bin: process.execPath, args: [path.join(PACKAGE_ROOT, 'tests', 'fakes', 'noisy.mjs'), '0', '20000'], cwd: PACKAGE_ROOT } });
     const queued: string[] = [];

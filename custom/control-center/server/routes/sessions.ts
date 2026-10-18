@@ -99,14 +99,29 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   const LOST_CLAIM = 'another AI policy pass took over the queued items while this one was starting, so it was cancelled. Try again once that pass finishes.';
   // The claim lock can be held past its wait (a claimant that died holding it counts as stale only later).
   const claimBusy = (err: unknown) => `the AI policy pass claim could not be handed over (${(err as Error).message}), so it was cancelled. Try again in a minute.`;
-  /** Runs a claim cleanup without letting its own throw hide the error or answer that ended the start. */
-  const bestEffort = (what: string, fn: () => unknown) => {
+  /**
+   * Runs a claim cleanup without letting its own throw hide the error or answer that ended the start. A cleanup that
+   * throws is retried in the background until it goes through: a starting claim names this live server, so it is never
+   * taken over as stale and would otherwise hold the AI policy pass until the server restarts.
+   */
+  const cleanupRetries = new Set<NodeJS.Timeout>();
+  const bestEffort = (what: string, fn: () => unknown, delayMs = 250) => {
     try {
       fn();
     } catch (err) {
-      app.log.warn({ err }, `could not ${what}; a starting claim this server cannot release holds the AI policy pass until it restarts`);
+      app.log.warn({ err }, `could not ${what}; retrying in ${delayMs} ms`);
+      const timer = setTimeout(() => {
+        cleanupRetries.delete(timer);
+        bestEffort(what, fn, Math.min(delayMs * 2, 30_000));
+      }, delayMs);
+      timer.unref();
+      cleanupRetries.add(timer);
     }
   };
+  app.addHook('onClose', async () => {
+    for (const timer of cleanupRetries) clearTimeout(timer);
+    cleanupRetries.clear();
+  });
   const release = (sessionId: string) => {
     try {
       policyClaim.release(opts.cfg.dataRoot, `session:${sessionId}`);
