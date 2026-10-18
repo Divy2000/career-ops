@@ -11,6 +11,7 @@ import { dedupUrlKey } from '../../shared/dedup-url.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
+import { isLockTimeout } from '../lib/file-lock.js';
 import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 import { claimHolderText, PendingUnreadableError, policyClaim, PolicyQueueBusyError, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
@@ -632,9 +633,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ fact: z.string().min(1).max(300) }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     try {
-      return { result: rememberFact(opts.cfg.dataRoot, parsed.data.fact) };
+      return { result: await rememberFact(opts.cfg.codeRoot, opts.cfg.dataRoot, parsed.data.fact) };
     } catch (err) {
       if (err instanceof ProfileMissingError) return reply.code(409).send({ error: err.message });
+      // A lock held too long is a 503 busy with retry-after, as on the user-file editor save of the same file.
+      if (isLockTimeout(err)) return reply.code(503).header('retry-after', '1').send({ error: 'modes/_profile.md is busy (another save is writing it), try again in a moment' });
       throw err;
     }
   });
