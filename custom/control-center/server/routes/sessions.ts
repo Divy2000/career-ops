@@ -23,7 +23,9 @@ import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
 import { rowsSetUnder } from '../actions/registry.js';
 
-const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
+// expect: on a tracker row target, the application the page showed under that number (a reindex can move another one under it).
+const expectedRow = z.object({ company: z.string().max(4000), role: z.string().max(4000), report: z.number().int().positive().nullable() });
+const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable(), expect: expectedRow.optional() });
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
@@ -176,6 +178,88 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return claimed.ok ? null : `Not continued: ${claimHolderText(claimed.holder.owner)}. Try again once it finishes.`;
   };
 
+  /**
+   * A start's `starting:<nonce>` claim (invariants 5-8 in sessions.invariants.md). The request that takes one settles it
+   * exactly once, from a finally: `kept` once the claim has left it (its session took it over, or another pass did),
+   * else `settle` gives it back to the paused session a fork took it from (`returnTo`), or releases it.
+   */
+  interface StartingClaim {
+    readonly owner: string;
+    kept(): void;
+    settle(): void;
+  }
+  const startingClaim = (returnTo: string | null): StartingClaim => {
+    const owner = `starting:${crypto.randomUUID()}`;
+    let open = true;
+    return {
+      owner,
+      kept: () => {
+        open = false;
+      },
+      settle: () => {
+        if (!open) return;
+        open = false;
+        if (returnTo) bestEffort('give the AI policy pass claim back to the forked session', () => policyClaim.retag(opts.cfg.dataRoot, owner, returnTo));
+        else bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, owner));
+      },
+    };
+  };
+  /** Runs one step of a refused start's cleanup; a step that throws is logged and never skips the steps after it. */
+  const tryStep = (what: string, fn: () => unknown) => {
+    try {
+      fn();
+    } catch (err) {
+      app.log.warn({ err }, `could not ${what}`);
+    }
+  };
+  type Handed = { code: 202; body: SessionMeta } | { code: 409; body: { error: string; session: SessionMeta } };
+  /**
+   * The one way a started pass or fork reaches its answer; it never throws. The session takes the start's claim over
+   * (a fork takes its source's batch with it), or it is cancelled before the request answers and the claim goes back.
+   * A session that already ended before its Claude process started leaves the claim, and a fork's batch, where they were.
+   */
+  const handOverStarted = (claim: StartingClaim, meta: SessionMeta, verb: string, source: { id: string; batch: string | null } | null): Handed => {
+    if (FINAL.has(manager.read(meta.id)?.status ?? meta.status)) return { code: 202, body: meta };
+    const batch = source?.batch ?? null;
+    let why: string;
+    try {
+      // The fork gets the batch first: a crash between the writes leaves it with both, and acknowledging a batch twice
+      // is harmless, while one with neither would send its items again. The source gives it up only once the fork holds
+      // the claim. No write here yields, so the fork's turn cannot end in between.
+      if (batch !== null) manager.store.setPolicyBatch(meta.id, batch);
+      const handed = handOver(claim.owner, meta);
+      if (handed) {
+        claim.kept();
+        if (batch !== null) tryStep('take the policy batch off the forked session (the fork acknowledges it)', () => manager.store.setPolicyBatch(source!.id, null));
+        return { code: 202, body: manager.read(meta.id) ?? meta };
+      }
+      // Another pass took the claim over: it is not this start's to give back.
+      claim.kept();
+      why = LOST_CLAIM;
+    } catch (err) {
+      app.log.warn({ err, sessionId: meta.id }, 'could not hand the AI policy pass claim over to its session');
+      why = claimBusy(err);
+    }
+    // The session never held the pass: it holds no batch, and it is cancelled so it does not bill a pass with no claim.
+    if (batch !== null) tryStep('take the policy batch back off a cancelled fork', () => manager.store.setPolicyBatch(meta.id, null));
+    let session = meta;
+    tryStep('cancel a session that does not hold the AI policy pass claim', () => {
+      session = manager.cancel(meta.id);
+    });
+    releaseOnceExited(meta.id, meta.turns.at(-1)?.runId);
+    return { code: 409, body: { error: `${verb}: ${why}`, session } };
+  };
+  /** Marks a session's next turn (or a fork of it) as starting while `fn` runs, so the holds count it as live (invariant 4). */
+  const whileStarting = async <T,>(id: string, fn: () => Promise<T>): Promise<T> => {
+    const tracked = !turnsStarting.has(id);
+    if (tracked) turnsStarting.add(id);
+    try {
+      return await fn();
+    } finally {
+      if (tracked) turnsStarting.delete(id);
+    }
+  };
+
   // Process inbox (pipeline mode) evaluates every pending Inbox row, so an evaluation of one of them beside it (Batch
   // evaluate, the advisor, another tab) would evaluate, report and bill that row twice: whichever starts second is refused.
   const LIVE = new Set<SessionMeta['status']>(['queued', 'running', 'awaiting_user']);
@@ -267,6 +351,47 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
+  type Refusal = { code: number; error: string };
+  /** The refusal every new session of `mode` gets before anything is claimed or prepared: an unknown mode, or one that cannot run now. */
+  const modeRefused = (mode: string): Refusal | null => {
+    if (!manager.effectivePolicy(mode)) return { code: 404, error: `unknown mode ${mode}` };
+    const refusal = sessionRefusal(mode);
+    if (refusal) return { code: 422, error: refusal };
+    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, mode);
+    return noReplies ? { code: 422, error: noReplies } : null;
+  };
+  /**
+   * Null when a new session of `mode` on `target` may start, else the 409 the start is refused with: duplicate paid work
+   * (invariant 4). Synchronous, and the caller creates the session in the same tick (invariant 2).
+   */
+  const admitNew = (mode: string, target: SessionMeta['target'], pin: AppRowIdentity | undefined): Refusal | null => {
+    if (manager.isStartingInBatch(mode, target)) return { code: 409, error: target.type === 'company' ? `another sponsorship check is already starting for ${target.value?.trim()}` : `another batch evaluate is already starting ${target.value}` };
+    const liveId = manager.liveEvaluationFor(mode, target);
+    if (liveId) return { code: 409, error: `session ${liveId} is already ${liveWorkOn(target)}` };
+    const inboxHeld = isProcessInbox(mode) ? evaluationsHold() : target.type === 'url' && target.value ? processInboxHolds(mode, [target.value]) : null;
+    if (inboxHeld) return { code: 409, error: `Not started: ${inboxHeld}` };
+    const cvRow = tailoredCvRow(mode, target);
+    const cvHeld = cvRow ? tailoredCvHolds(cvRow, pin) : null;
+    return cvHeld ? { code: 409, error: `Not started: ${cvHeld}` } : null;
+  };
+  /**
+   * Null when a reply to or fork of session `id` may run, else its refusal; the caller marks the session starting
+   * (whileStarting) in the same tick.
+   */
+  const admitTurn = (id: string, kind: 'reply' | 'fork', blacklistAllowed: boolean | undefined, headers: Record<string, unknown>): Refusal | null => {
+    // A fork's first turn is a turn like any other: the same explicit unlock gate as a reply.
+    if (blacklistAllowed) {
+      const meta = manager.read(id);
+      if (!meta) return { code: 404, error: 'no such session' };
+      const refused = unlockRefused(meta.mode, headers);
+      if (refused) return { code: 403, error: refused };
+    }
+    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, manager.read(id)?.mode ?? '');
+    if (noReplies) return { code: 422, error: noReplies };
+    const held = turnHeld(id, kind);
+    return held ? { code: 409, error: `${kind === 'reply' ? 'Not continued' : 'Not forked'}: ${held}` } : null;
+  };
+
   // A cancelled session's process can outlive its status until the runner's SIGKILL, and the duplicate-evaluation guard
   // still counts it then: `stopping` lets pages keep its posting out of a new start the server would refuse.
   app.get('/api/sessions', async () => manager.list().map((m) => (!LIVE.has(m.status) && manager.isActive(m.id) ? { ...m, stopping: true as const } : m)));
@@ -281,6 +406,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     }
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
+    const { mode } = parsed.data;
+    // The expected application is a check on the row the start pins, never part of the stored target.
+    const { expect: expectRow, ...plainTarget } = parsed.data.target;
+    if (expectRow && plainTarget.type !== 'app') return reply.code(400).send({ error: 'only a tracker row target can name the application it expects' });
+    parsed.data.target = plainTarget;
     // A URL target reaches the session's prompt, so it is held to the fan-out's posting URL rule.
     // Every later use (duplicate checks, inbox holds, the stored target) sees the trimmed value; a blank one names no URL.
     if (parsed.data.target.type === 'url' && parsed.data.target.value !== null) {
@@ -289,103 +419,90 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       parsed.data.target = { type: 'url', value: url || null };
     }
     // The one-check-per-company guard keys on the company target: a check naming its company only in the prompt would pass it.
-    if (parsed.data.mode === 'sponsorship-check' && !(parsed.data.target.type === 'company' && parsed.data.target.value?.trim())) {
+    if (mode === 'sponsorship-check' && !(parsed.data.target.type === 'company' && parsed.data.target.value?.trim())) {
       return reply.code(400).send({ error: 'a sponsorship check needs a company target' });
     }
-    const noCompanyFile = parsed.data.mode === 'sponsorship-check' ? sponsorCheckRefusal(parsed.data.target.value ?? '') : null;
+    const noCompanyFile = mode === 'sponsorship-check' ? sponsorCheckRefusal(parsed.data.target.value ?? '') : null;
     if (noCompanyFile) return reply.code(400).send({ error: noCompanyFile });
-    if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
-    // The row an app session is for is read before the guards: the tailored CV hold goes by it, and nothing awaits between
-    // that check and the session's create, so two racing starts cannot both pass it.
-    let pin: AppRowIdentity | undefined;
-    if (parsed.data.target.type === 'app') {
-      pin = (await appRowAt(parsed.data.target.value)) ?? undefined;
-      parsed.data.target = { type: 'app', value: parsed.data.target.value, ...(pin ? { row: pin } : {}) };
-    }
-    if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: parsed.data.target.type === 'company' ? `another sponsorship check is already starting for ${parsed.data.target.value?.trim()}` : `another batch evaluate is already starting ${parsed.data.target.value}` });
-    const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
-    if (liveId) return reply.code(409).send({ error: `session ${liveId} is already ${liveWorkOn(parsed.data.target)}` });
-    const inboxHeld = isProcessInbox(parsed.data.mode) ? evaluationsHold() : parsed.data.target.type === 'url' && parsed.data.target.value ? processInboxHolds(parsed.data.mode, [parsed.data.target.value]) : null;
-    if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
-    const cvRow = tailoredCvRow(parsed.data.mode, parsed.data.target);
-    const cvHeld = cvRow ? tailoredCvHolds(cvRow, pin) : null;
-    if (cvHeld) return reply.code(409).send({ error: `Not started: ${cvHeld}` });
-    const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
+    const modeRefusal = modeRefused(mode);
+    if (modeRefusal) return reply.code(modeRefusal.code).send({ error: modeRefusal.error });
+    const refused = parsed.data.blacklistAllowed ? unlockRefused(mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
-    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
-    if (noReplies) return reply.code(422).send({ error: noReplies });
     // An upload is stored in its canonical form, so the delete that removes it can tell every session naming it.
     if (parsed.data.target.type === 'text' && parsed.data.target.value) {
       const upload = uploadTarget(opts.cfg.dataRoot, parsed.data.target.value);
       if (upload.kind === 'refused') return reply.code(400).send({ error: upload.reason });
       if (upload.kind === 'upload') parsed.data.target = { type: 'text', value: upload.path };
     }
+    // Everything the start awaits is read here, before the checks that admit it (invariant 2). The row an app session
+    // is for comes first: the tailored CV hold goes by it.
+    let pin: AppRowIdentity | undefined;
+    if (parsed.data.target.type === 'app') {
+      pin = (await appRowAt(parsed.data.target.value)) ?? undefined;
+      parsed.data.target = { type: 'app', value: parsed.data.target.value, ...(pin ? { row: pin } : {}) };
+      // A row number is reused after a reindex: a start naming the application it expects runs only on that one.
+      if (expectRow && !(pin && sameApplication(pin, expectRow))) {
+        const now = pin ? `now holds ${pin.company} (${pin.role})` : 'holds no single row any more';
+        return reply.code(409).send({ error: `Not started: tracker row #${parsed.data.target.value?.trim()} ${now}, not ${expectRow.company} (${expectRow.role}). Reload the page.` });
+      }
+    }
     const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
     let userPrompt = promptWithTarget(parsed.data.prompt, parsed.data.target);
     // projects-ingest runs no command: the app extracts its documents/ source (as intake does) and the text rides in the first message.
-    if (parsed.data.mode === 'projects-ingest') {
+    if (mode === 'projects-ingest') {
       const doc = parsed.data.target.type === 'text' && parsed.data.target.value ? await extractSourceText(opts.cfg.codeRoot, opts.cfg.dataRoot, parsed.data.target.value) : { ok: false as const, error: 'projects-ingest needs the documents/ path of the source as its target' };
       if (!doc.ok) return reply.code(422).send({ error: doc.error });
       userPrompt = `${userPrompt}\n\n<document source="documents/${doc.rel}">\n${doc.text.replace(/<\/document/gi, '<\\/document')}\n</document>`;
     }
     // The policy pass runs as run-daily.sh runs it: daily-prompt.md filled in with the queued official items (the
     // client's prompt only asks for the pass), and the batch of those items is acknowledged when the pass is done.
-    let pass: PolicyPass | null = null;
-    // The pass's claim while its session is being created; the session takes it over once it exists.
-    let starting: string | null = null;
-    if (parsed.data.mode === 'immigration-policy') {
-      // One pass at a time: two take the same queued items (acknowledged only when one ends done) and both append the
-      // same rows to policy-changes.tsv and company-alerts.tsv and a digest section. The daily job runs a pass too,
-      // and one the app queued has neither its lock nor the claim yet.
-      if ((await opts.daily?.runningNow()) || opts.dailyPending?.()) return reply.code(409).send({ error: 'The daily job is running or about to, and it runs the AI policy pass itself. Try again once it finishes.' });
-      starting = `starting:${crypto.randomUUID()}`;
-      const claimed = policyClaim.take(opts.cfg.dataRoot, starting);
-      if (!claimed.ok) return reply.code(409).send({ error: `Not started: ${claimHolderText(claimed.holder.owner)}. Try again once it finishes.` });
-      try {
-        pass = await preparePolicyPass(opts.cfg.codeRoot, opts.cfg.dataRoot);
-      } catch (err) {
-        const claimed = starting;
-        bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, claimed));
-        if (err instanceof PendingUnreadableError) return reply.code(422).send({ error: err.message });
-        if (err instanceof PolicyQueueBusyError) return reply.code(409).send({ error: `Not started: ${err.message}.` });
-        throw err;
+    // One pass at a time: two take the same queued items (acknowledged only when one ends done) and both append the
+    // same rows to policy-changes.tsv and company-alerts.tsv and a digest section. The daily job runs a pass too, and one
+    // the app queued has neither its lock nor the claim yet.
+    const isPass = mode === 'immigration-policy';
+    if (isPass && ((await opts.daily?.runningNow()) || opts.dailyPending?.())) return reply.code(409).send({ error: 'The daily job is running or about to, and it runs the AI policy pass itself. Try again once it finishes.' });
+    const claim = isPass ? startingClaim(null) : null;
+    if (claim) {
+      const claimed = policyClaim.take(opts.cfg.dataRoot, claim.owner);
+      if (!claimed.ok) {
+        claim.kept();
+        return reply.code(409).send({ error: `Not started: ${claimHolderText(claimed.holder.owner)}. Try again once it finishes.` });
       }
-      userPrompt = pass.prompt;
     }
+    let pass: PolicyPass | null = null;
     // A pass that does not start leaves no batch behind; a session that was created keeps it (dropUnheldPolicyBatch).
-    const dropBatch = () => {
-      if (pass) manager.dropUnheldPolicyBatch(pass.batch);
-    };
+    let started = false;
     try {
-      if (starting && !policyClaim.take(opts.cfg.dataRoot, starting, { batch: pass?.batch ?? null }).ok) {
-        dropBatch();
+      if (claim) {
+        try {
+          pass = await preparePolicyPass(opts.cfg.codeRoot, opts.cfg.dataRoot);
+        } catch (err) {
+          if (err instanceof PendingUnreadableError) return reply.code(422).send({ error: err.message });
+          if (err instanceof PolicyQueueBusyError) return reply.code(409).send({ error: `Not started: ${err.message}.` });
+          throw err;
+        }
+        userPrompt = pass.prompt;
+      }
+      // From here to the session's create nothing awaits: the checks and the create run in one tick (invariant 2).
+      const held = admitNew(mode, parsed.data.target, pin);
+      if (held) return reply.code(held.code).send({ error: held.error });
+      if (claim && !policyClaim.take(opts.cfg.dataRoot, claim.owner, { batch: pass?.batch ?? null }).ok) {
+        claim.kept();
         return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}` });
       }
       const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: null, policyBatch: pass?.batch ?? null });
-      if (starting) {
-        let handed: boolean;
-        try {
-          handed = handOver(starting, meta);
-        } catch (err) {
-          // The session already runs: it is cancelled as on a lost claim, so it does not bill a pass that holds no claim.
-          app.log.warn({ err, sessionId: meta.id }, 'could not hand the AI policy pass claim over to its session');
-          const session = manager.cancel(meta.id);
-          const claimed = starting;
-          bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, claimed));
-          releaseOnceExited(meta.id, meta.turns.at(-1)?.runId);
-          return reply.code(409).send({ error: `Not started: ${claimBusy(err)}`, session });
-        }
-        if (!handed) return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}`, session: manager.cancel(meta.id) });
-      }
-      return reply.code(202).send(meta);
+      started = true;
+      if (!claim) return reply.code(202).send(meta);
+      const out = handOverStarted(claim, meta, 'Not started', null);
+      return reply.code(out.code).send(out.body);
     } catch (err) {
-      const claimed = starting;
-      if (claimed) bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, claimed));
-      dropBatch();
       if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
       // Another start of the posting (here or in another server process) holds its claim, or recorded its session first.
       if (err instanceof BusyError) return reply.code(409).send({ error: err.message });
       throw err;
+    } finally {
+      claim?.settle();
+      if (pass && !started) manager.dropUnheldPolicyBatch(pass.batch);
     }
   });
 
@@ -393,14 +510,12 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.post<{ Body: unknown }>('/api/sessions/fanout', async (req, reply) => {
     const parsed = z.object({ mode: z.string().min(1).max(100), urls: z.array(fanoutUrl).min(1).transform((urls) => [...new Set(urls)]).pipe(z.array(z.string()).max(BATCH_MAX_URLS)), model }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
-    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
-    if (noReplies) return reply.code(422).send({ error: noReplies });
+    const modeRefusal = modeRefused(parsed.data.mode);
+    if (modeRefusal) return reply.code(modeRefusal.code).send({ error: modeRefusal.error });
     // Fan-out is Batch evaluate: every other mode's start guards (Process inbox, the policy-pass claim, the one check
-    // per company) live in POST /api/sessions only, so a fan-out of one would run beside the session they hold back.
-    const refusal = sessionRefusal(parsed.data.mode);
-    if (refusal) return reply.code(422).send({ error: refusal });
+    // per company) are in POST /api/sessions only, so a fan-out of one would run beside the session they hold back.
     if (!isReportGated(parsed.data.mode)) return reply.code(400).send({ error: `a fan-out only evaluates postings; ${parsed.data.mode} is not a posting evaluation mode` });
+    // The manager claims each posting before its first await, so this check and those claims run in one tick.
     const inboxHeld = processInboxHolds(parsed.data.mode, parsed.data.urls);
     if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
     try {
@@ -431,100 +546,49 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/turns', async (req, reply) => {
     const parsed = z.object({ prompt, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    if (parsed.data.blacklistAllowed) {
-      const meta = manager.read(req.params.id);
-      if (!meta) return reply.code(404).send({ error: 'no such session' });
-      const refused = unlockRefused(meta.mode, req.headers);
-      if (refused) return reply.code(403).send({ error: refused });
-    }
-    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, manager.read(req.params.id)?.mode ?? '');
-    if (noReplies) return reply.code(422).send({ error: noReplies });
-    const held = turnHeld(req.params.id, 'reply');
-    if (held) return reply.code(409).send({ error: `Not continued: ${held}` });
-    const busy = claimForTurn(req.params.id, `session:${req.params.id}`);
-    if (busy) return reply.code(409).send({ error: busy });
     const id = req.params.id;
-    const tracked = !turnsStarting.has(id);
-    if (tracked) turnsStarting.add(id);
-    try {
-      return await mutate(reply, async () => reply.code(202).send(await manager.send(id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed })));
-    } finally {
-      if (tracked) turnsStarting.delete(id);
-    }
+    const refused = admitTurn(id, 'reply', parsed.data.blacklistAllowed, req.headers);
+    if (refused) return reply.code(refused.code).send({ error: refused.error });
+    const busy = claimForTurn(id, `session:${id}`);
+    if (busy) return reply.code(409).send({ error: busy });
+    return whileStarting(id, () => mutate(reply, async () => reply.code(202).send(await manager.send(id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed }))));
   });
 
   app.post<{ Params: { id: string }; Body: unknown }>('/api/sessions/:id/fork', async (req, reply) => {
     const parsed = z.object({ prompt, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
-    // A fork's first turn is a turn like any other: the same explicit unlock gate as POST /turns.
-    if (parsed.data.blacklistAllowed) {
-      const meta = manager.read(req.params.id);
-      if (!meta) return reply.code(404).send({ error: 'no such session' });
-      const refused = unlockRefused(meta.mode, req.headers);
-      if (refused) return reply.code(403).send({ error: refused });
-    }
-    const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, manager.read(req.params.id)?.mode ?? '');
-    if (noReplies) return reply.code(422).send({ error: noReplies });
-    const held = turnHeld(req.params.id, 'fork');
-    if (held) return reply.code(409).send({ error: `Not forked: ${held}` });
-    const source = manager.read(req.params.id);
+    const id = req.params.id;
+    const refused = admitTurn(id, 'fork', parsed.data.blacklistAllowed, req.headers);
+    if (refused) return reply.code(refused.code).send({ error: refused.error });
+    const source = manager.read(id);
     const isPass = source?.mode === 'immigration-policy';
     // A fork continues the pass of the session it forks, taking over its claim: only a pass paused for a reply has no
     // Claude run of its own that would go on with the same items beside the fork's.
     if (isPass && source.status !== 'awaiting_user') {
       return reply.code(409).send({ error: `Not forked: this AI policy pass is ${source.status}; only a pass waiting for your reply can be forked. Start a new pass instead.` });
     }
-    // It takes the claim from the paused source (and from no other live holder).
-    const starting = `starting:${crypto.randomUUID()}`;
-    const busy = claimForTurn(req.params.id, starting, `session:${req.params.id}`);
-    if (busy) return reply.code(409).send({ error: busy });
-    const giveBack = () => bestEffort('give the AI policy pass claim back to the forked session', () => policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`));
-    return mutate(reply, async () => {
-      let forked;
-      // The fork may wait for a cancelled source to finish before it creates the copy: the source counts as starting
-      // meanwhile, so a tailored CV or Process inbox start for the same rows is refused instead of running beside it.
-      const tracked = !turnsStarting.has(req.params.id);
-      if (tracked) turnsStarting.add(req.params.id);
-      try {
-        forked = await manager.fork(req.params.id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed });
-      } catch (err) {
-        // The fork did not start: the claim goes back to the session it was taken from.
-        if (isPass) giveBack();
-        throw err;
-      } finally {
-        if (tracked) turnsStarting.delete(req.params.id);
+    // It takes the claim from the paused source (and from no other live holder), and gives it back unless the fork takes it over.
+    const claim = isPass ? startingClaim(`session:${id}`) : null;
+    if (claim) {
+      const busy = claimForTurn(id, claim.owner, `session:${id}`);
+      if (busy) {
+        claim.kept();
+        return reply.code(409).send({ error: busy });
       }
-      if (!isPass) return reply.code(202).send(forked);
-      // A fork that failed before its Claude process started leaves the pass, its claim and its batch with the source.
-      if (FINAL.has(manager.read(forked.id)?.status ?? forked.status)) {
-        giveBack();
-        return reply.code(202).send(forked);
-      }
-      // The fork continues the pass, so the items it was given are acknowledged when the fork ends done. Both writes
-      // run before this request yields, so the fork's turn cannot end in between; the source is paused and the claim
-      // is the fork's, so it cannot run meanwhile. The fork gets the batch first: a crash between the writes leaves it
-      // with both, and acknowledging a batch twice is harmless, while one with neither would send its items again.
-      // The source gives its batch up only once the fork holds the claim.
-      const batch = manager.read(req.params.id)?.policyBatch ?? null;
-      if (batch !== null) manager.store.setPolicyBatch(forked.id, batch);
-      let handed: boolean | { err: unknown };
-      try {
-        handed = handOver(starting, forked);
-      } catch (err) {
-        app.log.warn({ err, sessionId: forked.id }, 'could not hand the AI policy pass claim over to its fork');
-        handed = { err };
-      }
-      if (handed !== true) {
-        if (batch !== null) manager.store.setPolicyBatch(forked.id, null);
-        const session = manager.cancel(forked.id);
-        if (handed === false) return reply.code(409).send({ error: `Not forked: ${LOST_CLAIM}`, session });
-        // The fork never held the pass: the claim and the batch stay with the paused source.
-        giveBack();
-        return reply.code(409).send({ error: `Not forked: ${claimBusy(handed.err)}`, session });
-      }
-      if (batch !== null) manager.store.setPolicyBatch(req.params.id, null);
-      return reply.code(202).send(manager.read(forked.id) ?? forked);
-    });
+    }
+    try {
+      return await mutate(reply, async () => {
+        // The fork may wait for a cancelled source to finish before it creates the copy: the source counts as starting
+        // meanwhile, so a tailored CV or Process inbox start for the same rows is refused instead of running beside it.
+        const forked = await whileStarting(id, () => manager.fork(id, parsed.data.prompt, { blacklistAllowed: parsed.data.blacklistAllowed }));
+        if (!claim) return reply.code(202).send(forked);
+        // The fork continues the pass, so the items it was given are acknowledged when the fork ends done.
+        const out = handOverStarted(claim, forked, 'Not forked', { id, batch: manager.read(id)?.policyBatch ?? null });
+        return reply.code(out.code).send(out.body);
+      });
+    } finally {
+      claim?.settle();
+    }
   });
 
   await withEmptyJsonBody(app, (scope) => {

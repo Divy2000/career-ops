@@ -261,7 +261,8 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
     },
     [rememberStatus, dropDraft],
   );
-  const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
+  // A row start names the application shown, so one a reindex moved under the number is refused (invariants, 5).
+  const target: Target = n ? { type: 'app', value: n, ...(identity ? { expect: rowIdentity(identity) } : {}) } : { type: 'url', value: url };
   // The documents picked on this page are the ones the session attaches, not whichever CV the apply mode would resolve.
   const chosen = pdf ? ` The CV PDF I will attach is ${pdf}${cover ? ` and the cover letter text is ${cover}` : ''}; draft the answers to match it.` : '';
 
@@ -317,7 +318,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
     setGenerating(true);
     pdfOnStarting();
     try {
-      const m = await startTailoredCvSession(n);
+      const m = await startTailoredCvSession(n, identity ? rowIdentity(identity) : undefined);
       if (identity) writeSessionRow(m.id, identity);
       pdfOnSessionId(m.id);
       if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
