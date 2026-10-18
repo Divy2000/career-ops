@@ -37,10 +37,16 @@ daily_lock_release() {
   DAILY_LOCKFS=()
 }
 cleanup() {
+  local holder started=0
   if [ -n "$LOCK_WAITER" ]; then
-    # Stopped first, so it never takes the lock for a gone installer; a holder it already started is ended with it.
-    kill "$LOCK_WAITER" 2>/dev/null || true
-    if [ -s "$LOCK_READY" ]; then DAILY_HOLDERS+=("$(cat "$LOCK_READY" 2>/dev/null)"); fi
+    # Frozen first, so the set of holders it has started cannot change while it is looked at. A holder it started has
+    # the lock, whether or not it has said so in LOCK_READY yet, and is ended; lockf exits once its holder has, so the
+    # wait below covers both. With none, lockf is still queued and is stopped, so it never takes the lock for a gone
+    # installer; it holds nothing then, as the lock is lockf's own descriptor.
+    kill -STOP "$LOCK_WAITER" 2>/dev/null || true
+    for holder in $(/usr/bin/pgrep -P "$LOCK_WAITER" 2>/dev/null); do DAILY_HOLDERS+=("$holder"); started=1; done
+    if [ "$started" = 0 ]; then kill "$LOCK_WAITER" 2>/dev/null || true; fi
+    kill -CONT "$LOCK_WAITER" 2>/dev/null || true
     DAILY_LOCKFS+=("$LOCK_WAITER")
     LOCK_WAITER=""
   fi
@@ -679,7 +685,7 @@ daily_lock_take_one() {
   # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
   # The holder writes nothing for an installer that is already gone, and its exit removes the ready file too, in case the
   # installer's EXIT trap removed it first.
-  /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'kill -0 "$3" 2>/dev/null || exit 0; trap "rm -f \"\$1\" \"\$2\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2; done' \
+  /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'kill -0 "$3" 2>/dev/null || exit 0; trap "rm -f \"\$1\" \"\$2\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2 & wait "$!"; done' \
     daily-lock "${lock%/*}/.live-update.pid" "$LOCK_READY" "$$" </dev/null >/dev/null 2>"$LOCK_ERRS" 3<&- 4>&- &
   lockf_pid=$!
   LOCK_WAITER="$lockf_pid"

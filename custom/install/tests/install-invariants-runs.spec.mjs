@@ -12,6 +12,9 @@ import { fresh, md } from './install-fixtures.mjs';
 const dailyLock = (D) => path.join(D, 'data', 'immigration', '.run-daily.lockf');
 const lockFree = (D) => spawnSync('/usr/bin/lockf', ['-k', '-t', '0', dailyLock(D), '/usr/bin/true']).status === 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const pidFile = (D) => path.join(D, 'data', 'immigration', '.live-update.pid');
+// The installer's own lockf on the daily lock (the job's runs with -t 0), queued or holding.
+const installerLockf = (D) => spawnSync('/usr/bin/pgrep', ['-f', `lockf -k -t 60 ${dailyLock(D)}`], { encoding: 'utf8' }).stdout.trim();
 
 /** A running daily job: holds the lock in its own process group, touching `ready` once it has it. */
 function holdDailyLock(w, D) {
@@ -23,8 +26,12 @@ function holdDailyLock(w, D) {
   return { stop: () => { try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ } } };
 }
 
-/** Starts the installer in its own process group and TMPDIR, sends `signal` to the group once `ready(out)` holds. */
-async function signalledRun(w, args, { env, signal, ready }) {
+/**
+ * Starts the installer in its own process group and TMPDIR and, once `ready(out)` holds, sends `signal` to the installer
+ * alone: a signal to the whole group would end the queued lockf waiter by itself, so whether it survives is then up to
+ * the installer's cleanup, as when a parent kills the installer by its pid.
+ */
+async function signalledRun(w, args, { env, signal, ready, interrupt }) {
   const tmp = path.join(w.T, 'run-tmp');
   fs.mkdirSync(tmp);
   let out = '';
@@ -35,7 +42,8 @@ async function signalledRun(w, args, { env, signal, ready }) {
   const deadline = Date.now() + 60_000;
   while (!ready(out) && child.exitCode === null && Date.now() < deadline) await sleep(50);
   assert.ok(ready(out) && child.exitCode === null, `the installer never reached the interruption point:\n${out}`);
-  process.kill(-child.pid, signal);
+  if (interrupt) await interrupt(child, tmp);
+  else process.kill(child.pid, signal);
   const end = await ended;
   return { end, out, tmp };
 }
@@ -50,17 +58,49 @@ for (const [signal, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGQUIT', 131]
     let r;
     try {
       r = await signalledRun(w, args(), { env: { CAREER_OPS_INSTALL_DAILY_WAIT: '60' }, signal, ready: (out) => /The daily job is running; waiting up to 60s/.test(out) });
+      // Asked while the job still holds the lock: a waiter left queued would wait out its 60 s and take it then.
+      assert.equal(installerLockf(D), '', `${signal}: the installer's lockf outlived it`);
     } finally {
       job.stop();
     }
     assert.deepEqual(fs.readdirSync(r.tmp), [], `${signal}: ${r.out}`);
     assert.equal(r.end.code, code, `${signal}: ${JSON.stringify(r.end)}\n${r.out}`);
-    // A waiter still queued would take the lock within lockf's retry interval once the job is gone.
-    const pidFile = path.join(D, 'data', 'immigration', '.live-update.pid');
-    for (const until = Date.now() + 1500; Date.now() < until; await sleep(50)) assert.equal(fs.existsSync(pidFile), false, `${signal}: the lock was taken for a gone installer`);
+    for (const until = Date.now() + 1500; Date.now() < until; await sleep(50)) assert.equal(fs.existsSync(pidFile(D)), false, `${signal}: the lock was taken for a gone installer`);
     assert.ok(lockFree(D), `${signal}: the daily lock is free`);
   });
 }
+
+test('a TERM after lockf has started the holder but before the holder has said so leaves the lock free and .live-update.pid gone once the installer has exited', async () => {
+  const { w, D, args } = fresh();
+  w.makeCheckout(D, { files: { 'data/immigration/logs/.keep': '' } });
+  const job = holdDailyLock(w, D);
+  let r;
+  try {
+    r = await signalledRun(w, args(), {
+      env: { CAREER_OPS_INSTALL_DAILY_WAIT: '60' },
+      ready: (out) => /The daily job is running; waiting up to 60s/.test(out),
+      // The installer is stopped while the job lets go, so its lockf takes the lock and starts the holder unseen. The
+      // ready file is then emptied: the state the installer is in between the holder starting and writing it.
+      interrupt: async (child, tmp) => {
+        process.kill(child.pid, 'SIGSTOP');
+        job.stop();
+        for (const until = Date.now() + 10_000; !fs.existsSync(pidFile(D)) && Date.now() < until;) await sleep(20);
+        assert.ok(fs.existsSync(pidFile(D)), 'the holder never took the lock');
+        for (const f of fs.readdirSync(tmp)) if (f.startsWith('career-ops-install-lock.')) fs.truncateSync(path.join(tmp, f));
+        process.kill(child.pid, 'SIGTERM');
+        process.kill(child.pid, 'SIGCONT');
+      },
+    });
+  } finally {
+    job.stop();
+  }
+  const pidLeft = fs.existsSync(pidFile(D));
+  const free = lockFree(D);
+  assert.equal(r.end.code, 143, `${JSON.stringify(r.end)}\n${r.out}`);
+  assert.equal(pidLeft, false, '.live-update.pid outlived the installer');
+  assert.equal(free, true, 'the daily lock outlived the installer');
+  assert.equal(installerLockf(D), '', "the installer's lockf outlived it");
+});
 
 test('an installer that fails while holding the daily lock has released it, and removed .live-update.pid, by the time it has exited (R32-scripts-b-L1-02)', () => {
   // Several runs, since a holder that only polls for the installer can win the race now and then.
@@ -68,11 +108,11 @@ test('an installer that fails while holding the daily lock has released it, and 
     const { w, D, args } = fresh();
     w.makeCheckout(D, { files: { 'data/immigration/logs/.keep': '' } });
     const r = w.run(args(), { env: { FAKE_NPM_EXIT: '1' } });
-    const pidFile = fs.existsSync(path.join(D, 'data', 'immigration', '.live-update.pid'));
+    const pidLeft = fs.existsSync(pidFile(D));
     const free = lockFree(D);
     assert.equal(r.status, 1, r.out);
     assert.match(r.out, /error: npm .* failed in /);
-    assert.equal(pidFile, false, `run ${i}: .live-update.pid outlived the installer`);
+    assert.equal(pidLeft, false, `run ${i}: .live-update.pid outlived the installer`);
     assert.equal(free, true, `run ${i}: the daily lock outlived the installer`);
   }
 });
