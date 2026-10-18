@@ -16,6 +16,9 @@
 # Scheduled by ~/Library/LaunchAgents/com.career-ops.upstream-sync.plist.
 # Manual run: custom/upstream-sync/sync.sh [--no-merge]
 set -uo pipefail
+# This script's name for the Keychain token, read later: unsetting an inherited copy also drops the export a later
+# assignment would keep, so only the claude call ever holds the token.
+unset TOKEN
 # Every Anthropic credential a manual or launchd start may carry goes before any child runs (the data-root resolver,
 # the installs, upstream's suite, Claude): every ANTHROPIC_* variable, and every CLAUDE_CODE_* one with a credential
 # name segment (the rule run-daily.sh and the Control Center server apply). Claude gets the Keychain token alone.

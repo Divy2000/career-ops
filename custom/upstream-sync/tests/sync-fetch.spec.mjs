@@ -377,6 +377,21 @@ test('inherited Anthropic credentials are dropped before any child of the sync r
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('an inherited exported TOKEN never carries the Keychain token to the children that run after the read (R31-scripts-b-L2-02)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const seen = path.join(w.base, 'claude-env.txt');
+  mkdirSync(home);
+  const old = path.join(w.base, 'old-claude');
+  // claude --version is the first child after the read; it records what it inherits, then fails the version floor.
+  stub(old, 'claude', `env > "${seen}"\necho "2.1.200 (Claude Code)"`);
+  try {
+    const res = runSync(w, { home, security: 'echo tok-secret', inherited: { TOKEN: 'inherited', CC_CLAUDE_BIN: path.join(old, 'claude') } });
+    assert.match(res.log, /older than 2\.1\.288/, res.log + res.stderr);
+    assert.doesNotMatch(readFileSync(seen, 'utf8'), /tok-secret/);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('a sync whose claude is too old to keep the token out of hooks and tools stops before it touches the worktree (R15-scripts-b-L3-01)', () => {
   const w = makeWorld();
   const home = path.join(w.base, 'home');
