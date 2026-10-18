@@ -103,13 +103,13 @@ function sentenceEnd(text: string): number {
   return -1;
 }
 
-/** Keeps spans up to the first sentence end. */
+/** Keeps spans up to the first sentence end. A link whose label holds the end is kept whole. */
 function firstSentence(spans: DigestSpan[]): DigestSpan[] {
   const out: DigestSpan[] = [];
   for (const s of spans) {
-    const end = s.href ? -1 : sentenceEnd(s.text);
+    const end = sentenceEnd(s.text);
     if (end !== -1) {
-      out.push({ ...s, text: s.text.slice(0, end) });
+      out.push(s.href ? s : { ...s, text: s.text.slice(0, end) });
       return out;
     }
     out.push(s);

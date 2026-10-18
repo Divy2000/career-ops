@@ -114,4 +114,10 @@ describe('summarizeDigest', () => {
     expect(summarizeDigest('- Write [mailto:help@uscis.gov](mailto:help@uscis.gov) today.')[0]).toEqual([{ text: 'Write ' }, { text: 'help@uscis.gov', href: 'mailto:help@uscis.gov' }, { text: ' today.' }]);
     expect(summarizeDigest('- Call [tel:+15551234](tel:+15551234) today.')[0]).toEqual([{ text: 'Call ' }, { text: '+15551234', href: 'tel:+15551234' }, { text: ' today.' }]);
   });
+
+  it('ends the first sentence at a period inside a link label, keeping the link whole (R33-feat-c-X-02)', () => {
+    expect(summarizeDigest('- Read [the final rule.](https://example.test/rule) The fee is unchanged.')[0]).toEqual([{ text: 'Read ' }, { text: 'the final rule.', href: 'https://example.test/rule' }]);
+    expect(summarizeDigest('- See [Rule one. Rule two](https://example.test/r) for more. Later text.')[0]).toEqual([{ text: 'See ' }, { text: 'Rule one. Rule two', href: 'https://example.test/r' }]);
+    expect(lines('- Per [the U.S.](https://example.test/us) rule today. Later text.')).toEqual(['Per the U.S. rule today.']);
+  });
 });
