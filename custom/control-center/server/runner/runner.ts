@@ -582,9 +582,14 @@ export class Runner {
     // Slower than tracking: each try reads every run's meta, and the wait can be as long as another process's run.
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
-      this.pump();
+      this.pumpFromTimer();
     }, (this.opts.pollMs ?? 250) * 4);
     this.retryTimer.unref();
+  }
+
+  /** pump() from a timer or an event, where a throw is uncaught and ends the server: the queue still waits, so later. */
+  private pumpFromTimer(): void {
+    if (!this.guarded('a queued start', () => this.pump())) this.retryLater();
   }
 
   /**
@@ -626,8 +631,8 @@ export class Runner {
       const entry = this.active.get(meta.id);
       if (entry) clearInterval(entry.timer);
       this.active.delete(meta.id);
-      this.failToStart(this.store.read(meta.id) ?? meta, err);
-      this.pump();
+      this.guarded(`recording run ${meta.id} could not start`, () => this.failToStart(this.store.read(meta.id) ?? meta, err));
+      this.pumpFromTimer();
     });
     child.unref();
     const wrapperPid = child.pid ?? null;
@@ -647,46 +652,74 @@ export class Runner {
     this.bus.publish('run.status', { runId: meta.id, status: 'failed', actionId: meta.actionId });
   }
 
-  private track(meta: RunMeta): void {
+  /** failing: its last look threw, so the next failure is not logged again (one message per failing stretch). */
+  private track(meta: RunMeta, failing = false): void {
     const timer = setInterval(() => {
-      let current = this.store.read(meta.id) ?? meta;
-      // Cancelled by another process, whose SIGKILL dies with it if it stops within the grace.
-      const entry = this.active.get(meta.id);
-      if (entry && current.status === 'cancelled' && !entry.killArmed) {
-        entry.killArmed = true;
-        this.afterGrace(() => this.killRecordedCommand(meta.id));
-      }
-      if (!current.childPid) {
-        const w = this.store.readWrapper(meta.id);
-        if (w) {
-          const childStartedAt = this.recordStart(w.childPid);
-          // Onto a fresh read: another server may have cancelled the run while ps read the start.
-          current = { ...(this.store.read(meta.id) ?? current), childPid: w.childPid, childStartedAt };
-          this.store.write(current);
-        }
-      }
-      const gone = !!current.wrapperPid && !this.ours(current.wrapperPid);
-      // Read after the wrapper check: a wrapper writes its exit before it exits, so one found gone has recorded it by now.
-      const exit = this.store.readExit(meta.id);
-      if (exit) {
+      const ok = this.guarded(`tracking run ${meta.id}`, () => this.tick(meta, timer), !failing);
+      failing = !ok;
+      // Settling it threw once it was no longer tracked: tracked again, so a later look settles it.
+      if (!ok && !this.active.has(meta.id)) {
         clearInterval(timer);
-        this.active.delete(meta.id);
-        this.finalize(current, exit);
-        this.pump();
-      } else if (gone) {
-        clearInterval(timer);
-        this.active.delete(meta.id);
-        // One the user cancelled stays cancelled: it was meant to stop, and it has.
-        const status = current.status === 'cancelled' ? 'cancelled' : 'lost';
-        this.store.write({ ...current, status, endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });
-        this.dropInputs(meta);
-        this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId });
-        this.pump();
+        this.track(meta, true);
       }
     }, this.opts.pollMs ?? 250);
     timer.unref();
     // Tracked already cancelled: reconcileRun arms its SIGKILL.
     this.active.set(meta.id, { meta, timer, killArmed: meta.status === 'cancelled' });
+  }
+
+  /** One look at a tracked run: records its command, and settles it once it has exited or its wrapper is gone. */
+  private tick(meta: RunMeta, timer: NodeJS.Timeout): void {
+    let current = this.store.read(meta.id) ?? meta;
+    // Cancelled by another process, whose SIGKILL dies with it if it stops within the grace.
+    const entry = this.active.get(meta.id);
+    if (entry && current.status === 'cancelled' && !entry.killArmed) {
+      entry.killArmed = true;
+      this.afterGrace(() => this.killRecordedCommand(meta.id));
+    }
+    if (!current.childPid) {
+      const w = this.store.readWrapper(meta.id);
+      if (w) {
+        const childStartedAt = this.recordStart(w.childPid);
+        // Onto a fresh read: another server may have cancelled the run while ps read the start.
+        current = { ...(this.store.read(meta.id) ?? current), childPid: w.childPid, childStartedAt };
+        this.store.write(current);
+      }
+    }
+    const gone = !!current.wrapperPid && !this.ours(current.wrapperPid);
+    // Read after the wrapper check: a wrapper writes its exit before it exits, so one found gone has recorded it by now.
+    const exit = this.store.readExit(meta.id);
+    if (exit) {
+      clearInterval(timer);
+      this.active.delete(meta.id);
+      this.finalize(current, exit);
+      // Settled: a failure to start the next run must not settle this one again.
+      this.pumpFromTimer();
+    } else if (gone) {
+      clearInterval(timer);
+      this.active.delete(meta.id);
+      // One the user cancelled stays cancelled: it was meant to stop, and it has.
+      const status = current.status === 'cancelled' ? 'cancelled' : 'lost';
+      this.store.write({ ...current, status, endedAt: new Date().toISOString(), error: 'wrapper exited without an exit record' });
+      this.dropInputs(meta);
+      this.bus.publish('run.status', { runId: meta.id, status, actionId: meta.actionId });
+      // Settled: a failure to start the next run must not settle this one again.
+      this.pumpFromTimer();
+    }
+  }
+
+  /**
+   * Runs a timer's work. Thrown in a timer, an error (a run record that cannot be read for a moment) is uncaught and
+   * ends the server, so it is logged instead; the caller tries again. false: it threw.
+   */
+  private guarded(what: string, fn: () => void, log = true): boolean {
+    try {
+      fn();
+      return true;
+    } catch (err) {
+      if (log) console.error(`[runner] ${what} failed, trying again: ${(err as Error).message}`);
+      return false;
+    }
   }
 
   private finalize(meta: RunMeta, exit: { code: number | null; signal: string | null; endedAt: string }): void {
@@ -803,7 +836,7 @@ export class Runner {
   private afterGrace(fn: () => void): void {
     const timer = setTimeout(() => {
       this.killTimers.delete(timer);
-      fn();
+      this.guarded('a SIGKILL after the grace', fn);
     }, 5000);
     timer.unref();
     this.killTimers.add(timer);
