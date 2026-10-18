@@ -11,6 +11,7 @@ import { addNote } from './addNote';
 import { PostingLink } from './PostingLink';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { lastSession, START_REPORT_WINDOW_MS, subscribeSession } from '../../lib/lastSession';
+import { newStartToken, startSuperseded } from '../../lib/useRememberedSession';
 import type { RawLine } from '@shared/api';
 import { pipelineAddBatches } from '@shared/pipeline-add';
 import { postingUrl } from '@shared/posting-url';
@@ -131,17 +132,26 @@ function useRememberedRun(key: string) {
     const t = setTimeout(() => store.setStarting(false), START_REPORT_WINDOW_MS);
     return () => clearTimeout(t);
   }, [starting, store]);
-  /** Sends the start through `send`, which answers the new run id or null when no run started. */
-  const start = (send: () => Promise<string | null>): Promise<string | null> => {
+  /**
+   * Sends the start through `send`, which answers the new run id or null when no run started; `stored` runs just before
+   * the id is stored. Each start records a start token: a POST that outlived START_REPORT_WINDOW_MS lets the tab start
+   * again, and its late answer must not replace the newer run or clear the newer start's mark.
+   */
+  const start = (send: () => Promise<string | null>, stored?: (rid: string) => void): Promise<string | null> => {
+    const own = newStartToken(key);
     store.setStarting(true);
     return send().then(
       (rid) => {
-        if (rid) store.write(rid);
+        if (startSuperseded(key, own)) return rid;
+        if (rid) {
+          stored?.(rid);
+          store.write(rid);
+        }
         store.setStarting(false);
         return rid;
       },
       (err: unknown) => {
-        store.setStarting(false);
+        if (!startSuperseded(key, own)) store.setStarting(false);
         throw err;
       },
     );
@@ -386,12 +396,9 @@ export function NetworkScan() {
     // The form now belongs to this run: a late answer about the older run must not overwrite it.
     edited.current = true;
     const filters: NetworkFilters = { roles, exclude, locations, sinceDays, ats, limit };
-    void startRun(() =>
-      run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => {
-        if (!out || !('runId' in out)) return null;
-        writeRunFilters(filters);
-        return out.runId;
-      }),
+    void startRun(
+      () => run('scan.network', { roles: split(roles), exclude: split(exclude), locationAllow: split(locations), block: [], sinceDays, ats, limit }, 'Network scan started').then((out) => (out && 'runId' in out ? out.runId : null)),
+      () => writeRunFilters(filters),
     );
   };
   // One add at a time: a second click before the first answers would send the same postings and relabel them.

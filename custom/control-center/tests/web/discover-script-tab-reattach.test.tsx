@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
 import { ConfirmProvider } from '@web/components/ConfirmDialog';
+import { START_REPORT_WINDOW_MS, lastSession } from '@web/lib/lastSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,6 +40,8 @@ let runGone = false;
 let startGate: Promise<void> | null = null;
 /** Set to refuse POST /api/actions/scan.portals. */
 let failStart = false;
+/** The run id POST /api/actions/scan.portals answers, read as the start is sent so a later start can answer another. */
+let startRunId = 'r1';
 
 let host: HTMLElement;
 let root: Root;
@@ -62,14 +65,18 @@ beforeEach(async () => {
   runGone = false;
   startGate = null;
   failStart = false;
+  startRunId = 'r1';
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
-      if (url === '/api/actions/scan.portals' && startGate) await startGate;
-      if (url === '/api/actions/scan.portals' && failStart) return new Response(JSON.stringify({ error: 'server restarting' }), { status: 503, headers: { 'content-type': 'application/json' } });
+      const gate = url === '/api/actions/scan.portals' ? startGate : null;
+      const rid = startRunId;
+      const fail = failStart;
+      if (gate) await gate;
+      if (url === '/api/actions/scan.portals' && fail) return new Response(JSON.stringify({ error: 'server restarting' }), { status: 503, headers: { 'content-type': 'application/json' } });
       if (url === '/api/runs/r1' && runGone) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
-      const body = url === '/api/actions/scan.portals' ? { runId: 'r1' } : url === '/api/actions' ? ACTIONS : {};
+      const body = url === '/api/actions/scan.portals' ? { runId: rid } : url === '/api/actions' ? ACTIONS : {};
       return new Response(JSON.stringify(body), { status: url === '/api/actions/scan.portals' ? 202 : 200, headers: { 'content-type': 'application/json' } });
     }),
   );
@@ -172,5 +179,42 @@ describe('Discover > Portal scan re-attaches its run', () => {
     expect((await until(() => scanButton() ?? undefined, 'the Scan portals button after coming back'))!.disabled).toBe(true);
     await act(async () => release());
     await until(() => (scanButton()!.disabled ? undefined : true), 'Scan portals to be offered again');
+  });
+  it.each([
+    ['with its run', false],
+    ['with a refusal', true],
+  ])('Given a scan start that outlived the start window, When a newer start is sent and the old one answers late %s, Then the tab keeps the newer start and follows its run (R30-w1web-discover-token)', async (_what, lateFails) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let releaseA!: () => void;
+      startGate = new Promise((r) => (releaseA = r));
+      failStart = lateFails;
+      await act(async () => (await until(() => scanButton() ?? undefined, 'the Scan portals button'))!.click());
+      await act(async () => root.unmount());
+      await mount();
+      expect((await until(() => scanButton() ?? undefined, 'the Scan portals button after coming back'))!.disabled).toBe(true);
+      await act(async () => vi.advanceTimersByTime(START_REPORT_WINDOW_MS + 1));
+      await until(() => (scanButton()!.disabled ? undefined : true), 'Scan portals once the mark expired');
+      let releaseB!: () => void;
+      startGate = new Promise((r) => (releaseB = r));
+      failStart = false;
+      startRunId = 'r2';
+      await act(async () => scanButton()!.click());
+      const posts = () => (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/actions/scan.portals' && i?.method === 'POST').length;
+      await until(() => (posts() === 2 ? true : undefined), 'the second start sent');
+      await act(async () => releaseA());
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(sessionStorage.getItem(STORE_KEY)).toBeNull();
+      expect(FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events')).toBeUndefined();
+      // The newer start's mark stays, so a tab mounted now still waits for it.
+      expect(lastSession(STORE_KEY).starting()).toBe(true);
+      expect(scanButton()!.disabled).toBe(true);
+      await act(async () => releaseB());
+      await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r2/events' && !s.closed), 'the newer run stream');
+      expect(sessionStorage.getItem(STORE_KEY)).toBe('r2');
+      expect(lastSession(STORE_KEY).starting()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

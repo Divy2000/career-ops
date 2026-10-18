@@ -7,6 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { until } from '../helpers/until';
+import { START_REPORT_WINDOW_MS, lastSession } from '@web/lib/lastSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -34,6 +35,8 @@ let sent: Array<Record<string, unknown>>;
 /** What GET /api/runs/r1 answers: the run's meta with the params the server ran it with. */
 let runMeta: unknown;
 let newRunId: string;
+/** While set, POST /api/actions/scan.network waits for it, so a test can send a second start while the first is in flight. */
+let startGate: Promise<void> | null;
 
 beforeEach(async () => {
   FakeEventSource.all = [];
@@ -41,12 +44,16 @@ beforeEach(async () => {
   sent = [];
   runMeta = {};
   newRunId = 'r1';
+  startGate = null;
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === '/api/actions/scan.network') sent.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-      const body = url === '/api/actions/scan.network' ? { runId: newRunId } : url === '/api/actions' ? [] : url === '/api/runs/r1' ? runMeta : {};
+      const rid = newRunId;
+      const gate = url === '/api/actions/scan.network' ? startGate : null;
+      if (gate) await gate;
+      const body = url === '/api/actions/scan.network' ? { runId: rid } : url === '/api/actions' ? [] : url === '/api/runs/r1' ? runMeta : {};
       return new Response(JSON.stringify(body), { status: url === '/api/actions/scan.network' ? 202 : 200, headers: { 'content-type': 'application/json' } });
     }),
   );
@@ -182,5 +189,38 @@ describe('Network scan: coming back to a remembered run', () => {
     await act(async () => new Promise((r) => setTimeout(r, 50)));
     expect(field<HTMLInputElement>('Roles (comma separated)').value).toBe('backend, platform');
     expect(JSON.parse(sessionStorage.getItem('cc.discover.networkScan.params')!)).toMatchObject({ roles: 'backend, platform', limit: 100 });
+  });
+  it('Given a scan start that outlived the start window, When a newer scan is sent and the old one answers late, Then the tab keeps the newer run and its filters (R30-w1web-discover-token)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const submit = () => act(async () => host.querySelector<HTMLFormElement>('form[aria-label="Network scan filters"]')!.requestSubmit());
+      let releaseA!: () => void;
+      startGate = new Promise((r) => (releaseA = r));
+      await act(async () => setValue(field('Roles (comma separated)'), 'first role'));
+      await submit();
+      await until(() => (sent.length === 1 ? true : undefined), 'the first start sent');
+      await act(async () => root.unmount());
+      await mount();
+      await act(async () => vi.advanceTimersByTime(START_REPORT_WINDOW_MS + 1));
+      await until(() => (lastSession('cc.discover.networkScan').starting() ? undefined : true), 'the mark expired');
+      let releaseB!: () => void;
+      startGate = new Promise((r) => (releaseB = r));
+      newRunId = 'r2';
+      await act(async () => setValue(field('Roles (comma separated)'), 'second role'));
+      await submit();
+      await until(() => (sent.length === 2 ? true : undefined), 'the second start sent');
+      await act(async () => releaseA());
+      await act(async () => new Promise((r) => setTimeout(r, 30)));
+      expect(sessionStorage.getItem('cc.discover.networkScan')).toBeNull();
+      expect(sessionStorage.getItem('cc.discover.networkScan.params')).toBeNull();
+      expect(lastSession('cc.discover.networkScan').starting()).toBe(true);
+      await act(async () => releaseB());
+      await until(() => FakeEventSource.all.find((s) => s.url === '/api/runs/r2/events'), 'the newer run stream');
+      expect(FakeEventSource.all.find((s) => s.url === '/api/runs/r1/events')).toBeUndefined();
+      expect(sessionStorage.getItem('cc.discover.networkScan')).toBe('r2');
+      expect(JSON.parse(sessionStorage.getItem('cc.discover.networkScan.params')!)).toMatchObject({ roles: 'second role' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
