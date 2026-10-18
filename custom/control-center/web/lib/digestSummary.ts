@@ -40,7 +40,7 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
         out.push({ text: n.value, ...(bold ? { bold } : {}), ...(href ? { href } : {}) });
         break;
       case 'break':
-        out.push({ text: ' ', ...(bold ? { bold } : {}) });
+        out.push({ text: ' ', ...(bold ? { bold } : {}), ...(href ? { href } : {}) });
         break;
       case 'strong':
         flatten(n.children, true, href, out, defs);

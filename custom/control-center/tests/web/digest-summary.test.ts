@@ -120,4 +120,14 @@ describe('summarizeDigest', () => {
     expect(summarizeDigest('- See [Rule one. Rule two](https://example.test/r) for more. Later text.')[0]).toEqual([{ text: 'See ' }, { text: 'Rule one. Rule two', href: 'https://example.test/r' }]);
     expect(lines('- Per [the U.S.](https://example.test/us) rule today. Later text.')).toEqual(['Per the U.S. rule today.']);
   });
+
+  it('keeps a hard break inside a link label as part of the link (R33-feat-c-X-03)', () => {
+    expect(summarizeDigest('- Read [the final\\\nrule](https://example.test/rule).')[0]).toEqual([
+      { text: 'Read ' },
+      { text: 'the final', href: 'https://example.test/rule' },
+      { text: ' ', href: 'https://example.test/rule' },
+      { text: 'rule', href: 'https://example.test/rule' },
+      { text: '.' },
+    ]);
+  });
 });
