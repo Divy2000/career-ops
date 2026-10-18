@@ -10,16 +10,19 @@ import { makeTestApp, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const REPO_VARS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY'];
-const saved = Object.fromEntries(REPO_VARS.map((k) => [k, process.env[k]]));
-const restore = () => {
-  for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k];
-  else process.env[k] = v;
+// The host's own git config (diff.noprefix, commit.gpgsign, core.hooksPath...) must not decide the setup commit or the
+// diff prefixes asserted below, so this file's git, and the server's, read no global or system config.
+const HOST_CONFIG_VARS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM'];
+const saved = Object.fromEntries([...REPO_VARS, ...HOST_CONFIG_VARS].map((k) => [k, process.env[k]]));
+const restore = (keys = Object.keys(saved)) => {
+  for (const k of keys) if (saved[k] === undefined) delete process.env[k];
+  else process.env[k] = saved[k];
 };
 
 function cleanGitEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k];
-  return env;
+  return { ...env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
 }
 
 function makeRepo(prefix: string, file: string): string {
@@ -40,11 +43,13 @@ describe('GET /api/dev/git-diff with repository overrides in the server environm
   let codeRoot: string;
   let other: string;
   beforeAll(async () => {
+    process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
     codeRoot = makeRepo('cc-r31-gitdir-code-', 'Mine.txt');
     other = makeRepo('cc-r31-gitdir-other-', 'Theirs.txt');
     t = await makeTestApp({ codeRoot });
   });
-  afterEach(restore);
+  afterEach(() => restore(REPO_VARS));
   afterAll(async () => {
     restore();
     await t.close();
