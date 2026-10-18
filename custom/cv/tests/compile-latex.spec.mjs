@@ -137,7 +137,7 @@ test('given the sandbox profile alone, when a process in it reads a file under t
   fs.writeFileSync(path.join(root, 'notes.txt'), `${SECRET}\n`);
   const bin = spawnSync('which', [engine], { env: { ...process.env, PATH: searchPath }, encoding: 'utf8' }).stdout.trim();
   const env = { ...envFor(root), PATH: searchPath };
-  const args = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sandboxArgs } from ${JSON.stringify(COMPILE)}; process.stdout.write(JSON.stringify(sandboxArgs(...JSON.parse(process.argv[1]))));`, JSON.stringify([work, engine, bin, root])], { cwd: REPO, env, encoding: 'utf8' });
+  const args = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sandboxArgs } from ${JSON.stringify(COMPILE)}; process.stdout.write(JSON.stringify(sandboxArgs(...JSON.parse(process.argv.at(-1)))));`, JSON.stringify([work, engine, bin, root])], { cwd: REPO, env, encoding: 'utf8' });
   assert.equal(args.status, 0, args.stderr);
   const cat = (file) => spawnSync('/usr/bin/sandbox-exec', [...JSON.parse(args.stdout), '/bin/cat', file], { encoding: 'utf8' });
   assert.equal(cat(inWork).stdout, 'work file\n');
@@ -176,7 +176,7 @@ test('given a data root reached through a link, when the sandbox is built, then 
   const real = fs.realpathSync(dataRoot());
   const link = path.join(fs.realpathSync(tempDir('latex-link-')), 'root');
   fs.symlinkSync(real, link);
-  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sandboxArgs } from ${JSON.stringify(COMPILE)}; process.stdout.write(JSON.stringify(sandboxArgs(...JSON.parse(process.argv[1]))));`, JSON.stringify([real, 'pdflatex', '/bin/cat', link])], { cwd: REPO, env: envFor(link), encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sandboxArgs } from ${JSON.stringify(COMPILE)}; process.stdout.write(JSON.stringify(sandboxArgs(...JSON.parse(process.argv.at(-1)))));`, JSON.stringify([real, 'pdflatex', '/bin/cat', link])], { cwd: REPO, env: envFor(link), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const args = JSON.parse(r.stdout);
   assert.ok(args.includes(`DATA=${real}`), r.stdout);

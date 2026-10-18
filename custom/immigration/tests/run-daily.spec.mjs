@@ -1049,7 +1049,7 @@ jobTest('an inherited ANTHROPIC_* or credential CLAUDE_CODE_* variable never rea
   const w = dailyWorld();
   const seen = path.join(w.T, 'resolver-env.log');
   const resolver = path.join(w.root, 'path-resolver.mjs');
-  fs.appendFileSync(resolver, `\nimport { appendFileSync as __log } from 'node:fs';\nif (process.argv[1] === undefined) __log(${JSON.stringify(seen)}, Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)).sort().join(',') + '\\n');\n`);
+  fs.appendFileSync(resolver, `\nimport { appendFileSync as __log } from 'node:fs';\nif (process.argv.length === 1) __log(${JSON.stringify(seen)}, Object.keys(process.env).filter((k) => /^(ANTHROPIC_|CLAUDE_CODE_)/.test(k)).sort().join(',') + '\\n');\n`);
   const r = w.run({ ANTHROPIC_API_KEY: 'inherited-key', CLAUDE_CODE_OAUTH_TOKEN: 'inherited-token', CLAUDE_CODE_ENTRYPOINT: 'cli' });
   assert.equal(r.status, 0, r.log);
   // Only the script's own resolver call (node -e, once before the lock re-exec and once after it) is logged: the claude
