@@ -7,8 +7,13 @@ set -eEuo pipefail
 trap 'echo "install.sh: unexpected failure at line $LINENO (see the install log)" >&2' ERR
 # The temp files and folder in use right now, each cleared once removed. A run stopped part-way (Ctrl-C at the Keychain
 # read, the daily-lock wait or the validator clone; a closed terminal) exits through the EXIT trap, which removes them.
-KEYCHAIN_ERR_FILE="" LOCK_READY="" LOCK_ERRS="" PROJECTS_SCRATCH=""
+# LOCK_WAITER is the lockf still queued on a daily lock: stopped first, so it never takes the lock for a gone installer.
+KEYCHAIN_ERR_FILE="" LOCK_READY="" LOCK_ERRS="" PROJECTS_SCRATCH="" LOCK_WAITER=""
 remove_temp_paths() {
+  if [ -n "$LOCK_WAITER" ]; then
+    kill "$LOCK_WAITER" 2>/dev/null || true
+    wait "$LOCK_WAITER" 2>/dev/null || true
+  fi
   rm -rf -- ${KEYCHAIN_ERR_FILE:+"$KEYCHAIN_ERR_FILE"} ${LOCK_READY:+"$LOCK_READY"} ${LOCK_ERRS:+"$LOCK_ERRS"} ${PROJECTS_SCRATCH:+"$PROJECTS_SCRATCH"} 2>/dev/null || true
 }
 trap remove_temp_paths EXIT
@@ -356,6 +361,22 @@ try {
 line(gate.problem ? "unapproved" : "approved", gate.version, approved.length ? approved.join(", ") : "none yet", gate.problem ? "-" : gate.identity, newest);
 ' 2>/dev/null || printf 'error\037node could not run the version gate\037unknown\037-\037'
 }
+# Unsets every inherited ANTHROPIC_* variable (keys, tokens, custom headers, and the endpoint they are sent to) and every
+# CLAUDE_CODE_* one with a credential name segment: the rule sync.sh, run-daily.sh and the Control Center's isCredential
+# apply. Called in the headless subshell, so the Claude that gets the Keychain token sees no other credential.
+strip_claude_credentials() {
+  local var
+  for var in $(compgen -e); do
+    case "$var" in
+      ANTHROPIC_*) unset "$var" ;;
+      CLAUDE_CODE_*)
+        case "_${var}_" in
+          *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
+        esac
+        ;;
+    esac
+  done
+}
 seed() { node "$SCRIPT_DIR/seed.mjs" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -597,9 +618,12 @@ daily_lock_take_one() {
   LOCK_READY="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
   LOCK_ERRS="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
   # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
-  /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'trap "rm -f \"\$1\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2; done' \
+  # The holder writes nothing for an installer that is already gone, and its exit removes the ready file too, in case the
+  # installer's EXIT trap removed it first.
+  /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'kill -0 "$3" 2>/dev/null || exit 0; trap "rm -f \"\$1\" \"\$2\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2; done' \
     daily-lock "${lock%/*}/.live-update.pid" "$LOCK_READY" "$$" </dev/null >/dev/null 2>"$LOCK_ERRS" 3<&- 4>&- &
   lockf_pid=$!
+  LOCK_WAITER="$lockf_pid"
   until [ -s "$LOCK_READY" ]; do
     if ! kill -0 "$lockf_pid" 2>/dev/null; then
       wait "$lockf_pid" || rc=$?
@@ -609,7 +633,7 @@ daily_lock_take_one() {
         while IFS= read -r line || [ -n "$line" ]; do warn "$line"; done < "$LOCK_ERRS"
       fi
       rm -f "$LOCK_READY" "$LOCK_ERRS"
-      LOCK_READY="" LOCK_ERRS=""
+      LOCK_READY="" LOCK_ERRS="" LOCK_WAITER=""
       return "$rc"
     fi
     polls=$((polls + 1))
@@ -619,7 +643,7 @@ daily_lock_take_one() {
   DAILY_HOLDERS+=("$(cat "$LOCK_READY")")
   DAILY_LOCKFS+=("$lockf_pid")
   rm -f "$LOCK_READY" "$LOCK_ERRS"
-  LOCK_READY="" LOCK_ERRS=""
+  LOCK_READY="" LOCK_ERRS="" LOCK_WAITER=""
 }
 
 daily_lock_release() {
@@ -1335,7 +1359,7 @@ else
         # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
         # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
         # It starts the real path the gate approved, not a symlink an update could re-point, with the autoupdater off.
-        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" \
+        if (strip_claude_credentials && cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" \
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 DISABLE_AUTOUPDATER=1 \
           "${gate_identity%@*}" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
           --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
