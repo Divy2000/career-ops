@@ -291,9 +291,12 @@ export class SessionStore {
     turn.tokens = result.tokens;
     turn.permissionDenials = result.permissionDenials;
     meta.totals = { costUsd: round(meta.totals.costUsd + result.costUsd), tokens: meta.totals.tokens + result.tokens };
-    meta.status = result.status;
-    meta.error = result.error ?? null;
-    meta.lastReason = result.reason ?? null;
+    // The status says how the last turn stands: an earlier turn ending late never overwrites a later one's.
+    if (meta.turns.at(-1) === turn) {
+      meta.status = result.status;
+      meta.error = result.error ?? null;
+      meta.lastReason = result.reason ?? null;
+    }
     this.write(meta);
     return meta;
   }
