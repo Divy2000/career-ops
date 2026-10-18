@@ -15,7 +15,8 @@ works for is its `RowIdentity` (company, role, report), or the typed posting URL
    (`cc.apply.typedUrl.<sid>`, `cc.apply.docs.<sid>`, `cc.apply.row.<sid>`), their parse and write, and
    `forgetDraft(sid)`, the only way a draft's kept keys are released. Every exit from a draft (New draft, the session
    reported gone, a Fill turn answered 404, a draft found to be another application's) goes through it, so none can
-   leave a key behind that a later draft reads.
+   leave a key behind that a later draft reads. A tailored CV session's row marker is not released when the page lets
+   go of its pointer: the CV guard reads it to name an earlier owner's live run that the server did not pin.
 4. **What a draft carries on.** A new session (start or fork) records the link and the user's own picks of the form it
    was sent from, the latest ones at the moment its id comes back (also picks made while the start was in flight). A
    fork of a re-attached draft inherits that draft's link and picks, an explicit "None" (`''`) included. A reply
