@@ -102,13 +102,13 @@ function elsewhere(patch: Record<string, unknown>) {
   version += 1;
 }
 /** The browser's Web Locks: one holder per name across every tab of the origin, granted in request order. */
-function stubLocks() {
+function stubLocks(grant: () => Promise<void> = () => Promise.resolve()) {
   const locks = new Map<string, Promise<unknown>>();
   Object.defineProperty(navigator, 'locks', {
     configurable: true,
     value: {
       request: (name: string, cb: () => Promise<unknown>) => {
-        const run = (locks.get(name) ?? Promise.resolve()).then(() => cb());
+        const run = (locks.get(name) ?? Promise.resolve()).then(grant).then(() => cb());
         locks.set(
           name,
           run.catch(() => undefined),
@@ -118,6 +118,8 @@ function stubLocks() {
     },
   });
 }
+/** A real browser grants a Web Lock in a later task, after every microtask queued before the request has run. */
+const inLaterTask = () => new Promise<void>((r) => setTimeout(r, 0));
 const button = (host: HTMLElement, text: string) => [...host.querySelectorAll('button')].find((b) => b.textContent === text);
 const alerts = (host: HTMLElement) => [...host.querySelectorAll('[role="alert"]')].map((a) => a.textContent ?? '').join('\n');
 
@@ -192,6 +194,52 @@ describe('app settings: a write based on a read another device has changed', () 
     expect(puts.map((p) => p.ifMatch)).toEqual(['v1', 'v2']);
     expect(settings.claudeConcurrency).toBe(3);
     expect(alerts(tabA) + alerts(tabB)).toBe('');
+  });
+});
+
+describe('app settings: a save queued behind a refusal (R37-feat-c-L1-01)', () => {
+  /** Lets every held write reach the server, one at a time, until `want` writes have answered. */
+  async function release(want: number) {
+    for (let i = 0; i < 40 && (held!.length > 0 || puts.length < want); i++) {
+      await act(async () => {
+        for (const take of held!.splice(0)) take();
+        await new Promise((r) => setTimeout(r, 20));
+      });
+    }
+  }
+
+  it('Given another device changed a budget, when a save is refused as changed and a budgets save was queued behind it, then the budgets save is refused too and the outside value kept', async () => {
+    stubLocks(inLaterTask);
+    held = [];
+    const host = await mount('EngineSettings', true);
+    const select = await until(() => host.querySelector<HTMLSelectElement>('#setting-concurrency'), 'the concurrency select');
+    elsewhere({ usageBudgets: { fiveHourTokens: null, sevenDayTokens: 500 } });
+    await choose(select, '2');
+    await until(() => held!.length > 0, 'the concurrency save on its way');
+    await type(host.querySelector<HTMLInputElement>('#setting-budget-5h')!, '1000');
+    await act(async () => button(host, 'Save budgets')!.click());
+    await release(2);
+    expect(puts.map((p) => p.ifMatch)).toEqual(['v1', 'v1']);
+    expect(settings.usageBudgets).toEqual({ fiveHourTokens: null, sevenDayTokens: 500 });
+    await until(() => host.querySelector<HTMLInputElement>('[aria-label="7 day token budget"]')?.value === '500', 'the outside budget shown');
+    expect(host.querySelector<HTMLInputElement>('#setting-budget-5h')!.value).toBe('1000');
+    expect(alerts(host)).toMatch(/changed since you loaded it/);
+  });
+
+  it('Given a save taken and a second queued behind it, when the lock grants asynchronously, then the second is sent on top of the first and taken', async () => {
+    stubLocks(inLaterTask);
+    held = [];
+    const host = await mount('EngineSettings', true);
+    const select = await until(() => host.querySelector<HTMLSelectElement>('#setting-concurrency'), 'the concurrency select');
+    await choose(select, '2');
+    await until(() => held!.length > 0, 'the concurrency save on its way');
+    await type(host.querySelector<HTMLInputElement>('#setting-budget-5h')!, '1000');
+    await act(async () => button(host, 'Save budgets')!.click());
+    await release(2);
+    expect(puts.map((p) => p.ifMatch)).toEqual(['v1', 'v2']);
+    expect(settings.claudeConcurrency).toBe(2);
+    expect(settings.usageBudgets).toEqual({ fiveHourTokens: 1000, sevenDayTokens: null });
+    expect(alerts(host)).toBe('');
   });
 });
 
