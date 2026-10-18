@@ -25,6 +25,9 @@ function parseScalar(text: string, like: unknown): unknown {
   return text;
 }
 
+// NaN and Infinity have no YAML number to save as: JSON carries both to the server as null.
+const notANumber = (v: unknown) => typeof v === 'number' && !Number.isFinite(v);
+
 // With no typed value to copy, only whole words read as a switch: 1/0 and y/n could be a number or an initial.
 const SWITCH_WORDS = new Set(['true', 'false', 'yes', 'no', 'on', 'off']);
 
@@ -60,7 +63,7 @@ export function ScalarInput({ path, value, onOp, rules, ariaLabel, parse }: { pa
       return;
     }
     const next = parse ? parse(draft) : parseScalar(draft, value);
-    if (typeof next === 'number' && Number.isNaN(next)) {
+    if (notANumber(next)) {
       setError('must be a number');
       return;
     }
@@ -98,7 +101,12 @@ export function ScalarList({ path, items, onOp, rules }: { path: JsonPath; items
     const err = matchRule(rules, [...path, 0])?.(text) ?? null;
     setError(err);
     if (err) return;
-    onOp({ op: 'insert', path, value: parseScalar(text, items[0] ?? '') });
+    const next = parseScalar(text, items[0] ?? '');
+    if (notANumber(next)) {
+      setError('must be a number');
+      return;
+    }
+    onOp({ op: 'insert', path, value: next });
     setAdd('');
   };
   return (
@@ -159,7 +167,12 @@ export function ObjectTable({ path, rows, onOp, rules, columnsHint = [], rowRule
         return;
       }
       if (text === '') continue;
-      row[col] = parseCell(text, columnLike(col));
+      const next = parseCell(text, columnLike(col));
+      if (notANumber(next)) {
+        setError(`${col}: must be a number`);
+        return;
+      }
+      row[col] = next;
     }
     if (Object.keys(row).length === 0) {
       setError('fill in at least one column');
