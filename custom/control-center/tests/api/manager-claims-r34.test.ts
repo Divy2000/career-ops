@@ -1,5 +1,6 @@
 // The session manager's claim protocol across server processes (server/claude/manager.invariants.md): a tracker that
-// cannot write its track claim never takes over a turn a live peer follows (R34-claude-L1-01).
+// cannot write its track claim never takes over a turn a live peer follows (R34-claude-L1-01), and a tracker never
+// starts following a turn while a Dev Chat revert holds the session idle (R34-claude-X-01).
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -70,6 +71,37 @@ describe('a standby tracker whose track claim cannot be written (R34-claude-L1-0
     } finally {
       spy.mockRestore();
       warn.mockRestore();
+      await a.close();
+      await b.close();
+      restore();
+      await runsEnded(dataRoot);
+    }
+  }, 40_000);
+});
+
+describe('a Dev Chat revert beside a peer that starts tracking the turn (R34-claude-X-01)', () => {
+  it('given a cancelled turn whose run ended and nobody tracks, when a peer reconciles while the revert holds the session idle, then the peer only starts settling it after the revert', async () => {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = tempDir('cc-r34-revert-guard-');
+    const restore = withScenario([{ type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] }, result]);
+    const a = await makeTestApp({ dataRoot, guardRoot });
+    const b = await makeTestApp({ dataRoot, guardRoot }, { deferReconcile: true });
+    try {
+      const meta = a.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      // A run that ended while no server tracked its turn (cancelled between a drain and the next server's activation).
+      const run = a.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', ''], cwd: process.cwd() } });
+      a.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      await until(() => a.runner.store.read(run.id)?.endedAt != null && !a.runner.ending(run.id), 'the run to end');
+      a.sessions.store.setStatus(meta.id, 'cancelled');
+      const claim = path.join(a.sessions.store.guardDirOf(meta.id), 'track.claim');
+      const seen = a.sessions.whileIdle(meta.id, () => {
+        // The peer's activation lands between the revert's idle check and its act.
+        b.activate();
+        return { tracking: b.sessions.isActive(meta.id), claimed: fs.existsSync(claim), ended: b.sessions.read(meta.id)!.turns[0]!.endedAt };
+      });
+      expect(seen).toEqual({ tracking: true, claimed: false, ended: null });
+      await until(() => b.sessions.read(meta.id)!.turns[0]!.endedAt !== null && !b.sessions.isActive(meta.id), 'B to settle the turn once the revert is done', 20_000);
+    } finally {
       await a.close();
       await b.close();
       restore();

@@ -1498,7 +1498,7 @@ export class SessionManager {
     return began;
   }
 
-  /** `spawned`: the turn is one this process just spawned. */
+  /** `spawned`: the turn is one this process just spawned, under the session's turn claim it still holds. */
   private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string, opts: { spawned: boolean }): void {
     if (this.active.has(id)) return;
     const tracked: Tracked = { timer: null, release: this.claimTrack(id, opts.spawned), settling: false };
@@ -1691,11 +1691,24 @@ export class SessionManager {
 
   /**
    * Takes the session's track claim, or null (the tracker stands by and asks again) while another live tracker holds it.
+   * A tracker starts only under the session's turn claim, the one every idle check (send, fork, delete, whileIdle) holds
+   * while it trusts that no track claim is held: a turn this process just `spawned` holds it already, and any other
+   * tracker (a reconcile, a standby taking over) takes it first, standing by while another process holds it.
    * A track claim that cannot be written (a full disk, a guard folder gone read-only) is warned of: a turn this process
    * just spawned is followed without it (left unfollowed it would never end) unless a live tracker holds the claim, and
    * any other tracker stands by, since it cannot tell whether a live peer is following the turn.
    */
   private claimTrack(id: string, spawned: boolean): (() => void) | null {
+    let unclaimTurn: (() => void) | null = null;
+    if (!spawned) {
+      try {
+        unclaimTurn = this.takeSessionClaim(id, TURN_CLAIM_FILE);
+      } catch (err) {
+        console.warn(`[sessions] session ${id}: could not take its turn claim to follow its turn, so it stands by and asks again: ${(err as Error).message}`);
+        return null;
+      }
+      if (!unclaimTurn) return null;
+    }
     try {
       return this.takeSessionClaim(id, TRACK_CLAIM_FILE);
     } catch (err) {
@@ -1705,6 +1718,12 @@ export class SessionManager {
       }
       console.warn(`[sessions] session ${id}: could not take its track claim, so another server process cannot see it finishing: ${(err as Error).message}`);
       return () => {};
+    } finally {
+      try {
+        unclaimTurn?.();
+      } catch (err) {
+        console.warn(`[sessions] session ${id}: could not give back the turn claim it took to follow its turn: ${(err as Error).message}`);
+      }
     }
   }
 

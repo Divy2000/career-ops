@@ -11,11 +11,20 @@ Every piece of shared state has exactly one owner at a time, and the owner is re
 | State | Owner | Recorded in | Taken | Released |
 |-------|-------|-------------|-------|----------|
 | Preparing a session's next turn | the process starting it | `{guard}/turn.claim` | before the idle check is trusted | in the `finally` of send / fork / delete / `whileIdle` |
-| Following and settling a session's latest turn | the one tracker | `{guard}/track.claim` + `active` | when `track()` starts or a standby takes over a gone holder | `untrack()`, the single exit of every settle path; `close()` |
+| Following and settling a session's latest turn | the one tracker | `{guard}/track.claim` + `active` | when `track()` starts or a standby takes over a gone holder, always under the turn claim (see Claim order) | `untrack()`, the single exit of every settle path; `close()` |
 | Starting an evaluation of a posting | the starting process | `posting-claims/*.claim` + `postingHolds` | before the duplicate check | once the session's turn runs (or the start fails) |
 | A fan-out starting a posting | the fan-out | `batchStarting` | with its posting claim | when the fan-out returns |
 | A session's report number | the session record | `meta.reportNum` | at reservation | `setReportNum(null)` before the first await of the release |
 | A report number a session reserved itself | the session | `{guard}/held-report-nums.log` (`+N=<sentinel key>;`) | when its `reserve-report-num.mjs` output is read | the session's own release (`-N`), or the sentinel no longer being that reservation |
+
+### Claim order
+
+The two session claims are taken in one order: the turn claim, then the track claim. Every idle check (send, fork,
+delete, `whileIdle`) holds the turn claim while it trusts that no track claim is held, and no tracker starts without
+the turn claim: a turn this process just spawned is tracked under the turn claim its start still holds, and any other
+tracker (a reconcile, a standby taking over) takes the turn claim first, takes the track claim, then lets the turn claim
+go. While another process holds the turn claim, such a tracker stands by and asks again. So no tracker can start
+between an idle check and its act.
 
 A track claim that cannot be written (a full disk, a read-only guard folder) is never read as held: a reconcile or a
 standby stands by and asks again, and only a turn this process just spawned is followed without one, unless a live
