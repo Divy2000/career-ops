@@ -1,4 +1,5 @@
 // Insights scripts (JSON by default, spec 1d) cached by the mtimes of their inputs and code, and the local day.
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ServerConfig } from '../config.js';
@@ -139,14 +140,19 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
   const flightKey = `${file}\n${key}`;
   const inFlight = runs.get(flightKey);
   if (inFlight) return inFlight;
-  const run = runInsight(cfg, exec, { script, label: def.label, scriptPath, args: extra.args, env: extra.env, key, file, now }).finally(() => runs.delete(flightKey));
+  const seq = (started += 1);
+  const run = runInsight(cfg, exec, { script, label: def.label, scriptPath, args: extra.args, env: extra.env, key, file, now, seq }).finally(() => runs.delete(flightKey));
   runs.set(flightKey, run);
   return run;
 }
 
 const runs = new Map<string, Promise<InsightRead>>();
+// Runs for one cache file with different inputs overlap when the data changes mid-run: each run is numbered when it
+// starts, and a run that ends after a later-started one has written the file leaves that newer entry in place.
+let started = 0;
+const written = new Map<string, number>();
 
-async function runInsight(cfg: ServerConfig, exec: Exec, job: { script: string; label: string; scriptPath: string; args: string[]; env: Record<string, string>; key: string; file: string; now: () => number }): Promise<InsightRead> {
+async function runInsight(cfg: ServerConfig, exec: Exec, job: { script: string; label: string; scriptPath: string; args: string[]; env: Record<string, string>; key: string; file: string; now: () => number; seq: number }): Promise<InsightRead> {
   const { script, scriptPath, key, file, now } = job;
   const r = await exec(process.execPath, [scriptPath, ...job.args], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1', ...job.env } });
   let json: unknown;
@@ -169,12 +175,13 @@ async function runInsight(cfg: ServerConfig, exec: Exec, job: { script: string; 
   // A failure (a timeout or a killed child included) is often transient: caching it would serve it until the inputs or
   // the day change, so only a clean run is kept.
   // The cache only saves a rerun: a write that fails (a full disk, an unwritable directory) still returns the result.
-  if (read.kind === 'ok') {
-    const tmp = `${file}.tmp-${process.pid}`;
+  if (read.kind === 'ok' && (written.get(file) ?? 0) < job.seq) {
+    const tmp = `${file}.tmp-${process.pid}-${randomUUID()}`;
     try {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify(read));
       fs.renameSync(tmp, file);
+      written.set(file, job.seq);
     } catch {
       // Not cached; the next load reruns the script. Removing the temp file fails too when a folder above it is a file.
       try {
