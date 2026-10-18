@@ -167,6 +167,27 @@ describe('a change anywhere in that graph restarts the server child, whose fresh
   });
 });
 
+describe('a new server/ or shared/ module reloads the server child once (R35-supervisor-X-01)', () => {
+  it('the refresh after the reload watches a module the entries gained, without signalling it again', async () => {
+    const root = scratchRoot();
+    const entries = ['custom/projects/lib.mjs'];
+    const changes: string[] = [];
+    const watcher = await watchCoreGraph(root, () => entries, (file) => changes.push(file));
+    stops.push(watcher.close);
+    await wait(SETTLE);
+    // The server/ and shared/ tree watcher reloaded for the new module; the reload then refreshes the graph.
+    const added = put(root, 'custom/control-center/server/new-thing.ts', 'export const x = 1;\n');
+    entries.push('custom/control-center/server/new-thing.ts');
+    await watcher.refresh();
+    expect(changes).toEqual([]);
+    // Watched from now on: a later edit of the module still restarts the child.
+    await wait(SETTLE);
+    put(root, 'custom/control-center/server/new-thing.ts', 'export const x = 2;\n');
+    for (let i = 0; i < 100 && !changes.length; i++) await wait(50);
+    expect(changes).toEqual([added]);
+  });
+});
+
 describe('a disk error in the watched trees is logged, and the supervisor keeps serving the proxy and /__recovery (R20-supervisor-L1-01)', () => {
   // Root reads and watches a mode 000 folder, so there is no EACCES to see.
   it.skipIf(process.getuid?.() === 0)('the server entries skip a subtree that cannot be read, keeping every file that can', () => {
