@@ -100,6 +100,18 @@ function ownerOf() {
   });
 }
 
+test('every temp path is made by make_temp, and one cleanup trap owns every exit, QUIT included (R31-scripts-b-L1-01, R32-scripts-b-L1-02)', () => {
+  const owners = ownerOf();
+  const makers = code.map((l, i) => (/\bmktemp\b/.test(l) ? owners[i] || '<top level>' : null)).filter(Boolean);
+  assert.deepEqual([...new Set(makers)], ['make_temp']);
+  assert.match(SCRIPT, /^trap cleanup EXIT$/m);
+  for (const [sig, code] of [['HUP', 129], ['INT', 130], ['QUIT', 131], ['TERM', 143]]) assert.match(SCRIPT, new RegExp(`^trap 'exit ${code}' ${sig}$`, 'm'), sig);
+  // exec keeps the PID a lock holder polls for, so the EXIT trap never runs: cleanup runs first.
+  const execAt = code.findIndex((l) => /^\s*exec "\$DIR\/custom\/control-center\/bin\/cc"/.test(l));
+  assert.notEqual(execAt, -1);
+  assert.match(code.slice(execAt - 3, execAt).join('\n'), /cleanup/);
+});
+
 test('the invariants doc this file encodes sits next to install.sh', () => {
   assert.ok(fs.existsSync(path.join(INSTALL_DIR, 'install.invariants.md')));
 });

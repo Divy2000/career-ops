@@ -42,7 +42,7 @@ async function signalledRun(w, args, { env, signal, ready }) {
 
 // ---------------------------------------------------------------- invariants 2 and 4: every exit releases everything
 
-for (const [signal, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]]) {
+for (const [signal, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGQUIT', 131], ['SIGTERM', 143]]) {
   test(`${signal} while the installer waits for the daily lock exits ${code}, leaves no temp file and no waiter that later takes the lock (R31-scripts-b-L1-01, R32-scripts-b-L1-02)`, async () => {
     const { w, D, args } = fresh();
     w.makeCheckout(D, { files: { 'data/immigration/logs/.keep': '' } });
@@ -61,6 +61,21 @@ for (const [signal, code] of [['SIGHUP', 129], ['SIGINT', 130], ['SIGTERM', 143]
     assert.ok(lockFree(D), `${signal}: the daily lock is free`);
   });
 }
+
+test('an installer that fails while holding the daily lock has released it, and removed .live-update.pid, by the time it has exited (R32-scripts-b-L1-02)', () => {
+  // Several runs, since a holder that only polls for the installer can win the race now and then.
+  for (let i = 0; i < 3; i++) {
+    const { w, D, args } = fresh();
+    w.makeCheckout(D, { files: { 'data/immigration/logs/.keep': '' } });
+    const r = w.run(args(), { env: { FAKE_NPM_EXIT: '1' } });
+    const pidFile = fs.existsSync(path.join(D, 'data', 'immigration', '.live-update.pid'));
+    const free = lockFree(D);
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /error: npm .* failed in /);
+    assert.equal(pidFile, false, `run ${i}: .live-update.pid outlived the installer`);
+    assert.equal(free, true, `run ${i}: the daily lock outlived the installer`);
+  }
+});
 
 // ---------------------------------------------------------------- invariant 8: no headless side effect before a refusal
 

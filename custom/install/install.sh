@@ -5,20 +5,52 @@
 # Written for the bash 3.2 that macOS ships.
 set -eEuo pipefail
 trap 'echo "install.sh: unexpected failure at line $LINENO (see the install log)" >&2' ERR
-# The temp files and folder in use right now, each cleared once removed. A run stopped part-way (Ctrl-C at the Keychain
-# read, the daily-lock wait or the validator clone; a closed terminal) exits through the EXIT trap, which removes them.
-# LOCK_WAITER is the lockf still queued on a daily lock: stopped first, so it never takes the lock for a gone installer.
-KEYCHAIN_ERR_FILE="" LOCK_READY="" LOCK_ERRS="" PROJECTS_SCRATCH="" LOCK_WAITER=""
-remove_temp_paths() {
-  if [ -n "$LOCK_WAITER" ]; then
-    kill "$LOCK_WAITER" 2>/dev/null || true
-    wait "$LOCK_WAITER" 2>/dev/null || true
-  fi
-  rm -rf -- ${KEYCHAIN_ERR_FILE:+"$KEYCHAIN_ERR_FILE"} ${LOCK_READY:+"$LOCK_READY"} ${LOCK_ERRS:+"$LOCK_ERRS"} ${PROJECTS_SCRATCH:+"$PROJECTS_SCRATCH"} 2>/dev/null || true
+# The invariants this script keeps are in install.invariants.md next to it; tests/install-invariants*.spec.mjs encode them.
+# Process-owned state, which cleanup (the one EXIT trap, also reached from HUP, INT, QUIT and TERM) releases on every exit:
+# the temp paths make_temp registered, the lockf still queued on a daily lock (LOCK_WAITER), and the daily locks held,
+# each by a holder process (DAILY_HOLDERS) under its lockf (DAILY_LOCKFS).
+TEMP_PATHS=() LOCK_WAITER="" LOCK_READY="" DAILY_HOLDERS=() DAILY_LOCKFS=()
+# make_temp <var> <name> [-d]: creates a temp file (a folder with -d) in TMPDIR, registers it for cleanup and stores its
+# path in <var>; returns 1, with <var> empty, when mktemp fails. The only place a temp path is made.
+make_temp() {
+  local made
+  made="$(mktemp ${3:+-d} "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || { printf -v "$1" '%s' ""; return 1; }
+  TEMP_PATHS+=("$made")
+  printf -v "$1" '%s' "$made"
 }
-trap remove_temp_paths EXIT
+# drop_temp <path>...: removes those temp paths now and forgets them. Empty arguments are ignored.
+drop_temp() {
+  local p t kept=()
+  for p in "$@"; do if [ -n "$p" ]; then rm -rf -- "$p" 2>/dev/null || true; fi; done
+  for t in ${TEMP_PATHS[@]+"${TEMP_PATHS[@]}"}; do
+    for p in "$@"; do if [ "$t" = "$p" ]; then continue 2; fi; done
+    kept+=("$t")
+  done
+  TEMP_PATHS=(${kept[@]+"${kept[@]}"})
+}
+# Ends every daily-lock holder and waits for its lockf, so the lock is free and .live-update.pid gone on return.
+daily_lock_release() {
+  local pid
+  for pid in ${DAILY_HOLDERS[@]+"${DAILY_HOLDERS[@]}"}; do kill "$pid" 2>/dev/null || true; done
+  for pid in ${DAILY_LOCKFS[@]+"${DAILY_LOCKFS[@]}"}; do wait "$pid" 2>/dev/null || true; done
+  DAILY_HOLDERS=()
+  DAILY_LOCKFS=()
+}
+cleanup() {
+  if [ -n "$LOCK_WAITER" ]; then
+    # Stopped first, so it never takes the lock for a gone installer; a holder it already started is ended with it.
+    kill "$LOCK_WAITER" 2>/dev/null || true
+    if [ -s "$LOCK_READY" ]; then DAILY_HOLDERS+=("$(cat "$LOCK_READY" 2>/dev/null)"); fi
+    DAILY_LOCKFS+=("$LOCK_WAITER")
+    LOCK_WAITER=""
+  fi
+  daily_lock_release
+  drop_temp ${TEMP_PATHS[@]+"${TEMP_PATHS[@]}"}
+}
+trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
+trap 'exit 131' QUIT
 trap 'exit 143' TERM
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -397,12 +429,11 @@ find_claude() {
 keychain_check() {
   local rc=0
   KEYCHAIN_WHY=""
-  KEYCHAIN_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || KEYCHAIN_ERR_FILE=""
+  make_temp KEYCHAIN_ERR_FILE career-ops-install-keychain || true
   bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>"${KEYCHAIN_ERR_FILE:-/dev/null}" || rc=$?
   if [ -n "$KEYCHAIN_ERR_FILE" ]; then
     KEYCHAIN_WHY="$(tail -c 200 "$KEYCHAIN_ERR_FILE" | tr '\n' ' ' | sed 's/ *$//')"
-    rm -f "$KEYCHAIN_ERR_FILE"
-    KEYCHAIN_ERR_FILE=""
+    drop_temp "$KEYCHAIN_ERR_FILE"
   fi
   KEYCHAIN_RC=$rc
 }
@@ -442,14 +473,13 @@ bounded() {
 keychain_read_token() {
   local rc=0
   KEYCHAIN_WHY=""
-  KEYCHAIN_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || KEYCHAIN_ERR_FILE=""
+  make_temp KEYCHAIN_ERR_FILE career-ops-install-keychain || true
   # The || stays inside $(...) too, where the ERR trap would otherwise report the failed read as a crash.
   KEYCHAIN_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${KEYCHAIN_ERR_FILE:-/dev/null}" || exit "$?")" || rc=$?
   KEYCHAIN_TOKEN="$(trim "$KEYCHAIN_TOKEN")"
   if [ -n "$KEYCHAIN_ERR_FILE" ]; then
     KEYCHAIN_WHY="$(tail -c 200 "$KEYCHAIN_ERR_FILE" | tr '\n' ' ' | sed 's/ *$//')"
-    rm -f "$KEYCHAIN_ERR_FILE"
-    KEYCHAIN_ERR_FILE=""
+    drop_temp "$KEYCHAIN_ERR_FILE"
   fi
   if [ "$rc" = 0 ] && [ -z "$KEYCHAIN_TOKEN" ]; then rc=44; fi
   if [ "$rc" != 0 ]; then KEYCHAIN_TOKEN=""; fi
@@ -575,8 +605,6 @@ installed_job_root() {
 # that finds the lock held waits for the installer instead of skipping the day. Seconds to wait for a running job.
 DAILY_WAIT="${CAREER_OPS_INSTALL_DAILY_WAIT:-120}"
 [[ "$DAILY_WAIT" =~ ^[0-9]+$ ]] || DAILY_WAIT=120
-DAILY_HOLDERS=()
-DAILY_LOCKFS=()
 # The lock that daily_lock_take could not take, for the caller's message.
 DAILY_LOCK_FAILED=""
 
@@ -617,8 +645,8 @@ daily_lock_take() {
 
 daily_lock_take_one() {
   local lock="$1" lockf_pid rc=0 polls=0 line
-  LOCK_READY="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
-  LOCK_ERRS="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
+  make_temp LOCK_READY career-ops-install-lock || return 1
+  make_temp LOCK_ERRS career-ops-install-lock || { drop_temp "$LOCK_READY"; return 1; }
   # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
   # The holder writes nothing for an installer that is already gone, and its exit removes the ready file too, in case the
   # installer's EXIT trap removed it first.
@@ -634,8 +662,9 @@ daily_lock_take_one() {
       if [ "$rc" != 75 ]; then
         while IFS= read -r line || [ -n "$line" ]; do warn "$line"; done < "$LOCK_ERRS"
       fi
-      rm -f "$LOCK_READY" "$LOCK_ERRS"
-      LOCK_READY="" LOCK_ERRS="" LOCK_WAITER=""
+      LOCK_WAITER=""
+      drop_temp "$LOCK_READY" "$LOCK_ERRS"
+      LOCK_READY="" LOCK_ERRS=""
       return "$rc"
     fi
     polls=$((polls + 1))
@@ -644,16 +673,9 @@ daily_lock_take_one() {
   done
   DAILY_HOLDERS+=("$(cat "$LOCK_READY")")
   DAILY_LOCKFS+=("$lockf_pid")
-  rm -f "$LOCK_READY" "$LOCK_ERRS"
-  LOCK_READY="" LOCK_ERRS="" LOCK_WAITER=""
-}
-
-daily_lock_release() {
-  local pid
-  for pid in ${DAILY_HOLDERS[@]+"${DAILY_HOLDERS[@]}"}; do kill "$pid" 2>/dev/null || true; done
-  for pid in ${DAILY_LOCKFS[@]+"${DAILY_LOCKFS[@]}"}; do wait "$pid" 2>/dev/null || true; done
-  DAILY_HOLDERS=()
-  DAILY_LOCKFS=()
+  LOCK_WAITER=""
+  drop_temp "$LOCK_READY" "$LOCK_ERRS"
+  LOCK_READY="" LOCK_ERRS=""
 }
 
 # CAREER_OPS_ROOT, else CAREER_OPS_DATA_DIR, each trimmed like path-resolver.mjs does; empty when neither is set.
@@ -747,18 +769,17 @@ check_projects() {
   lib="$(projects_lib)"
   if [ -z "$lib" ]; then
     if [ "$mode" != fetch ] || ! have git; then return 0; fi
-    PROJECTS_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-validator.XXXXXX")"
+    make_temp PROJECTS_SCRATCH career-ops-validator -d
     if git clone --quiet --depth 1 ${REF:+--branch "$REF"} "$FORK_URL" "$PROJECTS_SCRATCH/repo" >/dev/null 2>&1 && [ -f "$PROJECTS_SCRATCH/repo/custom/projects/lib.mjs" ]; then
       lib="$PROJECTS_SCRATCH/repo/custom/projects/lib.mjs"
     else
-      rm -rf "$PROJECTS_SCRATCH"
-      PROJECTS_SCRATCH=""
+      drop_temp "$PROJECTS_SCRATCH"
       printf 'error: could not fetch the projects validator (custom/projects/lib.mjs from %s) to check --projects.\n%s Retry, or run without --projects and import the file later in the Control Center (Profile > Projects).\n' "$(redact_url "$FORK_URL")" "$PROJECTS_NO_CHANGE" >&2
       exit 1
     fi
   fi
   node "$SCRIPT_DIR/seed.mjs" projects-check --lib "$lib" --file "$PROJECTS" >/dev/null || rc=$?
-  if [ -n "$PROJECTS_SCRATCH" ]; then rm -rf "$PROJECTS_SCRATCH"; PROJECTS_SCRATCH=""; fi
+  drop_temp "${PROJECTS_SCRATCH:-}"
   if [ "$rc" -ne 0 ]; then
     printf '%s Fix the projects file above: one "## Title -- link" block per project with "- " bullets, or a projects JSON.\n' "$PROJECTS_NO_CHANGE" >&2
     exit 2
@@ -1537,6 +1558,9 @@ if [ "$CC_START" = 1 ]; then
       fi
     fi
     say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
+    # exec keeps this PID, so the EXIT trap never runs and a lock holder polling for it would live on: released first.
+    cleanup
+    trap - EXIT
     exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
   fi
 fi
