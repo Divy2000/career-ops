@@ -549,6 +549,71 @@ process.kill = (pid, signal) => {
     expect(alive, stderr).toEqual([]);
     canariesGone(box);
   }, 60_000);
+
+  /**
+   * A CLI that acts out each Read and WebFetch step of its prompt the way the real one reports it: the hook payload
+   * holds the tilde-expanded path and a transcript under ~/.claude/projects, and every refusal names the node binary,
+   * the hook command and the expanded path.
+   */
+  function actingCli(box: Box, version: string) {
+    const impl = path.join(box.bin, 'acting-claude.mjs');
+    fs.writeFileSync(
+      impl,
+      `import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+const argv = process.argv.slice(2);
+if (argv[0] === '--version') { console.log(${JSON.stringify(`${version} (Claude Code)`)}); process.exit(0); }
+const flag = (f) => argv[argv.indexOf(f) + 1];
+const prompt = flag('-p');
+const sessionId = flag('--session-id');
+const settingsFile = flag('--settings');
+const hookCommand = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).hooks.PreToolUse[0].hooks.at(-1).command;
+const transcript = path.join(os.homedir(), '.claude', 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'), sessionId + '.jsonl');
+fs.mkdirSync(path.dirname(transcript), { recursive: true });
+fs.writeFileSync(transcript, '{}\\n');
+const out = (e) => process.stdout.write(JSON.stringify(e) + '\\n');
+let n = 0;
+for (const [, tool, key, value] of prompt.matchAll(/Call the (Read|WebFetch) tool with (file_path|url) (\\S+)/g)) {
+  const id = 'u' + n++;
+  const expanded = value.replace(/^~/, os.homedir());
+  fs.appendFileSync(path.join(path.dirname(settingsFile), 'hook-log.ndjson'), JSON.stringify({ tool_name: tool, tool_input: { [key]: expanded }, transcript_path: transcript }) + '\\n');
+  out({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: tool, input: { [key]: value } }] } });
+  out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: true, content: 'PreToolUse hook error: [' + process.execPath + ' ' + hookCommand + ']: ' + expanded + ' is outside the repo and data roots' }] } });
+}
+out({ type: 'result', is_error: false, permission_denials: [] });
+`,
+    );
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(impl)} "$@"\n`, { mode: 0o755 });
+    return claude;
+  }
+  const runActing = (box: Box, claude: string, args: string[]) =>
+    spawnSync(process.execPath, [box.script, ...args], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { ...process.env, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+    });
+  const dashed = (p: string) => p.replace(/[^a-zA-Z0-9]/g, '-');
+
+  it('given cases whose payloads and results name the home, temp, checkout and node paths, when the probe records, then contract.json holds none of them (R35-supervisor-L2-01)', () => {
+    const box = sandbox();
+    const r = runActing(box, actingCli(box, '9.9.9'), ['--record']);
+    expect(r.status, r.stderr).toBe(1);
+    const probe = JSON.parse(fs.readFileSync(box.contract, 'utf8')).claude.readProbe;
+    expect(probe.version, r.stderr).toBe('9.9.9');
+    expect(probe.info.tildeHookPath).toMatch(/^\$HOME\/\.cc-probe-[0-9a-f]+\/h1\.txt$/);
+    expect(probe.info.tildeResult).toMatch(/\$HOME\/\.cc-probe-/);
+    expect(probe.info.c9ControlCalls.length).toBeGreaterThan(0);
+    expect(probe.info.webFetchRaw.perUrl[0].url).toBe('file://$TMPDIR/cc-reads-probe-XXXXXX/outside/w1.txt');
+    const recorded = JSON.stringify(probe);
+    const real = (p: string) => fs.realpathSync(p);
+    for (const p of [box.root, real(box.root), box.home, real(box.home), path.dirname(box.script), process.execPath]) {
+      expect(recorded.includes(p), `${p} in ${recorded}`).toBe(false);
+      expect(recorded.includes(dashed(p)), `${dashed(p)} in ${recorded}`).toBe(false);
+    }
+    expect(recorded).not.toMatch(/cc-reads-probe-(?!XXXXXX)/);
+  }, 60_000);
 });
 
 describe('claude-probe.mjs ends every CLI process group it starts (invariant 11)', () => {

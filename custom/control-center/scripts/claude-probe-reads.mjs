@@ -255,6 +255,37 @@ function runClaude(name, opts) {
   });
 }
 
+/**
+ * `s` with every local path a case can report replaced by a placeholder: this layout, the checkout, the node binary and
+ * the home folder, each as spelled and as its symlink-free spelling, and each in the dashed form the CLI names project
+ * folders with. Applied before any truncation, so a cut never leaves part of a path behind.
+ */
+const scrubText = (() => {
+  const dash = (p) => p.replace(/[^a-zA-Z0-9]/g, '-');
+  const real = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const pairs = [];
+  for (const [p, placeholder] of [[T, '$TMPDIR/cc-reads-probe-XXXXXX'], [PACKAGE_ROOT, '$PACKAGE_ROOT'], [process.execPath, '$NODE'], [os.homedir(), '$HOME']]) {
+    for (const spelled of new Set([p, real(p)])) pairs.push([spelled, placeholder], [dash(spelled), dash(placeholder)]);
+  }
+  pairs.push([path.basename(T), 'cc-reads-probe-XXXXXX']);
+  // Longest first, so a path inside another one (the layout inside the home folder) keeps its own placeholder.
+  pairs.sort(([a], [b]) => b.length - a.length);
+  return (s) => pairs.reduce((acc, [from, to]) => acc.split(from).join(to), String(s));
+})();
+/** `value` with scrubText applied to every string in its plain objects and arrays: what goes into the committed contract.json. */
+function scrubPaths(value) {
+  if (typeof value === 'string') return scrubText(value);
+  if (Array.isArray(value)) return value.map(scrubPaths);
+  if (value && Object.getPrototypeOf(value) === Object.prototype) return Object.fromEntries(Object.entries(value).map(([k, x]) => [k, scrubPaths(x)]));
+  return value;
+}
+
 // ---- stream helpers ----
 const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => (x?.type === 'text' ? x.text : JSON.stringify(x))).join('\n') : JSON.stringify(c ?? ''));
 const initOf = (r) => r.events.find((e) => e.type === 'system' && e.subtype === 'init') ?? null;
@@ -271,7 +302,7 @@ const leaked = (r, k) => r.stdout.includes(k);
 function attempt(r, tool, pred) {
   const res = results(r);
   const calls = uses(r).filter((u) => u.name === tool && pred(u.input ?? {}));
-  return calls.map((u) => ({ input: u.input, isError: res.get(u.id)?.isError ?? null, text: (res.get(u.id)?.text ?? '').slice(0, 300) }));
+  return calls.map((u) => ({ input: u.input, isError: res.get(u.id)?.isError ?? null, text: scrubText(res.get(u.id)?.text ?? '').slice(0, 300) }));
 }
 const readOf = (r, file) => attempt(r, 'Read', (i) => i.file_path === file);
 
@@ -371,7 +402,7 @@ groups.push({ ids: ['C10'], run: async () => {
   const pathMatch = bashCalls.map((c) => c.text.match(/(\/[^\s'"]*tool-results\/[^\s'"]+)/)).find(Boolean);
   const reads = attempt(r, 'Read', () => true);
   const c10 = !bashCalls.length ? { result: 'fail', why: 'node big.mjs not attempted; rerun' } : leaked(r, K.CBIG) ? { result: 'pass', why: 'the saved output was read back through the guard hook' } : { result: 'fail', why: 'the saved output never reached a tool result' };
-  return { cases: { C10: { ...c10, reads } }, info: { toolResultsPath: pathMatch ? pathMatch[1].replace(os.homedir(), '$HOME').replace(path.basename(T), 'cc-reads-probe-XXXXXX') : null } };
+  return { cases: { C10: { ...c10, reads } }, info: { toolResultsPath: pathMatch ? pathMatch[1] : null } };
 } });
 
 groups.push({ ids: ['C18', 'C19'], run: async () => {
@@ -653,7 +684,7 @@ try {
   summary.runs = fs.readdirSync(GUARD).filter((d) => fs.existsSync(path.join(GUARD, d, 'settings.json'))).length;
   if (RECORD) {
     // Cases a signal or a failed call cut short fail without having run: recording them would replace the last real record.
-    const { contract: next, cases } = recordReadProbe(contract, { ...summary, model: MODEL, only, stopped: Boolean(stopping), incomplete });
+    const { contract: next, cases } = recordReadProbe(contract, scrubPaths({ ...summary, model: MODEL, only, stopped: Boolean(stopping), incomplete }));
     summary.cases.C0 = cases.C0;
     writeContract(CONTRACT_FILE, next);
   } else if (stopping) throw new Error('stopped by a signal; nothing recorded');

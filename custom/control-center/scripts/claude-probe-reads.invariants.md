@@ -49,7 +49,10 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
    Otherwise it merges (`--only`) or replaces the record,
    adds the version to `approvedVersions` only when every non-C0 case is `pass` or `info`, and recomputes C0.
 10. **contract.json is the old bytes or the new record, never a torn file.** The write goes to a sibling temp file
-    and is renamed over it; a failed write removes the temp file and leaves contract.json untouched.
+    and is renamed over it; a failed write removes the temp file and leaves contract.json untouched. The record names
+    no local path: the whole recorded run passes through `scrubPaths` first, which puts `$TMPDIR/cc-reads-probe-XXXXXX`,
+    `$PACKAGE_ROOT`, `$NODE` and `$HOME` for the layout, the checkout, the node binary and the home folder (as spelled,
+    symlink-free and in the CLI's dashed project-folder form), and a tool result is scrubbed before it is truncated.
 
 ## Child processes
 
