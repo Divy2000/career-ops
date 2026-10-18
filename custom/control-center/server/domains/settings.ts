@@ -41,30 +41,49 @@ export type SettingsRead = { settings: AppSettings; problem: string | null; etag
 const ABSENT_ETAG = 'none';
 const etagOf = (raw: string) => crypto.createHash('sha256').update(raw).digest('hex').slice(0, 20);
 
+/** Fields of settings.json this version does not know (a newer version's, a hand-added one), kept through a save. */
+type UnknownFields = { top: Record<string, unknown>; usageBudgets: Record<string, unknown> };
+const NO_UNKNOWN: UnknownFields = { top: {}, usageBudgets: {} };
+
 /** Missing or malformed settings fall back to the defaults; the problem is reported, never swallowed silently. */
 export function readSettings(dataRoot: string): SettingsRead {
+  const { unknown: _unknown, ...read } = readSettingsFile(dataRoot);
+  return read;
+}
+
+function readSettingsFile(dataRoot: string): SettingsRead & { unknown: UnknownFields } {
   const abs = path.join(dataRoot, SETTINGS_REL);
   let raw: string;
   try {
     raw = fs.readFileSync(abs, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { settings: DEFAULT_SETTINGS, problem: null, etag: ABSENT_ETAG };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { settings: DEFAULT_SETTINGS, problem: null, etag: ABSENT_ETAG, unknown: NO_UNKNOWN };
     throw err;
   }
   return { ...parseSettings(raw), etag: etagOf(raw) };
 }
 
-function parseSettings(raw: string): { settings: AppSettings; problem: string | null } {
+function parseSettings(raw: string): { settings: AppSettings; problem: string | null; unknown: UnknownFields } {
+  let rawValue: unknown;
   try {
-    const rawValue: unknown = JSON.parse(raw);
-    const parsed = storedSettingsSchema.safeParse(rawValue);
-    if (parsed.success) return { settings: mergeSettings(parsed.data, {}), problem: null };
-    // One bad value must not reset its valid neighbors: a one-field PUT over such a file keeps every good setting.
-    const kept = keepValidSettings(rawValue);
-    return { settings: mergeSettings(kept, {}), problem: `settings.json has invalid values: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}` };
+    rawValue = JSON.parse(raw);
   } catch (err) {
-    return { settings: DEFAULT_SETTINGS, problem: `settings.json is not valid JSON: ${(err as Error).message}` };
+    return { settings: DEFAULT_SETTINGS, problem: `settings.json is not valid JSON: ${(err as Error).message}`, unknown: NO_UNKNOWN };
   }
+  const unknown = unknownFields(rawValue);
+  const parsed = storedSettingsSchema.safeParse(rawValue);
+  if (parsed.success) return { settings: mergeSettings(parsed.data, {}), problem: null, unknown };
+  // One bad value must not reset its valid neighbors: a one-field PUT over such a file keeps every good setting.
+  const kept = keepValidSettings(rawValue);
+  return { settings: mergeSettings(kept, {}), problem: `settings.json has invalid values: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}`, unknown };
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function unknownFields(raw: unknown): UnknownFields {
+  if (!isRecord(raw)) return NO_UNKNOWN;
+  const pick = (obj: Record<string, unknown>, known: Record<string, unknown>) => Object.fromEntries(Object.entries(obj).filter(([k]) => !Object.hasOwn(known, k)));
+  return { top: pick(raw, appSettingsSchema.shape), usageBudgets: isRecord(raw.usageBudgets) ? pick(raw.usageBudgets, appSettingsSchema.shape.usageBudgets.shape) : {} };
 }
 
 /** Each top-level field parsed alone, so a file with one invalid value keeps the rest instead of falling back to defaults. */
@@ -107,20 +126,20 @@ export type SettingsUpdate =
  * no other request of this server runs between them.
  */
 export function updateSettings(dataRoot: string, patch: Partial<AppSettings>, opts: { reset?: boolean; ifMatch?: string } = {}): SettingsUpdate {
-  const current = readSettings(dataRoot);
+  const { unknown, ...current } = readSettingsFile(dataRoot);
   const ifMatch = opts.ifMatch?.replace(/^(W\/)?"|"$/g, '');
   if (ifMatch !== undefined && ifMatch !== '*' && ifMatch !== current.etag) return { ok: false, code: 'settings-changed', current };
   if (current.problem && !opts.reset) return { ok: false, code: 'settings-problem', problem: current.problem };
   const next = appSettingsSchema.parse(mergeSettings(current.settings, patch));
-  return { ok: true, settings: next, etag: persistSettings(dataRoot, next) };
+  return { ok: true, settings: next, etag: persistSettings(dataRoot, next, unknown) };
 }
 
-/** Writes the settings atomically and answers the new ETag. */
-function persistSettings(dataRoot: string, next: AppSettings): string {
+/** Writes the settings, with the fields this version does not know as they were, atomically and answers the new ETag. */
+function persistSettings(dataRoot: string, next: AppSettings, unknown: UnknownFields): string {
   const abs = path.join(dataRoot, SETTINGS_REL);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = `${abs}.tmp-${process.pid}`;
-  const raw = JSON.stringify(next, null, 2) + '\n';
+  const raw = JSON.stringify({ ...unknown.top, ...next, usageBudgets: { ...unknown.usageBudgets, ...next.usageBudgets } }, null, 2) + '\n';
   try {
     fs.writeFileSync(tmp, raw);
     fs.renameSync(tmp, abs);

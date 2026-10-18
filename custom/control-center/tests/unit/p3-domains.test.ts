@@ -548,4 +548,17 @@ describe('app settings', () => {
     fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ usageBudgets: { sevenDayTokens: 'many' } }));
     expect(readSettings(root).problem).toMatch(/usageBudgets\.sevenDayTokens/);
   });
+  it('given settings.json holds fields this version does not know, when a setting is saved, then they are kept in the file (R34-srv-core-X-02)', () => {
+    const root = tempDir('cc-settings-');
+    const file = path.join(root, SETTINGS_REL);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ retention: 600, futureSetting: 'keep-me', usageBudgets: { fiveHourTokens: 5000, thirtyDayTokens: 9 } }));
+    expect(readSettings(root).problem).toBeNull();
+    expect(updateSettings(root, { logos: true })).toMatchObject({ ok: true, settings: { logos: true, retention: 600 } });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ logos: true, retention: 600, futureSetting: 'keep-me', usageBudgets: { fiveHourTokens: 5000, sevenDayTokens: null, thirtyDayTokens: 9 } });
+    // A save that replaces a file with a bad value keeps the unknown fields too; only the bad value is replaced.
+    fs.writeFileSync(file, JSON.stringify({ retention: 'lots', futureSetting: 'keep-me' }));
+    expect(updateSettings(root, { logos: false }, { reset: true })).toMatchObject({ ok: true });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toMatchObject({ logos: false, retention: 500, futureSetting: 'keep-me' });
+  });
 });
