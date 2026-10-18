@@ -287,6 +287,11 @@ describe('summarizeDigest', () => {
     expect(summarizeDigest('- Fees rise ([see the notice.](https://u.test/n)) Posts will contact applicants.')[0]).toEqual([{ text: 'Fees rise (' }, { text: 'see the notice.', href: 'https://u.test/n' }, { text: ')' }]);
   });
 
+  it('cuts a first link longer than the limit to the limit, keeping its target, with the ellipsis outside the label (R34-weblib-X-03)', () => {
+    expect(summarizeDigest(`- [${'a'.repeat(201)}](https://example.test/r)`)[0]).toEqual([{ text: 'a'.repeat(160), href: 'https://example.test/r' }, { text: '…' }]);
+    expect(summarizeDigest(`- [${'a'.repeat(150)} *${'b'.repeat(30)}* c](https://example.test/r)`)[0]).toEqual([{ text: `${'a'.repeat(150)} `, href: 'https://example.test/r' }, { text: 'b'.repeat(9), href: 'https://example.test/r' }, { text: '…' }]);
+  });
+
   // Linear work: the quadratic scan took over 20 s on each of these, the linear one well under a second; the bound leaves room for a loaded machine.
   it('summarizes an abbreviation-heavy bullet in linear time (R34-feat-b-X-01)', () => {
     const body = `- ${'e.g. '.repeat(40000)}Final policy update. Later text.`;

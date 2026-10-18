@@ -226,26 +226,24 @@ function ellipsize(out: Span[]): Span[] {
   return out;
 }
 
-/** Clips rendered text to the limit. A link is kept whole or dropped; plain text is cut with an ellipsis. */
+/**
+ * Clips rendered text to the limit. A link is kept whole or dropped; plain text is cut with an ellipsis. Only a link that
+ * starts the line and alone exceeds the limit has its label cut: dropping it would leave nothing, and its target is kept.
+ */
 function clip(spans: Span[]): Span[] {
-  const out: Span[] = [];
   for (const piece of pieces(spans)) {
-    const room = MAX_CHARS - piece.start;
-    const whole = spans.slice(piece.first, piece.last + 1);
-    if (piece.end - piece.start <= room) {
-      out.push(...whole);
-      continue;
+    if (piece.end <= MAX_CHARS) continue;
+    if (piece.link && piece.start > 0) return ellipsize(spans.slice(0, piece.first));
+    const kept = spans.slice(0, piece.first);
+    let at = piece.start;
+    for (const s of spans.slice(piece.first, piece.last + 1)) {
+      if (at >= MAX_CHARS) break;
+      kept.push({ ...s, text: s.text.slice(0, MAX_CHARS - at) });
+      at += s.text.length;
     }
-    const s = spans[piece.first]!;
-    if (s.href) {
-      // A link longer than the limit on its own is still the line; cut, it would mislabel its target.
-      if (out.length === 0) return whole;
-      return ellipsize(out);
-    }
-    out.push({ ...s, text: s.text.slice(0, Math.max(room, 0)) });
-    return ellipsize(out);
+    return ellipsize(kept);
   }
-  return out;
+  return spans;
 }
 
 // Definitions are valid anywhere in the document (including nested under a
