@@ -180,6 +180,8 @@ describe('one tracker settles a turn across server processes (R33-claude-L1-01)'
       const runId = a.sessions.read(id)!.turns[0]!.runId;
       await until(() => a.sessions.read(id)!.turns[0]!.endedAt !== null && !a.sessions.isActive(id), 'A to settle the turn', 20_000);
       await runsEnded(a.cfg.dataRoot);
+      // Neither runner may still be following the run when its folder goes: a late write would land in a removed folder.
+      await until(() => !a.runner.ending(runId) && !b.runner.ending(runId), 'both runners to let go of the run');
       fs.rmSync(a.runner.store.dirOf(runId), { recursive: true, force: true });
       const errors: string[] = [];
       const original = console.error;
