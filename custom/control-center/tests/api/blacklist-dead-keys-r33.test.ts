@@ -74,4 +74,14 @@ describe('blacklist rows the scanner skips by key', () => {
       expect(saved.status, saved.body).toBe(400);
     });
   });
+
+  it('given a file that already holds one empty-key row, when a second copy of it is added, then it is refused', async () => {
+    const legacy = `${FILE}| !!! | 2025-01-01 | company | old |\n`;
+    await withApp(legacy, async (save, abs) => {
+      const dead = { company: '!!!', since: '2025-01-01', scope: 'company', reason: 'old' };
+      const saved = await save([initech, dead, dead]);
+      expect(saved.status, saved.body).toBe(400);
+      expect(fs.readFileSync(abs, 'utf8')).toBe(legacy);
+    });
+  });
 });

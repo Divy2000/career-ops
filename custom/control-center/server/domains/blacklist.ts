@@ -90,16 +90,16 @@ export function blacklistScannerKey(row: Pick<BlacklistRow, 'company' | 'scope'>
 /**
  * The first row of `rows` the scanner would never read: one whose key is empty, or a second row under a key (the
  * scanner keeps the first). Rows like these the file already holds pass, so a save that leaves them as they are is not
- * refused: an empty-key row the file holds with the same company and scope, and as many rows per key as the file has.
+ * refused: as many empty-key rows of a company and scope as the file holds, and as many rows per key as the file has.
  * Null when none.
  */
 export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[], norm: NormalizeTextKey): string | null {
   const id = (r: Pick<BlacklistRow, 'company' | 'scope'>) => `${r.scope}\0${r.company}`;
   const held = new Map<string, number>();
-  const heldEmpty = new Set<string>();
+  const heldEmpty = new Map<string, number>();
   for (const r of existing) {
     const k = blacklistScannerKey(r, norm);
-    if (k.empty) heldEmpty.add(id(r));
+    if (k.empty) heldEmpty.set(id(r), (heldEmpty.get(id(r)) ?? 0) + 1);
     else held.set(k.key, (held.get(k.key) ?? 0) + 1);
   }
   const first = new Map<string, BlacklistRow>();
@@ -107,7 +107,12 @@ export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[
   for (const r of rows) {
     const k = blacklistScannerKey(r, norm);
     if (k.empty) {
-      if (heldEmpty.has(id(r))) continue;
+      // Each one the file holds excuses one row, so a copy of it is not let through as well.
+      const left = heldEmpty.get(id(r)) ?? 0;
+      if (left > 0) {
+        heldEmpty.set(id(r), left - 1);
+        continue;
+      }
       return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
     }
     const n = (count.get(k.key) ?? 0) + 1;
