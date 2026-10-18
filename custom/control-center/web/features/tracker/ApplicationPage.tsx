@@ -14,7 +14,7 @@ import { reasonLabel } from '../../lib/format';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
 import { sponsorCheckCompany } from '../sponsorship/companyKey';
-import { postingHref } from '../today/evaluate';
+import { postingHref } from '../../lib/posting-href';
 
 /**
  * Where an application's launcher remembers its sessions: the row number with the row's identity. A delete elsewhere

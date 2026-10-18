@@ -2,7 +2,7 @@
 // comes from files other writers fill (data/shortlist.md, scan history, the tracker), so only an http(s) URL or a saved
 // JD may become a link: a javascript: or data: URL in href would run in the Control Center's origin when clicked.
 import { describe, expect, it } from 'vitest';
-import { postingHref } from '@web/features/today/evaluate';
+import { postingHref } from '@web/lib/posting-href';
 
 describe('postingHref', () => {
   for (const url of ['https://jobs.example.com/1', 'http://jobs.example.com/1?gh_jid=2']) {

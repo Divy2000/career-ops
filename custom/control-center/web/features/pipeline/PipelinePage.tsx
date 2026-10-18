@@ -12,15 +12,11 @@ import { BatchTab } from './BatchTab';
 import { localJdPath } from '@shared/local-jd';
 import { plainPostingUrl } from '@shared/posting-url';
 import { startSavedJdSession, useSessions } from '../../lib/sessions';
+import { PostingRefLink } from '../../lib/posting-href';
 import { evaluatingTargets } from './evaluating';
 
 const route = getRouteApi('/pipeline');
 
-/** Where a row's posting opens: the posting URL, or the saved JD a local:jds/ row points at. */
-const postingHref = (ref: string) => {
-  const jd = localJdPath(ref);
-  return jd === null ? ref : `/api/files/serve?path=${encodeURIComponent(jd)}`;
-};
 export type PipelineTab = 'inbox' | 'shortlist' | 'batch';
 export interface PipelineSearch {
   tab: PipelineTab;
@@ -245,9 +241,7 @@ function Inbox() {
                     </td>
                     <td>
                       <div className="clamp-2" title={r.role || r.url}>
-                        <a href={postingHref(r.url)} target="_blank" rel="noreferrer noopener">
-                          {r.role || r.url}
-                        </a>
+                        <PostingRefLink posting={r.url}>{r.role || r.url}</PostingRefLink>
                       </div>
                       <span className="faint small">
                         {/* A checked Pending row was skipped here or evaluated in place by a batch evaluator; a Processed row is finished. */}
@@ -389,7 +383,9 @@ function Shortlist() {
                       )}
                     </td>
                     <td>{r.company}</td>
-                    <td>{r.url ? <a href={postingHref(r.url)} target="_blank" rel="noreferrer noopener">{r.role}</a> : r.role}</td>
+                    <td>
+                      <PostingRefLink posting={r.url}>{r.role}</PostingRefLink>
+                    </td>
                     <td className="muted">{r.location ?? ''}</td>
                     <td className="mono muted">{r.posted ?? ''}</td>
                     <td className="muted">{r.why ?? ''}</td>
@@ -406,7 +402,7 @@ function Shortlist() {
               <ul className="bullets">
                 {q.data.excluded.map((e) => (
                   <li key={`${e.company} ${e.url ?? e.role}`}>
-                    <strong>{e.company}</strong> {e.url ? <a href={postingHref(e.url)} target="_blank" rel="noreferrer noopener">{e.role}</a> : e.role} <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
+                    <strong>{e.company}</strong> <PostingRefLink posting={e.url}>{e.role}</PostingRefLink> <Pill tone={alertTone(e.alert)}>{e.alert}</Pill> <span className="muted">{e.headline}</span>
                   </li>
                 ))}
               </ul>

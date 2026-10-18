@@ -7,7 +7,7 @@ import { rowIdentity, sameRow, StatusControl, type RowIdentity } from './StatusC
 import { HiredDialog } from './HiredDialog';
 import { AskTrackerPanel } from './AskTrackerPanel';
 import { CompareSelected } from './CompareSelected';
-import { postingHref } from '../today/evaluate';
+import { postingHref } from '../../lib/posting-href';
 import type { TrackerRow } from '@shared/api';
 
 export type TrackerTab = 'all' | 'evaluated' | 'interview' | 'responded' | 'applied' | 'top' | 'skip' | 'rejected' | 'discarded';
