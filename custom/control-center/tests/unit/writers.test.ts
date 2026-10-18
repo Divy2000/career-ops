@@ -296,6 +296,13 @@ describe('posting links the URL-taking actions put on a command line (R35-shared
     }
     expect(a.params.safeParse(params('https://boards.greenhouse.io/acme/jobs/1')).success).toBe(true);
   });
+  it.each(samples)('%s refuses a link carrying a secret-looking parameter and keeps taking tracking ones', (id, params) => {
+    const a = findAction(id)!;
+    for (const url of ['https://example.com/job/1?token=abc', 'https://example.com/job/1?gh_jid=1&access_token=abc', 'https://example.com/job/1#api_key=abc']) {
+      expect(a.params.safeParse(params(url)).success, url).toBe(false);
+    }
+    expect(a.params.safeParse(params('https://www.linkedin.com/jobs/view/4001?trackingId=abc&refId=x')).success).toBe(true);
+  });
 });
 
 describe('action registry covers section 3.3', () => {

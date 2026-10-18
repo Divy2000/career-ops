@@ -26,7 +26,8 @@ export function prefillUrlProblem(raw: string): string | null {
 // never the tracking ones boards add (gh_src, gh_jid, lever-source). The script reads only the host and path.
 const SECRET_PARAM = /token|secret|passw|pwd|api[_-]?key|access[_-]?key|auth|signature|credential|session|^(key|sig|code)$/i;
 
-function secretParam(url: URL): string | null {
+/** The first query or fragment parameter whose name looks like a credential, or null. */
+export function secretParam(url: URL): string | null {
   const fragment = url.hash.slice(1);
   for (const params of [url.searchParams, ...(fragment.includes('=') ? [new URLSearchParams(fragment)] : [])]) {
     for (const name of params.keys()) if (SECRET_PARAM.test(name)) return name;
