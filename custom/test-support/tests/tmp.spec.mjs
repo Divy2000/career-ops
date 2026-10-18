@@ -339,3 +339,14 @@ test('specsWithoutTmpCheck lists a spec whose only mention of tmp.mjs is an impo
     'glob-string.spec.mjs': `const glob = '**/*.spec.mjs';\n${tmpImport}\nconst end = '*/';\n`,
   }), ['nested-template.spec.mjs', 'template.spec.mjs']);
 });
+
+test('specsWithoutTmpCheck reads an export of a quoted value as a value, not an import, and still follows export ... from (R34 leftover)', () => {
+  assert.deepEqual(graphFixture({
+    'root.mjs': "import { join } from 'node:path';\nexport const ROOT = join(import.meta.dirname, '..');\nexport const TMP = '../../test-support/tmp.mjs';\n",
+    'reexport-all.mjs': "export * from '../../test-support/tmp.mjs';\n",
+    'reexport-named.mjs': "export {\n  tempDir,\n} from '../../test-support/tmp.mjs';\n",
+    'value-export.spec.mjs': "import { ROOT } from './root.mjs';\n",
+    'export-all.spec.mjs': "import './reexport-all.mjs';\n",
+    'export-named.spec.mjs': "import { tempDir } from './reexport-named.mjs';\n",
+  }), ['value-export.spec.mjs']);
+});

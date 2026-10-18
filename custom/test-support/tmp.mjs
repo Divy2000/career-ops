@@ -106,7 +106,8 @@ export function runSuiteInFreshTmp(testsDir, exclude) {
   }
 }
 
-const IMPORT_RE = /^[ \t]*(?:import|export)\b[^;'"]*?(?:\bfrom\s*)?['"]([^'"]+)['"]/gm;
+// `export` reaches a module only through `from`; `export const ROOT = join(dir, '..')` exports a value.
+const IMPORT_RE = /^[ \t]*(?:import\b[^;'"]*?(?:\bfrom\s*)?|export\b[^;'"]*?\bfrom\s*)['"]([^'"]+)['"]/gm;
 const REGEX_AFTER = new Set('(,=:[!&|?{};+-*%<>~^'.split(''));
 const WORD_RE = /[\w$]+/y;
 const REGEX_WORDS = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'void', 'yield', 'await', 'delete', 'new', 'instanceof']);
