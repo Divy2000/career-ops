@@ -299,3 +299,24 @@ fs.writeFileSync(path.join(FRESH, 'ready'), String(process.pid));
     child.kill('SIGKILL');
   }
 });
+
+/** A suite dir with an empty test-support/tmp.mjs and the given files in suite/tests; returns specsWithoutTmpCheck over it. */
+function graphFixture(files) {
+  const dir = tempDir('tmp-check-graph-');
+  const support = path.join(dir, 'test-support');
+  const tests = path.join(dir, 'suite', 'tests');
+  fs.mkdirSync(support);
+  fs.mkdirSync(tests, { recursive: true });
+  fs.writeFileSync(path.join(support, 'tmp.mjs'), '');
+  for (const [name, source] of Object.entries(files)) fs.writeFileSync(path.join(tests, name), source);
+  return specsWithoutTmpCheck(tests, path.join(support, 'tmp.mjs'));
+}
+
+test('specsWithoutTmpCheck lists a spec whose relative imports exist but never reach tmp.mjs, or do not exist (R34-mut-09)', () => {
+  assert.deepEqual(graphFixture({
+    'plain-helper.mjs': "import fs from 'node:fs';\nexport const y = 1;\n",
+    'helper-only.spec.mjs': "import { y } from './plain-helper.mjs';\n",
+    'missing.spec.mjs': "import './no-such-helper.mjs';\n",
+    'missing-then-tmp.spec.mjs': "import './no-such-helper.mjs';\nimport '../../test-support/tmp.mjs';\n",
+  }), ['helper-only.spec.mjs', 'missing.spec.mjs']);
+});
