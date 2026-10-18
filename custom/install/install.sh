@@ -10,6 +10,10 @@ trap 'echo "install.sh: unexpected failure at line $LINENO (see the install log)
 # the temp paths make_temp registered, the lockf still queued on a daily lock (LOCK_WAITER), and the daily locks held,
 # each by a holder process (DAILY_HOLDERS) under its lockf (DAILY_LOCKFS).
 TEMP_PATHS=() LOCK_WAITER="" LOCK_READY="" DAILY_HOLDERS=() DAILY_LOCKFS=()
+# The Keychain token is this script's own, never exported (invariant 6): an inherited export of the name would carry
+# the secret into every child once it is read, as an assignment keeps the export attribute. Dropped before any is set.
+unset KEYCHAIN_TOKEN
+KEYCHAIN_TOKEN=""
 # make_temp <var> <name> [-d]: creates a temp file (a folder with -d) in TMPDIR, registers it for cleanup and stores its
 # path in <var>; returns 1, with <var> empty, when mktemp fails. The only place a temp path is made.
 make_temp() {

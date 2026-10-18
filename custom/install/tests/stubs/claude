@@ -3,6 +3,13 @@
 # so tests can prove the installer keeps that stream away from its own output and log.
 printf 'claude %s(cwd=%s)\n' "$(printf '%s ' "$@" | tr '\n' ' ')" "$PWD" >> "$STUB_LOG"
 printf '%s\0' "$@" > "$STUB_LOG.claude.argv"
+# Names of the variables carrying the stub Keychain secret, besides the one the installer hands the headless claude.
+held=""
+for var in $(compgen -e); do
+  if [ "$var" = CLAUDE_CODE_OAUTH_TOKEN ] && [ "${1:-}" = -p ]; then continue; fi
+  case "${!var}" in *FAKE-SECRET-123*) held="$held $var" ;; esac
+done
+[ -z "$held" ] || echo "secret-env claude$held" >> "$STUB_LOG"
 case "${1:-}" in
   setup-token) echo "FAKE-SECRET-123"; exit "${FAKE_CLAUDE_SETUP_TOKEN_EXIT:-0}" ;;
   --version)

@@ -126,6 +126,15 @@ test('every Claude Code version probe runs with the autoupdater off and no inher
   for (const p of probes) assert.equal(p, 'claude-version-env DISABLE_AUTOUPDATER=1 creds=', w.log().join('\n'));
 });
 
+test('the Keychain token reaches no child but the headless Claude, and that one only as CLAUDE_CODE_OAUTH_TOKEN, whatever the installer\'s own names held in the inherited environment (R34-scripts-b-L2-01)', () => {
+  for (const env of [{}, { KEYCHAIN_TOKEN: 'x' }, { KEYCHAIN_TOKEN: '' }, { KEYCHAIN_TOKEN: 'x', KEYCHAIN_RC: '0' }]) {
+    const { w, r } = headlessRun(env);
+    assert.ok(w.claudeArgv(), `${JSON.stringify(env)}: ${r.out}`);
+    assert.ok(w.log().includes('claude-token-len 15'), `${JSON.stringify(env)}: ${w.log().join('\n')}`);
+    assert.deepEqual(w.log().filter((l) => l.startsWith('secret-env')), [], JSON.stringify(env));
+  }
+});
+
 // ---------------------------------------------------------------- invariant 7: one parser and one rule for versions
 
 test('headless onboarding accepts exactly the --version outputs the Control Center\'s gate and the floor accept (R30-scripts-b-X-01)', () => {

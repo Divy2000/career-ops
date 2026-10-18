@@ -28,8 +28,10 @@ piece of state and what may never happen to it. `tests/install-invariants.spec.m
 6. The headless Claude, and every `--version` probe that vouches for it, starts through `claude_child`: inherited
    `ANTHROPIC_*` variables and `CLAUDE_CODE_*` variables with a credential name segment are unset (the rule of
    child-env.ts `isCredential`, run-daily.sh and sync.sh), and the autoupdater is off. It gets one token, the Keychain
-   one, only through its environment. The user's own interactive `claude` (setup-token, interactive onboarding) gets
-   no token from the installer and keeps the user's environment.
+   one, only through its environment as `CLAUDE_CODE_OAUTH_TOKEN`; the installer's own copy (`KEYCHAIN_TOKEN`) is
+   never exported, even when the inherited environment exports that name, so no other child sees it. The user's own
+   interactive `claude` (setup-token, interactive onboarding) gets no token from the installer and keeps the user's
+   environment.
 7. A version is judged by one parser and one rule, the gate (`headless_claude_gate`): `parseClaudeVersion` from
    confinement.mjs reads the output, `versionAtLeast` from lib.mjs applies the floor (a pre-release sorts below its
    release), and the contract's `claude.approvedVersions` decides approval. A build the daily job and the Control
