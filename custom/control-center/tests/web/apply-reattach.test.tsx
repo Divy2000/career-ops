@@ -48,11 +48,11 @@ const ANSWERS = { fields: [{ id: 'name', label: 'Full name', type: 'text', requi
 const ROW_12 = { company: 'Acme Robotics', role: 'Robotics Engineer', report: 31 };
 const APPLIED_12 = { row: 12, state: 'Applied', expectCompany: 'Acme Robotics', expectRole: 'Robotics Engineer', expectReport: 31 };
 
-async function openApply(n: string | null = '12', status?: string, identity: typeof ROW_12 = ROW_12) {
+async function openApply(n: string | null = '12', status?: string, identity: typeof ROW_12 | null = ROW_12) {
   const { ApplyBody } = await import('@web/features/apply/ApplyPage');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
-  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: identity.company, postingUrl: 'https://jobs.example.com/acme/1', status, identity } : { n: null, company: null, postingUrl: '' }) });
+  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: (identity ?? ROW_12).company, postingUrl: 'https://jobs.example.com/acme/1', status, ...(identity ? { identity } : {}) } : { n: null, company: null, postingUrl: '' }) });
   const elsewhere = createRoute({ getParentRoute: () => rootRoute, path: '/elsewhere', component: () => createElement('p', null, 'Elsewhere page') });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => createElement('p', null, 'Session page') });
   router = createRouter({ routeTree: rootRoute.addChildren([apply, elsewhere, session]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
@@ -688,9 +688,9 @@ describe('Apply starts over and follows the sessions it started', () => {
     expect((applyPanel() as PanelProps & { target?: unknown }).target).toEqual({ type: 'app', value: '12', expect: ROW_12 });
   });
 
-  it('on /apply with no row, Draft answers starts on the posting URL and names no application', async () => {
-    await openApply(null);
-    expect((applyPanel() as PanelProps & { target?: { type: string; expect?: unknown } }).target).not.toHaveProperty('expect');
+  it('on a row whose application is not known yet, Draft answers still starts on the row and names no application', async () => {
+    await openApply('12', undefined, null);
+    expect((applyPanel() as PanelProps & { target?: unknown }).target).toEqual({ type: 'app', value: '12' });
   });
 
   it('Generate CV PDF clicked just before leaving does not pull the user onto the session page', async () => {
@@ -907,7 +907,7 @@ describe('Given the row number changes owner while its Apply page is open (R33-f
     function Shown() {
       const [identity, setIdentity] = useState(ROW_12);
       reindex = setIdentity;
-      return createElement(ApplyBody, { n: '12', company: identity.company, postingUrl: 'https://jobs.example.com/acme/1', identity });
+      return createElement(ApplyBody, { n: '12', company: (identity ?? ROW_12).company, postingUrl: 'https://jobs.example.com/acme/1', identity });
     }
     const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
     const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: Shown });

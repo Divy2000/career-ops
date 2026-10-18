@@ -6,8 +6,9 @@ What must always hold for every route that starts work: `POST /api/sessions` (st
 
 ## Admission
 
-1. **One admission path per kind of start.** Every new session (a start, or each posting of a fan-out) is admitted by
-   `admitNew`; every reply or fork by `admitTurn`. No route runs its own copy of a guard.
+1. **One admission path per kind of start.** Every route that creates a session refuses an unknown or non-runnable
+   mode through `modeRefused`; a single start is admitted by `admitNew`, a fan-out's postings by `processInboxHolds`
+   and the manager's per-posting claims, and every reply or fork by `admitTurn`. No route runs its own copy of a guard.
 2. **Check and act in one tick.** The last state check that admits a start and the session's create
    (`manager.start` records the session before its first await) run with no `await` between them. Every async input a
    check needs (the pinned tracker row, an extracted document, the daily-job probe, the prepared policy pass) is
