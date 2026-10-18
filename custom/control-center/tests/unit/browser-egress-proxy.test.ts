@@ -267,4 +267,72 @@ describe('Playwright MCP launcher', () => {
     });
     expect(env).toEqual({ PATH: '/bin', HOME: '/home/me' });
   });
+
+  // R35-claude-X-01: an apply session's CLI carries its OAuth token, and npx runs registry code that also loads web pages.
+  it('passes the MCP only what npx and the browser need: no credential, app internal or unknown variable', () => {
+    const keep = {
+      PATH: '/bin',
+      HOME: '/home/me',
+      TMPDIR: '/tmp/x',
+      LANG: 'en_US.UTF-8',
+      LC_ALL: 'C',
+      NODE_OPTIONS: '--import=file:///guard.mjs',
+      NODE_EXTRA_CA_CERTS: '/ca.pem',
+      HTTPS_PROXY: 'http://corp:3128',
+      no_proxy: 'corp',
+      npm_config_registry: 'https://registry.example',
+      npm_config_cache: '/home/me/.npm',
+      NPM_CONFIG_USERCONFIG: '/home/me/.npmrc',
+      PLAYWRIGHT_BROWSERS_PATH: '/pw',
+      DISPLAY: ':0',
+    };
+    const env = playwrightMcpEnv({
+      ...keep,
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret',
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+      ANTHROPIC_API_KEY: 'sk-ant',
+      ANTHROPIC_BASE_URL: 'https://proxy.example',
+      CC_TOKEN: 'cc',
+      CC_SESSION_SECRET: 'cookie',
+      CC_POLICY_FILE: '/p.json',
+      AWS_SECRET_ACCESS_KEY: 'aws',
+      GITHUB_TOKEN: 'gh',
+      OPENAI_API_KEY: 'oa',
+      npm_config__authToken: 'npm-secret',
+      'npm_config_//registry.npmjs.org/:_authToken': 'npm-secret-2',
+      npm_config_password: 'pw',
+      NPM_CONFIG_KEY: 'client-key',
+      CAREER_OPS_ROOT: '/data',
+      GIT_DIR: '/other/.git',
+      PLAYWRIGHT_MCP_PROXY_SERVER: 'http://evil:1',
+    });
+    expect(env).toEqual(keep);
+  });
+
+  it('starts npx without the session token or any Anthropic credential the CLI handed the launcher', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-launcher-env-'));
+    try {
+      const bin = path.join(tmp, 'bin');
+      fs.mkdirSync(bin);
+      const dump = path.join(tmp, 'npx-env');
+      fs.writeFileSync(path.join(bin, 'npx'), `#!/bin/sh\nenv > ${JSON.stringify(dump)}\n`, { mode: 0o755 });
+      const run = spawnSync(process.execPath, [path.join(path.dirname(PLAYWRIGHT_MCP_PATH), 'playwright-mcp-launcher.mjs')], {
+        env: {
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+          HOME: os.homedir(),
+          CLAUDE_CODE_OAUTH_TOKEN: 'R35-OAUTH-7e2a',
+          ANTHROPIC_API_KEY: 'R35-KEY-7e2a',
+          CC_TOKEN: 'R35-CC-7e2a',
+        },
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      expect(run.status, run.stderr).toBe(0);
+      const seen = fs.readFileSync(dump, 'utf8');
+      expect(seen).toMatch(/^PATH=/m);
+      expect(seen).not.toContain('R35-');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 });
