@@ -11,6 +11,17 @@ describe('summarizeDigest', () => {
     expect(summarizeDigest(body)[0]).toEqual([{ text: 'H-1B lottery is now wage-weighted (final rule published 2025-12-29).', bold: true }]);
   });
 
+  it('keeps the content after a bold label that is not a headline (R33-shared-comp-L2-01)', () => {
+    const body = '- **What changed:** USCIS raised the H-1B petition fee to $100,000. More text.\n- **Effective date:** 2026-11-01.\n- **USCIS** raised the fee for new petitions. Later text.\n- **H-1B fee:** $100,000 for petitions filed from abroad.';
+    expect(lines(body)).toEqual([
+      'What changed: USCIS raised the H-1B petition fee to $100,000.',
+      'Effective date: 2026-11-01.',
+      'USCIS raised the fee for new petitions.',
+      'H-1B fee: $100,000 for petitions filed from abroad.',
+    ]);
+    expect(summarizeDigest(body)[1]).toEqual([{ text: 'Effective date:', bold: true }, { text: ' 2026-11-01.' }]);
+  });
+
   it('keeps the first sentence of a bullet without a bold lead', () => {
     expect(lines('- Proposed rule on a new petition fee published for comment. Nothing else changes.\n* Agency page updated; premium unchanged.')).toEqual(['Proposed rule on a new petition fee published for comment.', 'Agency page updated; premium unchanged.']);
   });
@@ -24,6 +35,25 @@ describe('summarizeDigest', () => {
     expect(lines('- Stamping paused (U.S. State Department) until further notice. Later text.')).toEqual(['Stamping paused (U.S. State Department) until further notice.']);
     expect(lines('- Some forms ("e.g. Form I-129") cost more. Later text.')).toEqual(['Some forms ("e.g. Form I-129") cost more.']);
     expect(lines('- A memo [Dr. Smith] explains the change. Later text.')).toEqual(['A memo [Dr. Smith] explains the change.']);
+  });
+
+  it('does not end the first sentence after a one-letter initial or a citation abbreviation (R33-shared-comp-X-01)', () => {
+    expect(lines('- President Donald J. Trump signed a proclamation raising the H-1B fee to $100,000. Later text.')).toEqual(['President Donald J. Trump signed a proclamation raising the H-1B fee to $100,000.']);
+    expect(lines('- DHS published the weighted-selection rule at 90 Fed. Reg. 45678 today. Later text.')).toEqual(['DHS published the weighted-selection rule at 90 Fed. Reg. 45678 today.']);
+    expect(lines('- The rule cites 8 U.S.C. Sec. 1184 and Pub. L. 117 in Pt. 214. Later text.')).toEqual(['The rule cites 8 U.S.C. Sec. 1184 and Pub. L. 117 in Pt. 214.']);
+  });
+
+  it('still ends the first sentence at a bare agency name or a lone letter that closes it (R33-shared-comp-X-01 fix-check FC-01)', () => {
+    expect(lines('- Employers must file with the SEC. Later text.')).toEqual(['Employers must file with the SEC.']);
+    expect(lines('- The change was announced by the Fed. Employers must update filings.')).toEqual(['The change was announced by the Fed.']);
+    expect(lines('- Filings are due under schedule B. Employers must update them.')).toEqual(['Filings are due under schedule B.']);
+  });
+
+  it('ends the first sentence at a lettered form part, and reads an initial after a link with the link in view (R33-shared-comp-X-01 fix-check 2)', () => {
+    expect(lines('- File it under Schedule A. Employers must update them.')).toEqual(['File it under Schedule A.']);
+    expect(lines('- Medicare Part B. Later text.')).toEqual(['Medicare Part B.']);
+    expect(lines('- President [Donald](https://example.test/p) J. Trump signed it. Later text.')).toEqual(['President Donald J. Trump signed it.']);
+    expect(lines('- President Donald [J.](https://example.test/p) Trump signed it. Later text.')).toEqual(['President Donald J. Trump signed it.']);
   });
 
   it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
@@ -107,5 +137,34 @@ describe('summarizeDigest', () => {
 
   it('drops footnote references and image references', () => {
     expect(lines('- Fee rises[^1] for all. ![pic][x] More.\n\n[^1]: a footnote\n[x]: https://x.example/p.png')).toEqual(['Fee rises for all.']);
+  });
+
+  it('keeps a link labelled with its own mailto: address instead of collapsing it to an empty host (R33-feat-b-L2-01)', () => {
+    expect(summarizeDigest('- Contact <mailto:help@uscis.gov> today.')[0]).toEqual([{ text: 'Contact ' }, { text: 'help@uscis.gov', href: 'mailto:help@uscis.gov' }, { text: ' today.' }]);
+    expect(summarizeDigest('- Write [mailto:help@uscis.gov](mailto:help@uscis.gov) today.')[0]).toEqual([{ text: 'Write ' }, { text: 'help@uscis.gov', href: 'mailto:help@uscis.gov' }, { text: ' today.' }]);
+    expect(summarizeDigest('- Call [tel:+15551234](tel:+15551234) today.')[0]).toEqual([{ text: 'Call ' }, { text: '+15551234', href: 'tel:+15551234' }, { text: ' today.' }]);
+  });
+
+  it('ends the first sentence at a period inside a link label, keeping the link whole (R33-feat-c-X-02)', () => {
+    expect(summarizeDigest('- Read [the final rule.](https://example.test/rule) The fee is unchanged.')[0]).toEqual([{ text: 'Read ' }, { text: 'the final rule.', href: 'https://example.test/rule' }]);
+    expect(summarizeDigest('- See [Rule one. Rule two](https://example.test/r) for more. Later text.')[0]).toEqual([{ text: 'See ' }, { text: 'Rule one. Rule two', href: 'https://example.test/r' }]);
+    expect(lines('- Per [the U.S.](https://example.test/us) rule today. Later text.')).toEqual(['Per the U.S. rule today.']);
+  });
+
+
+  it('keeps every piece of a link whose label holds the sentence end, and reads on past a label period before lowercase text (R33 fix-check FC-01)', () => {
+    const u = 'https://example.test/r';
+    expect(summarizeDigest(`- See [Read it.\\\nNow](${u}) later. More.`)[0]).toEqual([{ text: 'See ' }, { text: 'Read it.', href: u }, { text: ' ', href: u }, { text: 'Now', href: u }]);
+    expect(summarizeDigest(`- See [Rule one. *Two*](${u}) later. More.`)[0]).toEqual([{ text: 'See ' }, { text: 'Rule one. ', href: u }, { text: 'Two', href: u }]);
+    expect(lines(`- See [rule 5.](${u}) applies today. Next.`)).toEqual(['See rule 5. applies today.']);
+  });
+  it('keeps a hard break inside a link label as part of the link (R33-feat-c-X-03)', () => {
+    expect(summarizeDigest('- Read [the final\\\nrule](https://example.test/rule).')[0]).toEqual([
+      { text: 'Read ' },
+      { text: 'the final', href: 'https://example.test/rule' },
+      { text: ' ', href: 'https://example.test/rule' },
+      { text: 'rule', href: 'https://example.test/rule' },
+      { text: '.' },
+    ]);
   });
 });
