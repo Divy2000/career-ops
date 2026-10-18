@@ -197,6 +197,24 @@ const statOrNull = (dir) => fs.statSync(dir, { throwIfNoEntry: false }) ?? null;
 const sameLockDirectory = (a, b) => a.dev === b.dev && a.ino === b.ino && (a.ino !== 0 || a.birthtimeMs === b.birthtimeMs);
 const isStale = (stat, ms = LOCK_STALE_MS) => Date.now() - stat.mtimeMs > ms;
 
+/** The lock's owner record, { token, pid }, or null while it is not written yet or cannot be read. */
+function lockOwner(lock) {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(lock, 'owner'), 'utf8'));
+    return o && typeof o.token === 'string' && Number.isSafeInteger(o.pid) && o.pid > 0 ? o : null;
+  } catch {
+    return null;
+  }
+}
+
+// A lock is broken once it is old, or at once when the process it names has exited (killed inside the lock, its
+// finally never ran). A reused pid reads as alive, so that lock still waits out LOCK_STALE_MS.
+function breakable(lock, stat) {
+  if (isStale(stat)) return true;
+  const o = lockOwner(lock);
+  return o !== null && !pidAlive(o.pid);
+}
+
 /**
  * Breaks the lock when it is stale; true when it was removed. The verdict and the removal run under a recover guard,
  * and the lock is judged again under it and removed only when it is still the stale directory first judged: another
@@ -204,7 +222,7 @@ const isStale = (stat, ms = LOCK_STALE_MS) => Date.now() - stat.mtimeMs > ms;
  */
 function breakStale(lock) {
   const judged = statOrNull(lock);
-  if (!judged || !isStale(judged)) return false;
+  if (!judged || !breakable(lock, judged)) return false;
   const guard = `${lock}.recover`;
   let mine;
   try {
@@ -221,7 +239,7 @@ function breakStale(lock) {
   }
   try {
     const now = statOrNull(lock);
-    if (!now || !isStale(now) || !sameLockDirectory(judged, now)) return false;
+    if (!now || !sameLockDirectory(judged, now) || !breakable(lock, now)) return false;
     // A claimant paused past GUARD_STALE_MS has had its guard taken over; it then decides nothing.
     const guardNow = statOrNull(guard);
     if (!mine || !guardNow || !sameLockDirectory(mine, guardNow)) return false;
@@ -233,7 +251,10 @@ function breakStale(lock) {
   }
 }
 
-/** Runs fn under the claim's mkdir lock; a lock left by a crashed holder is broken after LOCK_STALE_MS. */
+/**
+ * Runs fn under the claim's mkdir lock; a lock left by a crashed holder is broken once its process is gone, or after
+ * LOCK_STALE_MS when that cannot be told.
+ */
 function locked(dataRoot, fn) {
   const lock = `${claimFile(dataRoot)}.lock`;
   fs.mkdirSync(path.dirname(lock), { recursive: true });
@@ -251,10 +272,11 @@ function locked(dataRoot, fn) {
   }
   // A token inside the lock names this claimant: one held so long it was broken as stale may now be another
   // claimant's, even at the same inode (a file system that reuses inodes at once), and only this token proves it is not.
+  // The pid lets a claimant that finds the lock tell that its holder was killed inside it.
   const token = randomUUID();
   const owner = path.join(lock, 'owner');
   try {
-    fs.writeFileSync(owner, token);
+    fs.writeFileSync(owner, JSON.stringify({ token, pid: process.pid }));
   } catch (err) {
     fs.rmSync(lock, { recursive: true, force: true });
     throw err;
@@ -262,13 +284,8 @@ function locked(dataRoot, fn) {
   try {
     return fn();
   } finally {
-    let held = null;
-    try {
-      held = fs.readFileSync(owner, 'utf8');
-    } catch {
-      // Unreadable proves nothing about who holds it: it is left to age out rather than fail fn's own outcome.
-    }
-    if (held === token) fs.rmSync(lock, { recursive: true, force: true });
+    // Unreadable proves nothing about who holds it: it is left to age out rather than fail fn's own outcome.
+    if (lockOwner(lock)?.token === token) fs.rmSync(lock, { recursive: true, force: true });
   }
 }
 

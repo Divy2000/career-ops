@@ -389,6 +389,58 @@ test('a claimant that cannot mark the lock it took removes it, so the next claim
   assert.deepEqual(tryClaim(r, { owner: 'session:s-1', batch: null }), { ok: true });
 });
 
+/**
+ * A second process that took the claim lock and is stuck inside it: the session it judges has a FIFO for meta.json, so
+ * reading it blocks until killed. Resolves once the child has marked the lock as its own.
+ */
+async function childInsideLock(dataRoot) {
+  const dir = path.join(dataRoot, 'data', 'control-center', 'sessions', 's-stuck');
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync('/usr/bin/mkfifo', [path.join(dir, 'meta.json')]);
+  plant(dataRoot, { owner: 'session:s-stuck', batch: null, at: new Date().toISOString() });
+  const code = `const { tryClaim } = await import(${JSON.stringify(MODULE)}); tryClaim(${JSON.stringify(dataRoot)}, { owner: 'daily:1', batch: null });`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: 'ignore' });
+  const exited = new Promise((resolve) => child.on('exit', resolve));
+  const owner = path.join(`${claimFile(dataRoot)}.lock`, 'owner');
+  for (let i = 0; !(fs.existsSync(owner) && fs.readFileSync(owner, 'utf8')); i++) {
+    if (i > 2000 || child.exitCode !== null) {
+      child.kill('SIGKILL');
+      throw new Error('the child never took the claim lock');
+    }
+    await new Promise((res) => setTimeout(res, 5));
+  }
+  return { child, exited, unstick: () => { fs.rmSync(path.join(dir, 'meta.json')); session(dataRoot, 's-stuck', 'done'); } };
+}
+
+test('Given a claimant killed while holding the claim lock, the next claim breaks the lock at once instead of waiting for it to age (R35-scripts-a-L1-01)', async () => {
+  const r = root();
+  const { child, exited, unstick } = await childInsideLock(r);
+  try {
+    child.kill('SIGKILL');
+    await exited;
+    unstick();
+    const t0 = Date.now();
+    assert.deepEqual(tryClaim(r, { owner: 'session:s-new', batch: null }), { ok: true });
+    assert.ok(Date.now() - t0 < 2000, `the claim waited ${Date.now() - t0} ms`);
+    assert.equal(fs.existsSync(`${claimFile(r)}.lock`), false);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('Given a live claimant holding the claim lock, another claim still waits and is refused rather than breaking it (R35-scripts-a-L1-01)', async () => {
+  const r = root();
+  const { child, exited } = await childInsideLock(r);
+  try {
+    assert.throws(() => tryClaim(r, { owner: 'session:s-new', batch: null }), /is held by another claimant/);
+    assert.equal(child.exitCode, null, 'the holder ended early');
+    assert.equal(fs.existsSync(path.join(`${claimFile(r)}.lock`, 'owner')), true, 'the live holder\'s lock was broken');
+  } finally {
+    child.kill('SIGKILL');
+    await exited;
+  }
+});
+
 test('a fork takes the claim from the paused session it forks, never from another live owner', () => {
   const r = root();
   session(r, 's-src', 'awaiting_user');
