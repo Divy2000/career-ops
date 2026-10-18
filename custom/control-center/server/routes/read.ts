@@ -3,8 +3,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { ServerConfig } from '../config.js';
 import { importCore, cliScriptPath } from '../core/adapter.js';
-import { readTracker } from '../domains/tracker.js';
-import { readReport } from '../domains/reports.js';
+import { loadTracker, readLinkedReport, readTracker } from '../domains/tracker.js';
 import { readPipeline, readScanHistory } from '../domains/pipeline.js';
 import { readShortlist } from '../domains/shortlist.js';
 import { localDate, readImmigrationOverview } from '../domains/immigration.js';
@@ -79,12 +78,12 @@ export async function readRoutes(app: FastifyInstance, opts: { cfg: ServerConfig
   app.get<{ Params: { n: string } }>('/api/tracker/:n', async (req, reply) => {
     const n = Number(req.params.n);
     if (!Number.isInteger(n) || n <= 0) return reply.code(400).send({ error: 'row number must be a positive integer' });
-    const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
+    const { read: tracker, reportFiles } = await loadTracker(cfg.codeRoot, cfg.dataRoot);
     // detail carries the reason, as the other read errors do, so the Application and Apply pages can show it.
     if (tracker.kind !== 'ok') return reply.code(404).send({ error: 'tracker unavailable', detail: tracker.kind === 'malformed' ? tracker.error : `no tracker at ${tracker.path}`, tracker });
     const row = tracker.rows.find((r) => r.num === n);
     if (!row) return reply.code(404).send({ error: `no tracker row #${n}` });
-    const report = row.report !== null ? readReport(cfg.dataRoot, row.report) : { kind: 'none' as const };
+    const report = row.report !== null ? readLinkedReport(cfg.dataRoot, reportFiles.get(row) ?? null, row.report) : { kind: 'none' as const };
     const followupsRead = readText(path.join(cfg.dataRoot, 'data', 'follow-ups.md'));
     const followups = followupsRead.kind === 'ok' ? parseFollowups(followupsRead.text).filter((f) => f.appNum === n) : [];
     const pin = followupsRead.kind === 'ok' ? activePin(parseNextOverrides(followupsRead.text).get(n) ?? null, followups) : null;

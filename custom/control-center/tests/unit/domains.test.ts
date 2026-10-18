@@ -437,3 +437,44 @@ describe('tracker row report identity (R29-srv-dom-b-L2-01)', () => {
     expect(row?.reportLabel).toBe('3');
   });
 });
+
+describe('tracker row report identity when two reports share a number (R34-reports-FC-02)', () => {
+  function sharedNumberRoot(): string {
+    const dir = copyFixtureRoot();
+    const reports = path.join(dir, 'reports');
+    const first = fs.readFileSync(path.join(reports, '004-initech-cloud.md'), 'utf8');
+    fs.writeFileSync(path.join(reports, '004-zeta-labs.md'), first.replace(/Initech Cloud/g, 'Zeta Labs').replace('2.8/5', '4.6/5'));
+    return dir;
+  }
+
+  it('given two reports numbered 004, when a row links the second by name, then the row joins that file, not the first by name', async () => {
+    const dir = sharedNumberRoot();
+    fs.appendFileSync(path.join(dir, 'data', 'applications.md'), '| 40 | 2026-10-01 | Zeta Labs | - | Backend Engineer II |  | Evaluated | ❌ | [004](../reports/004-zeta-labs.md) | |\n');
+    const t = await readTracker(DEFAULT_CODE_ROOT, dir);
+    if (t.kind !== 'ok') throw new Error('fixture tracker unreadable');
+    const row = t.rows.find((r) => r.num === 40);
+    expect(row?.reportState).toBe('ok');
+    expect(row?.summary?.file).toBe('004-zeta-labs.md');
+    expect(row?.summary?.company).toMatch(/Zeta Labs/);
+    expect(row?.score).toBe(4.6);
+  });
+
+  it('given two reports numbered 004, when a row links one that does not parse, then the row shows it malformed rather than borrowing the other', async () => {
+    const dir = sharedNumberRoot();
+    fs.writeFileSync(path.join(dir, 'reports', '004-zeta-labs.md'), 'not a report\n');
+    fs.appendFileSync(path.join(dir, 'data', 'applications.md'), '| 40 | 2026-10-01 | Zeta Labs | - | Backend Engineer II |  | Evaluated | ❌ | [004](../reports/004-zeta-labs.md) | |\n');
+    const t = await readTracker(DEFAULT_CODE_ROOT, dir);
+    if (t.kind !== 'ok') throw new Error('fixture tracker unreadable');
+    const row = t.rows.find((r) => r.num === 40);
+    expect(row?.reportState).toBe('malformed');
+    expect(row?.summary).toBeNull();
+  });
+
+  it('given two reports numbered 004, when a row links a file that is not there, then the row falls back to the report number', async () => {
+    const dir = sharedNumberRoot();
+    fs.appendFileSync(path.join(dir, 'data', 'applications.md'), '| 40 | 2026-10-01 | Initech Cloud | - | Backend Engineer II |  | Evaluated | ❌ | [004](../reports/004-initech.md) | |\n');
+    const t = await readTracker(DEFAULT_CODE_ROOT, dir);
+    if (t.kind !== 'ok') throw new Error('fixture tracker unreadable');
+    expect(t.rows.find((r) => r.num === 40)?.summary?.file).toBe('004-initech-cloud.md');
+  });
+});

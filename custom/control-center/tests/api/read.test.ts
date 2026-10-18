@@ -131,6 +131,38 @@ describe('read endpoints', () => {
     }
   });
 
+  it('GET /api/tracker/:n returns the report file the row links when another report shares its number (R34-reports-FC-02)', async () => {
+    const own = await makeTestApp();
+    try {
+      const reports = path.join(own.cfg.dataRoot, 'reports');
+      const first = fs.readFileSync(path.join(reports, '004-initech-cloud.md'), 'utf8');
+      fs.writeFileSync(path.join(reports, '004-zeta-labs.md'), first.replace(/Initech Cloud/g, 'Zeta Labs').replace('2.8/5', '4.6/5'));
+      fs.appendFileSync(path.join(own.cfg.dataRoot, 'data', 'applications.md'), '| 7 | 2026-10-01 | Zeta Labs | - | Backend Engineer II |  | Evaluated | ❌ | [004](../reports/004-zeta-labs.md) | |\n');
+      const res = await own.app.inject({ method: 'GET', url: '/api/tracker/7', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json();
+      expect(body.report.kind).toBe('ok');
+      expect(body.report.report.file).toBe('004-zeta-labs.md');
+      expect(body.report.report.company).toMatch(/Zeta Labs/);
+      expect(body.report.report.score).toBe(4.6);
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('GET /api/tracker/:n reports the linked file malformed rather than another report sharing its number (R34-reports-FC-02)', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.writeFileSync(path.join(own.cfg.dataRoot, 'reports', '004-zeta-labs.md'), 'not a report\n');
+      fs.appendFileSync(path.join(own.cfg.dataRoot, 'data', 'applications.md'), '| 7 | 2026-10-01 | Zeta Labs | - | Backend Engineer II |  | Evaluated | ❌ | [004](../reports/004-zeta-labs.md) | |\n');
+      const res = await own.app.inject({ method: 'GET', url: '/api/tracker/7', headers: own.authed });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().report).toMatchObject({ kind: 'malformed', file: '004-zeta-labs.md' });
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n answers for a row whose company is only a legal suffix ("Inc."), which has no company slug, by matching names (SW2 review)', async () => {
     const own = await makeTestApp();
     try {
