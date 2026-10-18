@@ -56,6 +56,20 @@ describe('summarizeDigest', () => {
     expect(lines('- President Donald [J.](https://example.test/p) Trump signed it. Later text.')).toEqual(['President Donald J. Trump signed it.']);
   });
 
+  it.each([
+    ['a citation word before a link', '- Per 90 Fed. [Reg. 45678](https://www.federalregister.gov/d/2025-1), the H-1B lottery is wage-weighted. Later text.', 'Per 90 Fed. Reg. 45678, the H-1B lottery is wage-weighted.'],
+    ['a middle initial before a link', '- Signed by President Donald J. [Trump](https://www.whitehouse.gov/x) on Sept. 19. Later text.', 'Signed by President Donald J. Trump on Sept. 19.'],
+    ['a citation word before emphasis', '- Per 90 Fed. *Reg.* 45678, the lottery is wage-weighted. Later text.', 'Per 90 Fed. Reg. 45678, the lottery is wage-weighted.'],
+    ['a middle initial before bold', '- Signed by President Donald J. **Trump** today. Later text.', 'Signed by President Donald J. Trump today.'],
+    ['a number before a lowercase link', '- Stamping paused until Oct. 15. [source](https://state.gov/x)', 'Stamping paused until Oct. 15.'],
+    ['a sentence end before a capitalized link', '- USCIS updated the fee page. [Read more](https://www.uscis.gov/x) for details.', 'USCIS updated the fee page.'],
+    ['a citation inside emphasis', '- Published at 90 *Fed. Reg.* 45678 today. Later text.', 'Published at 90 Fed. Reg. 45678 today.'],
+    ['a citation inside bold', '- Funded under **Pub. L.** 117-328 for FY2026. Later text.', 'Funded under Pub. L. 117-328 for FY2026.'],
+    ['a middle initial before a dropped html comment', '- Signed by Donald J.<!-- n --> Trump today. Later text.', 'Signed by Donald J. Trump today.'],
+  ])('judges a period at the end of a plain span with the following spans in view: %s (R34-feat-a-L2-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
   it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
     expect(lines('- The rule applies in the U.S. Employers must file by Monday.')).toEqual(['The rule applies in the U.S. Employers must file by Monday.']);
   });
@@ -96,6 +110,16 @@ describe('summarizeDigest', () => {
     const boldLong = summarizeDigest(`- **${'word '.repeat(80).trim()}** rest`)[0]!;
     expect(boldLong.every((s) => s.bold)).toBe(true);
     expect(spansText(boldLong).endsWith('…')).toBe(true);
+  });
+
+  it('drops a link of several spans whole when it crosses the limit, never showing part of its label (R34-feat-b-L2-02)', () => {
+    expect(summarizeDigest(`- ${'a'.repeat(140)} [the final *rule on wage-weighted selection*](https://example.test/r)`)[0]).toEqual([{ text: `${'a'.repeat(140)}…` }]);
+    expect(summarizeDigest(`- ${'a'.repeat(150)} [x **y** z](https://example.test/r)`)[0]).toEqual([{ text: `${'a'.repeat(150)} ` }, { text: 'x ', href: 'https://example.test/r' }, { text: 'y', bold: true, href: 'https://example.test/r' }, { text: ' z', href: 'https://example.test/r' }]);
+  });
+
+  it('puts the ellipsis after the kept text, outside any link label and past trailing spaces (R34-feat-b-L2-02)', () => {
+    expect(summarizeDigest(`- [${'a'.repeat(100)}](https://example.test/1)[${'b'.repeat(80)}](https://example.test/2)`)[0]).toEqual([{ text: 'a'.repeat(100), href: 'https://example.test/1' }, { text: '…' }]);
+    expect(lines(`- ${'**word** '.repeat(40)}end.`)).toEqual([`${'word '.repeat(32).trimEnd()}…`]);
   });
 
   it('counts rendered text, not markdown syntax, against the limit', () => {
@@ -198,4 +222,99 @@ describe('summarizeDigest', () => {
   ])('does not end the first sentence at closing punctuation after %s (R33-weblib-L2-01)', (_shape, body, expected) => {
     expect(lines(body)).toEqual([expected]);
   });
+
+  it.each([
+    ['a closing guillemet', '- The agency called it «final.» Employers must comply.', 'The agency called it «final.»'],
+    ['a closing guillemet after a no-break space', '- L’agence dit « définitif. » Les employeurs doivent suivre.', 'L’agence dit « définitif. »'],
+    ['a closing guillemet after a narrow no-break space', '- L’agence dit « définitif. » Les employeurs doivent suivre.', 'L’agence dit « définitif. »'],
+    ['a reversed guillemet (Danish)', '- Styrelsen kaldte den »endelig.« Arbejdsgivere skal følge.', 'Styrelsen kaldte den »endelig.«'],
+    ['a single guillemet', '- It was called ‹final.› Employers must comply.', 'It was called ‹final.›'],
+    ['a German closing quote after a low-9 opener', '- Die Behörde nannte es „endgültig.“ Arbeitgeber müssen folgen.', 'Die Behörde nannte es „endgültig.“'],
+    ['a German single closing quote after a low-9 opener', '- Sie sagte ‚ja.‘ Danach ging sie.', 'Sie sagte ‚ja.‘'],
+    ['a CJK corner bracket', '- The notice says 「final.」 Employers must comply.', 'The notice says 「final.」'],
+    ['a CJK white corner bracket', '- The notice says 『final.』 Employers must comply.', 'The notice says 『final.』'],
+    ['a CJK double angle bracket', '- The notice says 《final.》 Employers must comply.', 'The notice says 《final.》'],
+    ['a CJK lenticular bracket', '- The notice says 【final.】 Employers must comply.', 'The notice says 【final.】'],
+    ['a fullwidth bracket', '- The notice says （final.） Employers must comply.', 'The notice says （final.）'],
+  ])('ends the first sentence at terminal punctuation followed by %s (R34-feat-a-X-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['a closing guillemet', '- **Pay rises. The rule is «final.»** More text.', 'Pay rises. The rule is «final.»'],
+    ['a German closing quote', '- **Lohn steigt. Die Regel ist „endgültig.“** Mehr Text.', 'Lohn steigt. Die Regel ist „endgültig.“'],
+    ['a CJK corner bracket', '- **Pay rises. The notice says 「final.」** More text.', 'Pay rises. The notice says 「final.」'],
+  ])('keeps a whole bold lead that ends with terminal punctuation and %s (R34-feat-a-X-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['a French opening guillemet after a space', '- Il a fini. « Bonjour » dit-il ensuite.', 'Il a fini.'],
+    ['a Danish opening guillemet after a space', '- Han var færdig. »Godt« sagde han.', 'Han var færdig.'],
+    ['an abbreviation after a guillemet', '- Fees rise in the «U.S. market» soon. Later text.', 'Fees rise in the «U.S. market» soon.'],
+    ['an abbreviation after a low-9 quote', '- Siehe „Dr. Schmidt“ für Details. Mehr Text.', 'Siehe „Dr. Schmidt“ für Details.'],
+    ['an abbreviation after a CJK bracket', '- See 「Dr. Smith」 for details. Later text.', 'See 「Dr. Smith」 for details.'],
+  ])('does not end the first sentence at %s (R34-feat-a-X-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['an abbreviation', '- **The U.S. Dept.** of State paused H-1B stamping in India. More.', 'The U.S. Dept. of State paused H-1B stamping in India.'],
+    ['an abbreviation before a number', '- **Fee rises Oct.** 15 for all petitions. More.', 'Fee rises Oct. 15 for all petitions.'],
+    ['a period before a lowercase word', '- **Rule 5.** applies to cap-exempt employers. More.', 'Rule 5. applies to cap-exempt employers.'],
+    ['a middle initial', '- **Signed by Donald J.** Trump today. More.', 'Signed by Donald J. Trump today.'],
+  ])('reads a bold lead ending in %s on into the text after it, by the one sentence-end rule (R34-shared-comp-L2-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['emphasis', '- USCIS said the rule is *not final.* yet employers must prepare. Later text.', 'USCIS said the rule is not final. yet employers must prepare.'],
+    ['bold', '- USCIS said the rule is **not final.** yet employers must prepare. Later text.', 'USCIS said the rule is not final. yet employers must prepare.'],
+    ['inline code', '- Set `mode.` then restart the runner. Later text.', 'Set mode. then restart the runner.'],
+  ])('reads a period at the end of %s on before a lowercase word, as in plain text (R34-shared-comp-X-02)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['a bracket after a link', '- Fees rise ([see the notice.](https://u.test/n)) Posts will contact applicants once the review completes.', 'Fees rise (see the notice.)'],
+    ['a quote after a link', '- USCIS called it "[final.](https://u.test/f)" Posts will update.', 'USCIS called it "final."'],
+    ['a quote after emphasis', '- USCIS called it "*final.*" Posts will update.', 'USCIS called it "final."'],
+  ])('ends the first sentence at a label or emphasis ending in terminal punctuation closed by %s (R34-weblib-L2-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it('keeps the bracket after a link label that ends the sentence in the plain text that follows it (R34-weblib-L2-01)', () => {
+    expect(summarizeDigest('- Fees rise ([see the notice.](https://u.test/n)) Posts will contact applicants.')[0]).toEqual([{ text: 'Fees rise (' }, { text: 'see the notice.', href: 'https://u.test/n' }, { text: ')' }]);
+  });
+
+  it('cuts a first link longer than the limit to the limit, keeping its target, with the ellipsis outside the label (R34-weblib-X-03)', () => {
+    expect(summarizeDigest(`- [${'a'.repeat(201)}](https://example.test/r)`)[0]).toEqual([{ text: 'a'.repeat(160), href: 'https://example.test/r' }, { text: '…' }]);
+    expect(summarizeDigest(`- [${'a'.repeat(150)} *${'b'.repeat(30)}* c](https://example.test/r)`)[0]).toEqual([{ text: `${'a'.repeat(150)} `, href: 'https://example.test/r' }, { text: 'b'.repeat(9), href: 'https://example.test/r' }, { text: '…' }]);
+  });
+
+  // Linear work: the quadratic scan took over 20 s on each of these, the linear one well under a second; the bound leaves room for a loaded machine.
+  it('summarizes an abbreviation-heavy bullet in linear time (R34-feat-b-X-01)', () => {
+    const body = `- ${'e.g. '.repeat(40000)}Final policy update. Later text.`;
+    const started = performance.now();
+    const [line] = lines(body);
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(line).toBe(`${'e.g. '.repeat(32).trimEnd()}…`);
+  }, 60000);
+
+  it('summarizes a bullet of many inline spans in linear time (R34-feat-b-X-02)', () => {
+    const body = `- ${'`w` '.repeat(10000)}end. Later text.`;
+    const started = performance.now();
+    const [line] = lines(body);
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(line!.startsWith('w w w')).toBe(true);
+    expect(line!.endsWith('…')).toBe(true);
+  }, 60000);
+
+  it('scans a run of guillemets after a period that ends in a word in linear time (R34 fix-check FC-01)', () => {
+    const started = performance.now();
+    expect(lines(`- Rates rose.${'»'.repeat(40)}x later. More.`)).toEqual([`Rates rose.${'»'.repeat(40)}x later.`]);
+    expect(lines(`- **Rates rose.${'›'.repeat(40)}x** later. More.`)).toEqual([`Rates rose.${'›'.repeat(40)}x later.`]);
+    expect(performance.now() - started).toBeLessThan(5000);
+  }, 60000);
 });
+

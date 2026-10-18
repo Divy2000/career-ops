@@ -15,6 +15,10 @@ import { until } from '../helpers/until';
 let settings: Record<string, unknown>;
 /** Writes sent and not yet taken by the server, in the order they were sent. */
 let pending: Array<{ patch: Record<string, unknown>; take: () => void }>;
+/** The file's version, as the real route's ETag: every write the server takes moves it on. */
+let version: number;
+/** Every write the server answered, with the version it was sent against. */
+let puts: Array<{ ifMatch: string | null; patch: Record<string, unknown>; status: number }>;
 let roots: Root[];
 
 function json(status: number, body: unknown) {
@@ -24,7 +28,10 @@ function json(status: number, body: unknown) {
 beforeEach(() => {
   settings = { logos: false, retention: 200, claudeConcurrency: 1, modelDefault: '', usageBudgets: { fiveHourTokens: null, sevenDayTokens: null }, problem: null };
   pending = [];
+  version = 1;
+  puts = [];
   roots = [];
+  localStorage.clear();
   vi.resetModules();
   vi.stubGlobal('EventSource', class { addEventListener() {} removeEventListener() {} close() {} });
   vi.stubGlobal(
@@ -32,13 +39,22 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
-      if (url === '/api/settings/app' && method === 'GET') return json(200, settings);
+      // Follows /api/settings/app: reads and writes carry the version, and a write against an older one is refused.
+      if (url === '/api/settings/app' && method === 'GET') return json(200, { ...settings, etag: `v${version}` });
       if (url === '/api/settings/app' && method === 'PUT') {
         const patch = JSON.parse(String(init!.body)) as Record<string, unknown>;
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        const ifMatch = Object.entries(headers).find(([k]) => k.toLowerCase() === 'if-match')?.[1] ?? null;
         await new Promise<void>((take) => pending.push({ patch, take }));
-        const { problem: _problem, ...rest } = settings;
+        const { problem, ...rest } = settings;
+        if (ifMatch !== null && ifMatch !== `v${version}`) {
+          puts.push({ ifMatch, patch, status: 409 });
+          return json(409, { code: 'settings-changed', error: 'settings.json changed since you loaded it', current: { ...rest, problem, etag: `v${version}` } });
+        }
+        puts.push({ ifMatch, patch, status: 200 });
+        version++;
         settings = { ...rest, ...patch, problem: null };
-        return json(200, { ...rest, ...patch });
+        return json(200, { ...rest, ...patch, etag: `v${version}` });
       }
       if (url === '/api/usage') return json(200, {});
       return json(404, { error: 'not stubbed' });
@@ -49,6 +65,7 @@ afterEach(async () => {
   for (const r of roots) await act(async () => r.unmount());
   document.body.innerHTML = '';
   vi.unstubAllGlobals();
+  localStorage.clear();
   delete (navigator as { locks?: unknown }).locks;
 });
 
@@ -105,6 +122,7 @@ describe('app settings: the latest local choice wins', () => {
     await until(() => pending.length > 0, 'the first write on its way');
     await click(host.querySelector<HTMLInputElement>('#setting-logos')!);
     await drain();
+    expect(puts.map((p) => [p.ifMatch, p.status])).toEqual([['v1', 200], ['v2', 200]]);
     expect(settings.logos).toBe(false);
     await until(() => host.querySelector<HTMLInputElement>('#setting-logos')?.checked === false, 'the box showing off');
   });
@@ -117,6 +135,7 @@ describe('app settings: the latest local choice wins', () => {
     await until(() => pending.length > 0, 'the save on its way');
     await type(host.querySelector<HTMLInputElement>('#setting-retention')!, '800');
     await drain();
+    expect(puts.map((p) => [p.ifMatch, p.status])).toEqual([['v1', 200]]);
     expect(settings.retention).toBe(600);
     expect(host.querySelector<HTMLInputElement>('#setting-retention')!.value).toBe('800');
     expect([...host.querySelectorAll('button')].find((b) => b.textContent === 'Save')!.disabled).toBe(false);
@@ -130,6 +149,7 @@ describe('app settings: the latest local choice wins', () => {
     await until(() => pending.length > 0, 'the save on its way');
     await type(host.querySelector<HTMLInputElement>('#setting-model')!, 'sonnet');
     await drain();
+    expect(puts.map((p) => [p.ifMatch, p.status])).toEqual([['v1', 200]]);
     expect(settings.modelDefault).toBe('opus');
     expect(host.querySelector<HTMLInputElement>('#setting-model')!.value).toBe('sonnet');
   });
@@ -142,6 +162,7 @@ describe('app settings: the latest local choice wins', () => {
     await until(() => pending.length > 0, 'the save on its way');
     await type(host.querySelector<HTMLInputElement>('[aria-label="7 day token budget"]')!, '9000');
     await drain();
+    expect(puts.map((p) => [p.ifMatch, p.status])).toEqual([['v1', 200]]);
     expect(settings.usageBudgets).toEqual({ fiveHourTokens: 1000, sevenDayTokens: null });
     expect(host.querySelector<HTMLInputElement>('#setting-budget-5h')!.value).toBe('1000');
     expect(host.querySelector<HTMLInputElement>('[aria-label="7 day token budget"]')!.value).toBe('9000');
@@ -178,6 +199,8 @@ describe('app settings: the latest local choice wins', () => {
     await choose(await until(() => tabB.querySelector<HTMLSelectElement>('#setting-concurrency'), 'tab B select'), '3');
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     await drain();
+    // Tab B read v1 too, but its browser's own write moved the file to v2, so it writes on top of that.
+    expect(puts.map((p) => [p.ifMatch, p.status])).toEqual([['v1', 200], ['v2', 200]]);
     expect(settings.claudeConcurrency).toBe(3);
   });
 });

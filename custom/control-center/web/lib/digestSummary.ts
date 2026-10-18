@@ -14,6 +14,9 @@ export interface DigestSpan {
 
 export const spansText = (spans: DigestSpan[]): string => spans.map((s) => s.text).join('');
 
+/** While summarizing, a span also notes that a dropped node (image, footnote, raw HTML, struck text) sits just before it. */
+type Span = DigestSpan & { gap?: true };
+
 const parser = unified().use(remarkParse).use(remarkGfm);
 
 /** What a link labelled with its own address shows: the host of a web address, the address alone for mailto:/tel:, else the label. */
@@ -32,7 +35,7 @@ function addressLabel(url: string): string {
 type Definitions = Map<string, string>;
 
 /** Phrasing nodes to spans. Images, footnote references, raw HTML and struck-through (withdrawn) text are dropped; a link whose label is its own address shows it compactly. */
-function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string | undefined, out: DigestSpan[], defs: Definitions): void {
+function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string | undefined, out: Span[], defs: Definitions): void {
   for (const n of nodes) {
     switch (n.type) {
       case 'text':
@@ -63,21 +66,26 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
       case 'footnoteReference':
       case 'html':
       case 'delete':
+        out.push({ text: '', gap: true });
         break;
     }
   }
 }
 
-/** Collapses the whitespace left behind by dropped nodes. */
-function tidy(spans: DigestSpan[]): DigestSpan[] {
-  const out: DigestSpan[] = [];
+/** Collapses the whitespace left behind by dropped nodes, and marks the span that follows one. */
+function tidy(spans: Span[]): Span[] {
+  const out: Span[] = [];
   let prevSpace = true;
+  let gap = false;
   for (const s of spans) {
+    gap ||= s.gap === true;
     let text = s.text.replace(/\s+/g, ' ');
     if (prevSpace) text = text.replace(/^ /, '');
     if (text === '') continue;
     prevSpace = text.endsWith(' ');
-    out.push({ ...s, text });
+    const { gap: _gap, ...rest } = s;
+    out.push({ ...rest, text, ...(gap ? { gap: true as const } : {}) });
+    gap = false;
   }
   const last = out[out.length - 1];
   if (last) last.text = last.text.replace(/ $/, '');
@@ -90,89 +98,152 @@ const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 
 const CITATION_WORDS = new Set(['fed', 'reg', 'sec', 'pub', 'rev', 'pt']);
 const CITATION_NEXT = /^\p{Lu}\p{L}{0,3}\.$/u;
 const CAPITALIZED = /^\p{Lu}/u;
+// Closers in every quoting style ("" '' “” „“ «» »« 「」 『』 ...). French spacing puts a space before a closing
+// guillemet ("définitif. »"); a Danish » after a space opens the next sentence, but sits on its word, so the lookahead refuses it.
+const SENTENCE_PUNCTUATION = /[.!?](?: [\u00bb\u203a]|[\u00ab\u00bb\u2039\u203a"')\]}\u2018\u2019\u201c\u201d\u3009\u300b\u300d\u300f\u3011\u3015\u3017\u3019\u301b\uff02\uff07\uff09\uff3d\uff5d])*(?=\s|$)/gu;
+const OPENERS = /^[(["'{\u2018\u201a\u201c\u201e\u00ab\u00bb\u2039\u203a\u3008\u300a\u300c\u300e\u3010\u3014\u3016\u3018\u301a\uff02\uff07\uff08\uff3b\uff5b]+/u;
 // A lone capital after these is a lettered part ("Schedule A.", "Part B."), not a middle initial.
 const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 'appendix', 'exhibit', 'form', 'annex', 'item', 'tier', 'type', 'class', 'category', 'group']);
 
-/**
- * Where the first sentence of `text` ends (after its . ! or ? and any closing quotes or brackets), or -1: a period after an abbreviation, or before a lowercase
- * word or a number ("Oct. 15"), is no end. Ends before `from` are skipped: that text is context for the words before a period.
- */
-function sentenceEnd(text: string, from = 0): number {
-  // Closing quotes and brackets after the punctuation belong to the sentence: 'said "under review." Posts will'.
-  for (const m of text.matchAll(/[.!?]["')\]\u2019\u201d]*(?=\s|$)/gu)) {
-    const i = m.index!;
-    const after = i + m[0].length;
-    if (i < from) continue;
-    const nextWord = /^\s+(\S+)/.exec(text.slice(after))?.[1];
-    if (text[i] === '.') {
-      // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
-      const words = text.slice(0, i).split(/\s/);
-      const word = (words.pop() ?? '').replace(/^[(["'\u2018\u201c]+/u, '');
-      if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) continue;
-      if (ABBREVIATIONS.has(word.toLowerCase())) continue;
-      if (CITATION_WORDS.has(word.toLowerCase()) && nextWord !== undefined && CITATION_NEXT.test(nextWord)) continue;
-      // A middle initial sits between two capitalized words ("Donald J. Trump"); "schedule B. Employers" ends.
-      const before = words.pop() ?? '';
-      if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(before) && !LETTERED_PARTS.has(before.toLowerCase()) && nextWord !== undefined && CAPITALIZED.test(nextWord)) continue;
-    }
-    if (nextWord === undefined || !/[\p{Ll}\d]/u.test(nextWord[0]!)) return after;
-  }
-  return -1;
+const SPACE = /\s/u;
+const NEXT_WORD = /(\s+)(\S+)/uy;
+
+/** The whitespace-delimited word ending at `end`, read backwards from it, and where it starts. */
+function wordBefore(text: string, end: number): { word: string; start: number } {
+  let start = end;
+  while (start > 0 && !SPACE.test(text[start - 1]!)) start--;
+  return { word: text.slice(start, end), start };
 }
 
 /**
- * Keeps spans up to the first sentence end. A link (its consecutive spans sharing one target) whose label holds the end
- * is kept whole; its end is judged with the text after the link in view, so "[rule 5.](u) applies" reads on.
+ * Whether the . ! or ? at `i` (with its closing quotes and brackets, up to `after`) ends a sentence: a period after an
+ * abbreviation or an initial, or before a lowercase word or a number ("Oct. 15"), is no end. Text from `hardFrom` on starts
+ * at a link or after a dropped node: it still shows an abbreviation or initial ("Fed. [Reg.](u)", "J. [Trump](u)"), or a
+ * number, but a lowercase word there does not carry the sentence on ("Oct. 15. [source](u)", "here. ![img](u) end.").
+ * Formatting alone is no such boundary ("*not final.* yet"). Reads only the words next to `i`, so scanning a whole text
+ * costs time linear in its length.
  */
-function firstSentence(spans: DigestSpan[]): DigestSpan[] {
-  const out: DigestSpan[] = [];
+function endsSentence(text: string, i: number, after: number, hardFrom: number): boolean {
+  NEXT_WORD.lastIndex = after;
+  const next = NEXT_WORD.exec(text);
+  const nextWord = next?.[2];
+  if (text[i] === '.') {
+    // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
+    const own = wordBefore(text, i);
+    const word = own.word.replace(OPENERS, '');
+    if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) return false;
+    if (ABBREVIATIONS.has(word.toLowerCase())) return false;
+    if (CITATION_WORDS.has(word.toLowerCase()) && nextWord !== undefined && CITATION_NEXT.test(nextWord)) return false;
+    // A middle initial sits between two capitalized words ("Donald J. Trump"); "schedule B. Employers" ends.
+    const before = own.start > 0 ? wordBefore(text, own.start - 1).word : '';
+    if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(before) && !LETTERED_PARTS.has(before.toLowerCase()) && nextWord !== undefined && CAPITALIZED.test(nextWord)) return false;
+  }
+  if (next === null) return true;
+  const carriesOn = after + next[1]!.length < hardFrom ? /[\p{Ll}\d]/u : /\d/u;
+  return !carriesOn.test(next[2]![0]!);
+}
+
+/** A plain span, or a link: its consecutive spans sharing one target. */
+interface Piece {
+  first: number;
+  last: number;
+  start: number;
+  end: number;
+  link: boolean;
+}
+
+function pieces(spans: Span[]): Piece[] {
+  const out: Piece[] = [];
+  let offset = 0;
   for (let i = 0; i < spans.length; ) {
-    const s = spans[i]!;
-    if (!s.href) {
-      // The text kept so far holds no sentence end, but its last words decide whether a period here is one ("[Donald](u) J.").
-      const before = spansText(out);
-      const end = sentenceEnd(before + s.text, before.length);
-      if (end !== -1) {
-        out.push({ ...s, text: s.text.slice(0, end - before.length) });
-        return out;
-      }
-      out.push(s);
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j < spans.length && spans[j]!.href === s.href) j++;
-    const link = spans.slice(i, j);
-    const label = spansText(link);
-    const before = spansText(out);
-    out.push(...link);
-    const end = sentenceEnd(before + label + spansText(spans.slice(j)), before.length);
-    if (end !== -1 && end <= before.length + label.length) return out;
+    let j = i + 1;
+    if (spans[i]!.href) while (j < spans.length && spans[j]!.href === spans[i]!.href) j++;
+    let length = 0;
+    for (let k = i; k < j; k++) length += spans[k]!.text.length;
+    out.push({ first: i, last: j - 1, start: offset, end: offset + length, link: spans[i]!.href !== undefined });
+    offset += length;
     i = j;
   }
   return out;
 }
 
-/** Clips rendered text to the limit. A link is kept whole or dropped; plain text is cut with an ellipsis. */
-function clip(spans: DigestSpan[]): DigestSpan[] {
-  const out: DigestSpan[] = [];
-  let used = 0;
-  for (const s of spans) {
-    const room = MAX_CHARS - used;
-    if (s.text.length <= room) {
-      out.push(s);
-      used += s.text.length;
-      continue;
-    }
-    if (s.href) {
-      if (out.length === 0) out.push(s);
-      else out[out.length - 1] = { ...out[out.length - 1]!, text: `${out[out.length - 1]!.text.trimEnd()}…` };
-    } else {
-      out.push({ ...s, text: `${s.text.slice(0, Math.max(room, 0)).trimEnd()}…` });
-    }
-    return out;
+/**
+ * Every sentence end of the spans' text, in order, as the offset just past its closing quotes and brackets. One rule over
+ * the text of all spans, so a period at a span's edge sees its neighbours ("[Donald](u) J.", "Donald J. [Trump](u)",
+ * "*not final.* yet") and its closers may sit in the next span ("([the notice.](u))").
+ */
+function* sentenceEnds(spans: Span[]): Generator<number> {
+  const text = spansText(spans);
+  const all = pieces(spans);
+  // For each piece, where the first link or post-gap piece after it starts.
+  const hardFrom = new Array<number>(all.length);
+  let hard = Infinity;
+  for (let k = all.length - 1; k >= 0; k--) {
+    hardFrom[k] = hard;
+    if (all[k]!.link || spans[all[k]!.first]!.gap) hard = all[k]!.start;
+  }
+  let p = 0;
+  for (const m of text.matchAll(SENTENCE_PUNCTUATION)) {
+    const i = m.index!;
+    while (all[p]!.end <= i) p++;
+    const after = i + m[0].length;
+    if (endsSentence(text, i, after, hardFrom[p]!)) yield after;
+  }
+}
+
+/** The spans' first `length` characters; a link is an atom, kept whole once any of it is kept. */
+function keepTo(spans: Span[], length: number): Span[] {
+  const out: Span[] = [];
+  for (const piece of pieces(spans)) {
+    if (piece.start >= length) break;
+    const whole = spans.slice(piece.first, piece.last + 1);
+    if (piece.end <= length || piece.link) out.push(...whole);
+    else out.push({ ...whole[0]!, text: whole[0]!.text.slice(0, length - piece.start) });
   }
   return out;
+}
+
+/** Keeps spans up to the first sentence end; a link whose label holds the end is kept whole. */
+function firstSentence(spans: Span[]): Span[] {
+  for (const end of sentenceEnds(spans)) return keepTo(spans, end);
+  return spans;
+}
+
+/** Ends kept text with an ellipsis after its trailing spaces; a link label never takes it. */
+function ellipsize(out: Span[]): Span[] {
+  while (out.length > 0) {
+    const last = out[out.length - 1]!;
+    const text = last.text.trimEnd();
+    if (text !== '') {
+      out[out.length - 1] = { ...last, text };
+      break;
+    }
+    out.pop();
+  }
+  const last = out[out.length - 1];
+  if (last && !last.href) out[out.length - 1] = { ...last, text: `${last.text}…` };
+  else out.push({ text: '…' });
+  return out;
+}
+
+/**
+ * Clips rendered text to the limit. A link is kept whole or dropped; plain text is cut with an ellipsis. Only a link that
+ * starts the line and alone exceeds the limit has its label cut: dropping it would leave nothing, and its target is kept.
+ */
+function clip(spans: Span[]): Span[] {
+  for (const piece of pieces(spans)) {
+    if (piece.end <= MAX_CHARS) continue;
+    if (piece.link && piece.start > 0) return ellipsize(spans.slice(0, piece.first));
+    const kept = spans.slice(0, piece.first);
+    let at = piece.start;
+    for (const s of spans.slice(piece.first, piece.last + 1)) {
+      if (at >= MAX_CHARS) break;
+      kept.push({ ...s, text: s.text.slice(0, MAX_CHARS - at) });
+      at += s.text.length;
+    }
+    return ellipsize(kept);
+  }
+  return spans;
 }
 
 // Definitions are valid anywhere in the document (including nested under a
@@ -185,8 +256,19 @@ function collectDefinitions(node: { type: string; identifier?: string; url?: str
   return defs;
 }
 
-/** A bold lead stands alone only as a full sentence; a label ("Effective date:", "USCIS") needs the text after it. */
-const isHeadline = (lead: DigestSpan[]): boolean => /[.!?]["')\]\u2019\u201d]*$/u.test(spansText(lead));
+/**
+ * A bold lead stands alone only as a full sentence, judged with the bullet's text after it in view: a label ("Effective
+ * date:", "USCIS") or a lead that ends at an abbreviation ("**The U.S. Dept.** of State") needs the text after it.
+ */
+function isHeadline(lead: Span[], spans: Span[]): boolean {
+  const length = spansText(lead).length;
+  for (const end of sentenceEnds(spans)) {
+    if (end >= length) return end === length;
+  }
+  return false;
+}
+
+const published = (spans: Span[]): DigestSpan[] => spans.map(({ gap: _gap, ...s }) => s);
 
 /**
  * Compact highlights from a policy digest section: for each top-level bullet its bold lead when that is a sentence, or
@@ -200,17 +282,18 @@ export function summarizeDigest(body: string, max = 4): DigestSpan[][] {
   for (const item of list.flatMap((l) => l.children)) {
     const para = item.children.find((c) => c.type === 'paragraph');
     if (para?.type !== 'paragraph') continue;
-    const spans: DigestSpan[] = [];
-    flatten(para.children, undefined, undefined, spans, defs);
+    const raw: Span[] = [];
+    flatten(para.children, undefined, undefined, raw, defs);
+    const spans = tidy(raw);
     const first = para.children[0];
     const lead = first?.type === 'strong' ? (() => {
-      const l: DigestSpan[] = [];
+      const l: Span[] = [];
       flatten([first], undefined, undefined, l, defs);
       return tidy(l);
     })() : null;
-    const line = clip(tidy(lead && isHeadline(lead) ? lead : firstSentence(tidy(spans))));
+    const line = clip(tidy(lead && isHeadline(lead, spans) ? lead : firstSentence(spans)));
     if (line.length === 0) continue;
-    out.push(line);
+    out.push(published(line));
     if (out.length === max) break;
   }
   return out;
