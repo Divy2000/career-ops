@@ -997,6 +997,42 @@ describe('app settings and usage meter', () => {
   });
 });
 
+describe('app settings over an unreadable settings.json (R33-feat-c-L2-01)', () => {
+  const putIn = (own: TestApp, payload: unknown, url = '/api/settings/app') => own.app.inject({ method: 'PUT', url, headers: own.authedWrite, payload: payload as Record<string, unknown> });
+  const settingsFile = (own: TestApp) => path.join(own.cfg.dataRoot, 'data', 'control-center', 'settings.json');
+  for (const [name, content] of [
+    ['not valid JSON', '{"logos": true, "retention": 900,'],
+    ['holding an invalid value', JSON.stringify({ logos: true, retention: 'nine hundred', claudeConcurrency: 3 })],
+  ] as const) {
+    it(`given settings.json is ${name}, when a patch is saved without opting into a reset, then it is refused with 409 and the file is left as it was`, async () => {
+      const own = await makeTestApp();
+      try {
+        fs.mkdirSync(path.dirname(settingsFile(own)), { recursive: true });
+        fs.writeFileSync(settingsFile(own), content);
+        const res = await putIn(own, { modelDefault: 'claude-opus' });
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json()).toMatchObject({ code: 'settings-problem', error: expect.stringMatching(/settings\.json/), problem: expect.any(String) });
+        expect(fs.readFileSync(settingsFile(own), 'utf8')).toBe(content);
+      } finally {
+        await own.close();
+      }
+    });
+  }
+  it('given settings.json is not valid JSON, when the patch opts into a reset, then the defaults plus the patch are written', async () => {
+    const own = await makeTestApp();
+    try {
+      fs.mkdirSync(path.dirname(settingsFile(own)), { recursive: true });
+      fs.writeFileSync(settingsFile(own), '{oops');
+      const res = await putIn(own, { modelDefault: 'claude-opus' }, '/api/settings/app?reset=1');
+      expect(res.statusCode, res.body).toBe(200);
+      expect(JSON.parse(fs.readFileSync(settingsFile(own), 'utf8'))).toMatchObject({ modelDefault: 'claude-opus', retention: 500 });
+      expect((await own.app.inject({ method: 'GET', url: '/api/settings/app', headers: own.authed })).json().problem).toBeNull();
+    } finally {
+      await own.close();
+    }
+  });
+});
+
 describe('raising Claude concurrency (SW2-server-03)', () => {
   it('starts a Claude run that was waiting for a slot as soon as the cap is raised, with no other run event', async () => {
     const own = await makeTestApp();

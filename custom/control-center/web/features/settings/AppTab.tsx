@@ -1,7 +1,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { apiGet, apiSend } from '../../lib/api';
+import { ApiError, apiGet, apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { DataState } from '../../components/ui';
 import { AppearanceSetting } from '../../components/AppearanceSetting';
@@ -32,8 +32,9 @@ const subscribe = (l: () => void) => {
 
 const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
 
-const queueWrite = (patch: Partial<AppSettings>) => {
-  const write = writeQueue.then(() => withWriteLock(() => apiSend<AppSettings>('PUT', '/api/settings/app', patch)));
+const queueWrite = (patch: Partial<AppSettings>, reset: boolean) => {
+  const url = reset ? '/api/settings/app?reset=1' : '/api/settings/app';
+  const write = writeQueue.then(() => withWriteLock(() => apiSend<AppSettings>('PUT', url, patch)));
   writeQueue = write.catch(() => undefined);
   return write;
 };
@@ -49,12 +50,15 @@ export function useAppSettings(): UseQueryResult<AppSettingsRead> {
 export function useSaveSettings() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
-  const save = async (patch: Partial<AppSettings>, okText: string) => {
+  // A write the server refused because settings.json could not be read: sent again only if the user asks to replace the file.
+  const [refused, setRefused] = useState<{ patch: Partial<AppSettings>; okText: string } | null>(null);
+  const save = async (patch: Partial<AppSettings>, okText: string, reset = false) => {
     setError(null);
+    setRefused(null);
     setUnanswered([...unanswered, patch]);
     try {
       try {
-        const written = await queueWrite(patch);
+        const written = await queueWrite(patch, reset);
         // A read started before this write may answer after it: it is dropped, and the written settings shown until the refetch.
         await qc.cancelQueries({ queryKey: SETTINGS_KEY });
         qc.setQueryData<AppSettingsRead>(SETTINGS_KEY, { ...written, problem: null });
@@ -65,12 +69,28 @@ export function useSaveSettings() {
       await Promise.all([qc.invalidateQueries({ queryKey: SETTINGS_KEY }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
       return true;
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && (err.body as { code?: unknown } | null)?.code === 'settings-problem') setRefused({ patch, okText });
       setError(`Could not save settings: ${describeError(err)}`);
       toast.error('Settings not saved');
       return false;
     }
   };
-  return { save, error };
+  const replace = refused ? () => save(refused.patch, refused.okText, true) : null;
+  return { save, error, replace };
+}
+
+function SaveError({ error, replace }: { error: string | null; replace: (() => Promise<boolean>) | null }) {
+  if (!error) return null;
+  return (
+    <div role="alert" className="danger-text row gap">
+      <p>{error}</p>
+      {replace && (
+        <button type="button" onClick={() => void replace()}>
+          Replace settings.json
+        </button>
+      )}
+    </div>
+  );
 }
 
 /** After a save answers, its draft is cleared only if the user has not typed past what it sent. */
@@ -84,7 +104,7 @@ function SettingsProblem({ problem }: { problem: string | null }) {
   if (!problem) return null;
   return (
     <p role="alert" className="danger-text small">
-      {problem} Defaults are in effect until the next save.
+      {problem} Defaults are in effect; a save asks before replacing the file.
     </p>
   );
 }
@@ -92,7 +112,7 @@ function SettingsProblem({ problem }: { problem: string | null }) {
 /** App settings: logos opt-in and run retention (spec 2.14 App). */
 export function AppTab() {
   const q = useAppSettings();
-  const { save, error } = useSaveSettings();
+  const { save, error, replace } = useSaveSettings();
   const [retention, setRetention] = useState<string | null>(null);
   const s = q.data;
   useUnsaved('the run retention', retention !== null && s !== undefined && Number(retention) !== s.retention);
@@ -136,11 +156,7 @@ export function AppTab() {
             </div>
           </div>
         )}
-        {error && (
-          <p role="alert" className="danger-text">
-            {error}
-          </p>
-        )}
+        <SaveError error={error} replace={replace} />
       </DataState>
     </div>
   );
@@ -149,7 +165,7 @@ export function AppTab() {
 /** Claude engine knobs: concurrency, model default and usage budgets. */
 export function EngineSettings() {
   const q = useAppSettings();
-  const { save, error } = useSaveSettings();
+  const { save, error, replace } = useSaveSettings();
   const [model, setModel] = useState<string | null>(null);
   const [budget5, setBudget5] = useState<string | null>(null);
   const [budget7, setBudget7] = useState<string | null>(null);
@@ -217,11 +233,7 @@ export function EngineSettings() {
               </button>
             </div>
           </div>
-          {error && (
-            <p role="alert" className="danger-text">
-              {error}
-            </p>
-          )}
+          <SaveError error={error} replace={replace} />
         </div>
       )}
     </DataState>

@@ -80,7 +80,22 @@ export function sessionModel(dataRoot: string, requested: string | null | undefi
 }
 
 export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): AppSettings {
-  const next = appSettingsSchema.parse(mergeSettings(readSettings(dataRoot).settings, patch));
+  return persistSettings(dataRoot, appSettingsSchema.parse(mergeSettings(readSettings(dataRoot).settings, patch)));
+}
+
+export type SettingsUpdate = { ok: true; settings: AppSettings } | { ok: false; code: 'settings-problem'; problem: string };
+
+/**
+ * A patch saved from the app. A settings.json that could not be read is only replaced when the caller opts in:
+ * the user's file would otherwise become the defaults (or its valid fields) plus one change without them knowing.
+ */
+export function updateSettings(dataRoot: string, patch: Partial<AppSettings>, opts: { reset?: boolean } = {}): SettingsUpdate {
+  const current = readSettings(dataRoot);
+  if (current.problem && !opts.reset) return { ok: false, code: 'settings-problem', problem: current.problem };
+  return { ok: true, settings: persistSettings(dataRoot, appSettingsSchema.parse(mergeSettings(current.settings, patch))) };
+}
+
+function persistSettings(dataRoot: string, next: AppSettings): AppSettings {
   const abs = path.join(dataRoot, SETTINGS_REL);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = `${abs}.tmp-${process.pid}`;
