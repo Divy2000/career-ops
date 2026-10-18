@@ -113,6 +113,56 @@ describe('a cancelled turn another server process is still finalizing (R33-claud
   }, 40_000);
 });
 
+describe('one tracker settles a turn across server processes (R33-claude-L1-01)', () => {
+  /** A follows a turn that streams a delta, waits 2.5 s, streams another and ends done; B reconciles meanwhile. */
+  async function followedByBoth(fn: (a: TestApp, b: TestApp, id: string, deltas: () => number) => Promise<void>): Promise<void> {
+    const dataRoot = copyFixtureRoot();
+    const guardRoot = tempDir('cc-r33-standby-guard-');
+    const scenario = path.join(tempDir('cc-r33-scenario-'), 'scenario.json');
+    const text = (t: string) => ({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: t } } });
+    fs.writeFileSync(scenario, JSON.stringify({ events: [{ type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] }, text('one '), ...Array.from({ length: 25 }, () => ({ __sleep: 100 })), text('two'), { type: 'result', subtype: 'success', result: 'one two', total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, num_turns: 1, is_error: false }] }));
+    const before = process.env.FAKE_CLAUDE_SCENARIO;
+    process.env.FAKE_CLAUDE_SCENARIO = scenario;
+    const a = await makeTestApp({ dataRoot, guardRoot });
+    const b = await makeTestApp({ dataRoot, guardRoot }, { deferReconcile: true });
+    try {
+      const meta = a.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
+      a.sessions.store.setStatus(meta.id, 'done');
+      await a.sessions.send(meta.id, 'What is overdue?');
+      const deltas = () => a.sessions.store.readEvents(meta.id).filter((e) => e.event.type === 'text.delta').length;
+      await until(() => deltas() === 1, 'the first delta');
+      b.activate();
+      expect(b.sessions.isActive(meta.id)).toBe(true);
+      await fn(a, b, meta.id, deltas);
+    } finally {
+      await a.close();
+      await b.close();
+      if (before === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+      else process.env.FAKE_CLAUDE_SCENARIO = before;
+      await runsEnded(dataRoot);
+    }
+  }
+
+  it('given a turn A follows, when B reconciles, then only A records its output and B lets go once A settled it', async () => {
+    await followedByBoth(async (_a, b, id, deltas) => {
+      await until(() => b.sessions.read(id)!.turns[0]!.endedAt !== null, 'the turn to be settled', 20_000);
+      await until(() => !b.sessions.isActive(id), 'B to let go of the turn');
+      expect(deltas()).toBe(2);
+      expect(b.sessions.read(id)!.status).toBe('done');
+    });
+  }, 40_000);
+
+  it('given a turn A follows and B stands by for, when A is gone, then B takes it over and settles it', async () => {
+    await followedByBoth(async (a, b, id, deltas) => {
+      await wait(400);
+      await a.close();
+      await until(() => b.sessions.read(id)!.turns[0]!.endedAt !== null, 'B to settle the turn', 20_000);
+      expect(b.sessions.read(id)!.status).toBe('done');
+      expect(deltas()).toBe(2);
+    });
+  }, 40_000);
+});
+
 /** Mulberry32: a small seeded PRNG, so a failing sequence can be replayed from its printed seed. */
 function prng(seed: number): () => number {
   let s = seed >>> 0;

@@ -343,6 +343,8 @@ const TURN_CLAIM_FILE = 'turn.claim';
  * kept (report number, policy ack) are settled: every other process counts the session as still finishing meanwhile.
  */
 const TRACK_CLAIM_FILE = 'track.claim';
+/** How often a tracker standing by for another process's track claim asks for it again. */
+const TRACK_STANDBY_RETRY_MS = 2000;
 export { turnClaimGone } from './process-claim.js';
 
 export interface ManagerDeps {
@@ -1611,6 +1613,7 @@ export class SessionManager {
       }
     };
     if (tracked.release) resume();
+    let standbyNextAt = Date.now() + TRACK_STANDBY_RETRY_MS;
     const pull = () => {
       const { lines, offset: next } = this.runner.store.readRaw(runId, seq, offset);
       offset = next;
@@ -1628,6 +1631,9 @@ export class SessionManager {
       // Another tracker (a peer server process) follows and settles this turn: this one stands by, and takes over only
       // once that holder is gone, from where its saved progress got to.
       if (!tracked.release) {
+        // Asking costs a ps of the holder, so a standby asks every few seconds rather than on every tick.
+        if (Date.now() < standbyNextAt) return;
+        standbyNextAt = Date.now() + TRACK_STANDBY_RETRY_MS;
         tracked.release = this.claimTrack(id);
         if (!tracked.release) {
           const meta = this.store.read(id);
