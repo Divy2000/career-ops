@@ -190,10 +190,11 @@ describe('summarizeDigest', () => {
   });
 
   it.each([
-    ['an abbreviation in brackets', '- Stamping paused (in the U.S.) until further notice. Later text.', 'Stamping paused (in the U.S.) until further notice.'],
+    ['an abbreviation in brackets', '- Stamping paused (in the U.S.) Later text here.', 'Stamping paused (in the U.S.) Later text here.'],
     ['a quoted question before lowercase', '- "Is it final?" he asked the officer. Later text.', '"Is it final?" he asked the officer.'],
     ['a quoted abbreviation', '- The memo says "see Dr." Smith for details. Later text.', 'The memo says "see Dr." Smith for details.'],
-    ['a bracketed number', '- Per rule (No.) 5 the fee rises. Later text.', 'Per rule (No.) 5 the fee rises.'],
+    ['a bracketed abbreviation', '- Per Rule (No.) Five the fee rises. Later text.', 'Per Rule (No.) Five the fee rises.'],
+    ['a quoted word before lowercase', '- Said "go." now. Later text.', 'Said "go." now.'],
   ])('does not end the first sentence at closing punctuation after %s (R33-weblib-L2-01)', (_shape, body, expected) => {
     expect(lines(body)).toEqual([expected]);
   });
