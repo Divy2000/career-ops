@@ -4,14 +4,15 @@ import { lastSession, START_REPORT_WINDOW_MS, subscribeSession } from './lastSes
 // Each start records a token under `${key}:start` (this browser tab), so a start's report can tell whether a newer start
 // was sent since: a POST that outlived START_REPORT_WINDOW_MS lets the page start again, and its late answer must not
 // replace the newer session or clear the newer start's mark. A storage that cannot hold the token supersedes nothing.
-function startToken(key: string): string | null {
+// Shared by every page that remembers a start (Dev Chat, the Discover scans), so they cannot drift apart.
+export function startToken(key: string): string | null {
   try {
     return sessionStorage.getItem(`${key}:start`);
   } catch {
     return null;
   }
 }
-function newStartToken(key: string): string | null {
+export function newStartToken(key: string): string | null {
   const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   try {
     sessionStorage.setItem(`${key}:start`, token);
@@ -24,6 +25,11 @@ function newStartToken(key: string): string | null {
     }
     return null;
   }
+}
+/** Whether a newer start than `own` (the token this start recorded) was sent under `key` since. */
+export function startSuperseded(key: string, own: string | null): boolean {
+  const latest = startToken(key);
+  return own !== null && latest !== null && latest !== own;
 }
 
 /**
@@ -44,11 +50,7 @@ export function useRememberedSession(key: string, { holdWhileAwaiting = false }:
   const [startFailed, setStartFailed] = useState(false);
   // This mount's latest start's token under each key: its report is stale once the stored token is another start's.
   const ownStarts = useRef(new Map<string, string | null>());
-  const superseded = useCallback(() => {
-    const own = ownStarts.current.get(key) ?? null;
-    const latest = startToken(key);
-    return own !== null && latest !== null && latest !== own;
-  }, [key]);
+  const superseded = useCallback(() => startSuperseded(key, ownStarts.current.get(key) ?? null), [key]);
   // A host that changes the key in place (a page kept mounted for another row) starts over on the new key's session.
   // A start still on its way reports through the callbacks of the key it was made under (its panel holds those): it is
   // remembered under that key, and this mount's state, now the new key's, is left alone.

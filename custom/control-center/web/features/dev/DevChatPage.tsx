@@ -6,6 +6,7 @@ import { apiGet, apiSend, ApiError } from '../../lib/api';
 import type { SessionMeta } from '@shared/api';
 import { readLastDevSession, writeLastDevSession } from '../../lib/devchatSession';
 import { lastSession, START_REPORT_WINDOW_MS, subscribeSession } from '../../lib/lastSession';
+import { newStartToken, startSuperseded } from '../../lib/useRememberedSession';
 import { isTerminal } from '../../lib/sessions';
 import { describeError, useActions, useRunAction } from '../../lib/actions';
 import { SessionPanel } from '../../components/SessionPanel';
@@ -234,32 +235,6 @@ const is404 = (e: unknown) => e instanceof ApiError && e.status === 404;
 // it did not send is still in flight waits for it instead of offering a second file-editing session.
 const DEV_SESSION_KEY = 'cc.devchat.session';
 const devStore = lastSession(DEV_SESSION_KEY);
-// Each start records a token under `${DEV_SESSION_KEY}:start` (this browser tab), as useRememberedSession does: a POST
-// that outlived START_REPORT_WINDOW_MS lets the page start again, and its late answer must not replace the newer
-// session or clear the newer start's mark. A storage that cannot hold the token supersedes nothing.
-const START_TOKEN_KEY = `${DEV_SESSION_KEY}:start`;
-function storedStartToken(): string | null {
-  try {
-    return sessionStorage.getItem(START_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-function newStartToken(): string | null {
-  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  try {
-    sessionStorage.setItem(START_TOKEN_KEY, token);
-    return token;
-  } catch {
-    try {
-      sessionStorage.removeItem(START_TOKEN_KEY);
-    } catch {
-      // storage refused: no start can be told apart, so none is superseded
-    }
-    return null;
-  }
-}
-
 /** The session check's retry backoff (doubling from baseMs, capped at maxMs); tests shorten it. */
 export const SESSION_CHECK_RETRY = { baseMs: 1000, maxMs: 3000 };
 
@@ -325,12 +300,10 @@ export function DevChatPage() {
   // its own start or fork keeps it mounted, with what it shows (a start error, the forked transcript).
   const [panel, setPanel] = useState<{ key: number; own: string | null; seen: string | null }>({ key: 0, own: null, seen: sessionId });
   if (sessionId !== panel.seen) setPanel((p) => ({ key: sessionId === p.own ? p.key : p.key + 1, own: sessionId === p.own ? p.own : null, seen: sessionId }));
-  // This mount's latest start's token: its report is stale once the stored token is another start's.
+  // This mount's latest start's token, as useRememberedSession keeps it: a POST that outlived START_REPORT_WINDOW_MS
+  // lets the page start again, and its late answer must not replace the newer session or clear the newer start's mark.
   const ownStart = useRef<string | null>(null);
-  const superseded = useCallback(() => {
-    const latest = storedStartToken();
-    return ownStart.current !== null && latest !== null && latest !== ownStart.current;
-  }, []);
+  const superseded = useCallback(() => startSuperseded(DEV_SESSION_KEY, ownStart.current), []);
   const setSessionId = useCallback(
     (id: string) => {
       if (superseded()) {
@@ -350,7 +323,7 @@ export function DevChatPage() {
     [navigate, superseded],
   );
   const onStarting = useCallback(() => {
-    ownStart.current = newStartToken();
+    ownStart.current = newStartToken(DEV_SESSION_KEY);
     devStore.setStarting(true);
     setStartedHere(true);
   }, []);
