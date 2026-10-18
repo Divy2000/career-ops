@@ -2,6 +2,7 @@
 // through the runner (Claude slot cap applies), the Keychain token is read at
 // spawn and only ever lives in the child's env, stdout is normalized into
 // events.ndjson, and the honesty gate decides done / awaiting_user.
+// What must always hold here (one owner per piece of state, across server processes): manager.invariants.md.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -15,7 +16,7 @@ import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
-import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
+import { conversationStarted, HELD_REPORT_NUMS_FILE, readHeldRecords, readSentinelIdentity, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import type { EnvelopeKind } from './envelopes.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
@@ -109,7 +110,11 @@ interface TurnState {
 }
 
 interface Tracked {
-  timer: NodeJS.Timeout;
+  timer: NodeJS.Timeout | null;
+  /** This process's track claim (TRACK_CLAIM_FILE), or null while another tracker holds it and this one stands by. */
+  release: (() => void) | null;
+  /** A settle step (finalize, its failure path, a kept reservation's settle) is in flight: it untracks when it ends. */
+  settling: boolean;
 }
 
 /** How far into a turn's raw log the transcript got, so a restarted server resumes instead of replaying. */
@@ -184,7 +189,7 @@ export function writeProgress(file: string, p: TurnProgress): void {
  * go. A number released, collected or reserved again is another reservation, so a hold on it no longer matches. With `since` (when
  * the session got the numbers), a sentinel written after it is another reservation's and is not recorded.
  */
-export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
+export { HELD_REPORT_NUMS_FILE };
 
 export function recordHeldReportNums(sessionDir: string, nums: readonly number[], dataRoot: string, since?: number | null): void {
   const records = nums.flatMap((n) => {
@@ -212,50 +217,10 @@ export function restoreHeldReportNums(sessionDir: string, nums: readonly number[
  * between turns, while no release of the session's can be running. Records are read as guard-hook.mjs reads them.
  */
 export function reconcileHeldReportNums(sessionDir: string, dataRoot: string): void {
-  let text: string;
-  try {
-    text = fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw err;
-  }
-  const held = new Map<number, string>();
-  const letGo = new Map<number, { id: string | null; at: string | null }>();
-  for (const line of text.split('\n')) {
-    const m = HELD_RECORD.exec(line);
-    if (!m) continue;
-    const num = Number(m[2]);
-    if (m[1] === '-') {
-      letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
-      held.delete(num);
-    } else if (m[3] !== undefined) {
-      held.set(num, m[3]);
-      letGo.delete(num);
-    } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num)!.at !== null && !held.has(num)) {
-      held.set(num, letGo.get(num)!.at!);
-      letGo.delete(num);
-    }
-  }
-  const records = [...letGo].flatMap(([n, { at }]) => (at !== null && readSentinelIdentity(dataRoot, n)?.key === at ? [`\n+${n}=${at};`] : []));
-  if (records.length) fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), records.join(''));
-}
-
-const HELD_RECORD = /^([+-])(\d+)(?:=(\d+(?:~[A-Za-z0-9_-]{1,100})?)|@([A-Za-z0-9_-]{1,100}))?;$/;
-const SENTINEL_TOKEN = /^[A-Za-z0-9_-]{1,100}$/;
-
-/** Which reservation `num`'s sentinel is: its created_at, and the key a hold names it by (guard-hook.mjs sentinelIdentity). */
-function readSentinelIdentity(dataRoot: string, num: number): { at: number; key: string } | null {
-  const file = path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
-  let sentinel: { created_at?: unknown; token?: unknown };
-  try {
-    sentinel = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof sentinel;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
-    return null;
-  }
-  const at = typeof sentinel?.created_at === 'string' ? Date.parse(sentinel.created_at) : NaN;
-  if (Number.isNaN(at)) return null;
-  return { at, key: typeof sentinel.token === 'string' && SENTINEL_TOKEN.test(sentinel.token) ? `${at}~${sentinel.token}` : String(at) };
+  const records = readHeldRecords(sessionDir);
+  if (records === null) return;
+  const restored = [...records.letGo].flatMap(([n, { at }]) => (at !== null && readSentinelIdentity(dataRoot, n)?.key === at ? [`\n+${n}=${at};`] : []));
+  if (restored.length) fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), restored.join(''));
 }
 
 /** The tool ids the CLI hands out (toolu_...); anything else is never written into a hold record. */
@@ -335,6 +300,13 @@ export function printedReservation(output: string): number[] {
  * marks it running): two server processes on one data root (blue/green) would otherwise both start a paid turn on it.
  */
 const TURN_CLAIM_FILE = 'turn.claim';
+/**
+ * Held in a session's guard folder by the one tracker following its latest turn, from track() until the turn and what it
+ * kept (report number, policy ack) are settled: every other process counts the session as still finishing meanwhile.
+ */
+const TRACK_CLAIM_FILE = 'track.claim';
+/** How often a tracker standing by for another process's track claim asks for it again. */
+const TRACK_STANDBY_RETRY_MS = 2000;
 export { turnClaimGone } from './process-claim.js';
 
 export interface ManagerDeps {
@@ -365,8 +337,10 @@ export class SessionManager {
   private reservationWarned = new Set<string>();
   /** Sessions whose sentinel refresh is running: a tick does not start another while one waits for the tracker lock. */
   private refreshing = new Set<string>();
-  /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
-  private fanningOut = new Set<string>();
+  /** The postings (evaluation class and postingKey) this process holds the posting claim of, before their runs exist. */
+  private postingHolds = new Set<string>();
+  /** The postings a fan-out (Batch evaluate) is starting right now; a subset of postingHolds. */
+  private batchStarting = new Set<string>();
   /** The postings a fan-out holding their claim is passing to start() right now: start() takes the claim over. */
   private handingOver = new Set<string>();
   /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
@@ -457,7 +431,7 @@ export class SessionManager {
   /** True while a batch evaluate is starting this posting: a single start of it would write a second report and row. */
   isStartingInBatch(mode: string, target: SessionMeta['target']): boolean {
     const key = postingKey(mode, target);
-    return key !== null && this.fanningOut.has(`${evaluationClass(mode)}\0${key}`);
+    return key !== null && this.batchStarting.has(`${evaluationClass(mode)}\0${key}`);
   }
 
   /** Id of a live session of this mode's evaluation class already evaluating this posting, if any: a second start would write a second report. */
@@ -473,7 +447,7 @@ export class SessionManager {
 
   /** Live, or a cancelled turn still stopping (its process lives until SIGKILL) or finalizing: it may yet write its report. */
   private isLive(m: SessionMeta): boolean {
-    return LIVE_STATUSES.has(m.status) || this.active.has(m.id);
+    return LIVE_STATUSES.has(m.status) || this.stillFinishing(m);
   }
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
@@ -561,9 +535,19 @@ export class SessionManager {
    * process starting a turn on it) is refused as busy. Returns the release, which removes this claim and only this one.
    */
   private claimTurn(id: string): () => void {
-    const dir = this.store.guardDirOf(id);
-    const unclaim = takeProcessClaim(path.join(dir, TURN_CLAIM_FILE));
+    const unclaim = this.takeSessionClaim(id, TURN_CLAIM_FILE);
     if (!unclaim) throw new BusyError(`session ${id} is starting a turn in another server process`);
+    return unclaim;
+  }
+
+  /**
+   * Takes one of the session's process claims (TURN_CLAIM_FILE, TRACK_CLAIM_FILE), or null while a live process holds it.
+   * The release removes this claim and only this one.
+   */
+  private takeSessionClaim(id: string, name: string): (() => void) | null {
+    const dir = this.store.guardDirOf(id);
+    const unclaim = takeProcessClaim(path.join(dir, name));
+    if (!unclaim) return null;
     return () => {
       unclaim();
       // A session another process deleted after it was read leaves no guard folder made only for this claim; one that
@@ -582,6 +566,19 @@ export class SessionManager {
     return processClaimHeld(path.join(this.store.guardDirOf(id), TURN_CLAIM_FILE));
   }
 
+  /** Whether a live process (this one or a peer) holds the session's track claim: its latest turn is not settled yet. */
+  private trackClaimHeld(id: string): boolean {
+    return processClaimHeld(path.join(this.store.guardDirOf(id), TRACK_CLAIM_FILE));
+  }
+
+  /**
+   * Whether the session's last turn is still finishing anywhere: tracked here, tracked and not yet settled by another
+   * server process (its track claim), or its run still stopping with nobody tracking it.
+   */
+  private stillFinishing(meta: SessionMeta): boolean {
+    return this.active.has(meta.id) || this.trackClaimHeld(meta.id) || this.lastRunStillGoing(meta);
+  }
+
   /**
    * Refuses a session with a turn being prepared or running, and (unless `finishing` is false) one whose ended turn is
    * still finishing (its process may live until SIGKILL, and its finalize is still to run).
@@ -592,13 +589,13 @@ export class SessionManager {
     // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a new turn now
     // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
     // Another server process may be the one stopping it (a blue/green handover), which this one does not track.
-    if (opts.finishing !== false && (this.active.has(meta.id) || this.lastRunStillGoing(meta))) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+    if (opts.finishing !== false && this.stillFinishing(meta)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
   }
 
   /** Waits (up to RUN_END_WAIT_MS) for a session's ended turn to finish stopping and finalizing; refused when it does not. */
   private async untilFinished(id: string): Promise<void> {
     const deadline = Date.now() + RUN_END_WAIT_MS;
-    while (this.active.has(id) || this.lastRunStillGoing(this.must(id))) {
+    while (this.stillFinishing(this.must(id))) {
       if (Date.now() > deadline) throw new BusyError(`session ${id} is still finishing its previous turn`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -630,12 +627,12 @@ export class SessionManager {
    * server process on the same roots (blue/green) sees it too. Null while either holds it; returns the release.
    */
   private holdPosting(key: string): (() => void) | null {
-    if (this.fanningOut.has(key)) return null;
+    if (this.postingHolds.has(key)) return null;
     const unclaim = takeProcessClaim(postingClaimFile(this.cfg.guardRoot, key));
     if (!unclaim) return null;
-    this.fanningOut.add(key);
+    this.postingHolds.add(key);
     return () => {
-      this.fanningOut.delete(key);
+      this.postingHolds.delete(key);
       unclaim();
     };
   }
@@ -657,9 +654,17 @@ export class SessionManager {
       for (const url of input.urls) {
         if (batch.has(key(url))) continue;
         batch.set(key(url), url);
-        const release = this.holdPosting(key(url));
-        if (release) releases.set(url, release);
-        else unclaimed.add(url);
+        const held = this.holdPosting(key(url));
+        if (!held) {
+          unclaimed.add(url);
+          continue;
+        }
+        const posting = key(url);
+        this.batchStarting.add(posting);
+        releases.set(url, () => {
+          this.batchStarting.delete(posting);
+          held();
+        });
       }
       // Read under the claims: a peer's session recorded before it let its claim go is seen here.
       const live = new Map<string, string>();
@@ -825,7 +830,7 @@ export class SessionManager {
    */
   private assertNotRunningElsewhere(meta: SessionMeta): void {
     if (meta.status === 'running') throw new BusyError(`session ${meta.id} is running`);
-    if (this.lastRunStillGoing(meta)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+    if (this.stillFinishing(meta)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
   }
 
   /**
@@ -915,8 +920,8 @@ export class SessionManager {
     if (!turn || !recorded) {
       // Already settled (a status other than running or queued) with no run to follow: nothing more to record.
       if (!live) return;
-      // Another server process (blue/green) is preparing its turn under the claim: that process starts and follows it.
-      if (this.turnClaimHeld(meta.id)) return;
+      // Another server process (blue/green) is preparing its turn under the claim, or follows it: that process settles it.
+      if (this.turnClaimHeld(meta.id) || this.trackClaimHeld(meta.id)) return;
       const reason = 'run record missing after a restart';
       this.store.setStatus(meta.id, 'error', reason);
       // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
@@ -934,8 +939,13 @@ export class SessionManager {
   }
 
   close(): void {
-    for (const t of this.active.values()) clearInterval(t.timer);
-    this.active.clear();
+    // A settle step in flight keeps its track claim until it ends (its own untrack releases it): a peer must not start a
+    // turn its late writes would land on.
+    for (const [id, tracked] of [...this.active]) {
+      if (tracked.timer) clearInterval(tracked.timer);
+      tracked.timer = null;
+      if (!tracked.settling) this.untrack(id);
+    }
     this.closed = true;
     if (this.policyAckTimer) clearTimeout(this.policyAckTimer);
     this.policyAckTimer = null;
@@ -1468,6 +1478,8 @@ export class SessionManager {
 
   private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {
     if (this.active.has(id)) return;
+    const tracked: Tracked = { timer: null, release: this.claimTrack(id), settling: false };
+    this.active.set(id, tracked);
     const progressFile = path.join(this.store.guardDirOf(id), 'turns', String(n), 'progress.json');
     const parser = new StreamParser();
     let seq = 0;
@@ -1556,16 +1568,20 @@ export class SessionManager {
       stopRun();
     };
     // A previous server already turned part of this log into events: rebuild the counters silently and go on from there.
-    try {
-      const saved = readProgress(progressFile);
-      if (saved) {
-        for (const l of this.runner.store.readRaw(runId).lines) if (l.seq <= saved.rawSeq) handle(l, false);
-        seq = saved.rawSeq;
-        offset = saved.rawOffset;
+    const resume = () => {
+      try {
+        const saved = readProgress(progressFile);
+        if (saved) {
+          for (const l of this.runner.store.readRaw(runId).lines) if (l.seq <= saved.rawSeq) handle(l, false);
+          seq = saved.rawSeq;
+          offset = saved.rawOffset;
+        }
+      } catch (err) {
+        fail(err);
       }
-    } catch (err) {
-      fail(err);
-    }
+    };
+    if (tracked.release) resume();
+    let standbyNextAt = Date.now() + TRACK_STANDBY_RETRY_MS;
     const pull = () => {
       const { lines, offset: next } = this.runner.store.readRaw(runId, seq, offset);
       offset = next;
@@ -1580,6 +1596,39 @@ export class SessionManager {
       }
     };
     const timer = setInterval(() => {
+      // Another tracker (a peer server process) follows and settles this turn: this one stands by, and takes over only
+      // once that holder is gone, from where its saved progress got to.
+      if (!tracked.release) {
+        // Asking costs a ps of the holder, so a standby asks every few seconds rather than on every tick.
+        if (Date.now() < standbyNextAt) return;
+        standbyNextAt = Date.now() + TRACK_STANDBY_RETRY_MS;
+        // A turn the holder settled (or a session deleted) is let go, never claimed: there is nothing left to settle.
+        // Null when the session cannot be read (a torn meta.json): the standby asks again on its next try.
+        const settled = (): boolean | null => {
+          try {
+            const meta = this.store.read(id);
+            return !meta || Boolean(meta.turns.find((t) => t.n === n)?.endedAt);
+          } catch (err) {
+            console.warn(`[sessions] session ${id}: could not read it while standing by for its turn ${n}, so it is asked again: ${(err as Error).message}`);
+            return null;
+          }
+        };
+        const before = settled();
+        if (before === null) return;
+        if (before) return this.untrack(id);
+        tracked.release = this.claimTrack(id);
+        if (!tracked.release) return;
+        // Asked again under the claim: the holder may have settled it and let go between the two.
+        const after = settled();
+        if (after === null) {
+          // Gives the claim back and stands by again, rather than take over a turn it cannot tell is still open.
+          tracked.release();
+          tracked.release = null;
+          return;
+        }
+        if (after) return this.untrack(id);
+        resume();
+      }
       safePull();
       this.keepReservationFresh(id);
       let run: RunMeta | null;
@@ -1591,7 +1640,7 @@ export class SessionManager {
         fail(err);
         clearInterval(timer);
         // Still tracked until the runner stops following its process: the duplicate checks count it live until then.
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.untilRunStops(id, runId, state.beforeReports));
+        this.settling(id, () => this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err), () => this.untilRunStops(id, runId, state.beforeReports));
         return;
       }
       // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
@@ -1604,19 +1653,53 @@ export class SessionManager {
         stopRun();
         if (this.runner.ending(runId)) return;
         clearInterval(timer);
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure }, new Error(`the run record ${runId} is gone`)).finally(() => this.active.delete(id));
+        this.settling(id, () => this.finalizeFailed(id, n, null, { turnDone, denials, failure }, new Error(`the run record ${runId} is gone`)));
         return;
       }
       if (run.endedAt === null) return;
       clearInterval(timer);
       safePull();
       const ended = run;
-      this.finalize(id, n, ended, policy, state, { envelopes, envelopeKinds, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure })
-        .catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err))
-        .finally(() => this.active.delete(id));
+      this.settling(id, () => this.finalize(id, n, ended, policy, state, { envelopes, envelopeKinds, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err)));
     }, this.deps.pollMs ?? 250);
     timer.unref();
-    this.active.set(id, { timer });
+    tracked.timer = timer;
+  }
+
+  /**
+   * Takes the session's track claim, or null while another live tracker holds it. A claim that cannot be written (a
+   * guard folder gone read-only) is warned of and the turn is followed without it: left unfollowed it would never end.
+   */
+  private claimTrack(id: string): (() => void) | null {
+    try {
+      return this.takeSessionClaim(id, TRACK_CLAIM_FILE);
+    } catch (err) {
+      console.warn(`[sessions] session ${id}: could not take its track claim, so another server process cannot see it finishing: ${(err as Error).message}`);
+      return () => {};
+    }
+  }
+
+  /** Runs one settle step of a tracked session, then `next` (by default, untracking it), whether the step failed or not. */
+  private settling(id: string, step: () => Promise<void>, next: () => void = () => this.untrack(id)): void {
+    const tracked = this.active.get(id);
+    if (tracked) tracked.settling = true;
+    void step().finally(() => {
+      if (tracked) tracked.settling = false;
+      next();
+    });
+  }
+
+  /** The one way a tracked session stops being tracked: its timer stops and its track claim goes. */
+  private untrack(id: string): void {
+    const tracked = this.active.get(id);
+    if (!tracked) return;
+    if (tracked.timer) clearInterval(tracked.timer);
+    this.active.delete(id);
+    try {
+      tracked.release?.();
+    } catch (err) {
+      console.warn(`[sessions] session ${id}: could not remove its track claim: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -1670,7 +1753,7 @@ export class SessionManager {
    * session kept stays reserved.
    */
   private untilRunStops(id: string, runId: string, beforeReports: string[]): void {
-    if (this.closed) return;
+    if (this.closed) return this.untrack(id);
     let stopped = false;
     const following = () => {
       if (!stopped) {
@@ -1693,7 +1776,9 @@ export class SessionManager {
       }
     };
     let unreadableSince: number | null = null;
-    const settle = () => void this.settleKeptReservation(id, beforeReports).finally(() => this.active.delete(id));
+    const tracked = this.active.get(id);
+    if (!tracked) return;
+    const settle = () => this.settling(id, () => this.settleKeptReservation(id, beforeReports));
     if (!following()) {
       settle();
       return;
@@ -1705,7 +1790,7 @@ export class SessionManager {
         clearInterval(timer);
         console.warn(`[sessions] session ${id}: the run record ${runId} still cannot be read; its report number is left to the stale reservation GC`);
         // A report the run already wrote under the number is credited now; nothing would look for it later.
-        void this.settleKeptReservation(id, beforeReports, false).finally(() => this.active.delete(id));
+        this.settling(id, () => this.settleKeptReservation(id, beforeReports, false));
         return;
       }
       this.keepReservationFresh(id);
@@ -1714,7 +1799,7 @@ export class SessionManager {
       settle();
     }, this.deps.pollMs ?? 250);
     timer.unref();
-    this.active.set(id, { timer });
+    tracked.timer = timer;
   }
 
   /**

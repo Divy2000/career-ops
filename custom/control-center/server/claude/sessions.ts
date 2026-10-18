@@ -14,6 +14,14 @@ export type SessionStatus = 'queued' | 'running' | 'awaiting_user' | 'done' | 'e
 export type TargetType = 'app' | 'url' | 'company' | 'text' | 'none';
 export type AppRowIdentity = { company: string; role: string; report: number | null };
 
+/**
+ * Whether two pinned rows may be one application: the same company and role, and no two different reports. A row pinned
+ * before its report was linked (null) cannot be told apart from the same row with one, so it counts as the same.
+ */
+export function sameApplication(a: AppRowIdentity, b: AppRowIdentity): boolean {
+  return a.company === b.company && a.role === b.role && (a.report === null || b.report === null || a.report === b.report);
+}
+
 export interface SessionTurn {
   n: number;
   runId: string;
@@ -291,9 +299,12 @@ export class SessionStore {
     turn.tokens = result.tokens;
     turn.permissionDenials = result.permissionDenials;
     meta.totals = { costUsd: round(meta.totals.costUsd + result.costUsd), tokens: meta.totals.tokens + result.tokens };
-    meta.status = result.status;
-    meta.error = result.error ?? null;
-    meta.lastReason = result.reason ?? null;
+    // The status says how the last turn stands: an earlier turn ending late never overwrites a later one's.
+    if (meta.turns.at(-1) === turn) {
+      meta.status = result.status;
+      meta.error = result.error ?? null;
+      meta.lastReason = result.reason ?? null;
+    }
     this.write(meta);
     return meta;
   }
@@ -495,4 +506,66 @@ function pidAlive(pid: number): boolean {
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** A session's report-number holds, in its guard folder (format: manager.ts recordHeldReportNums; read as guard-hook.mjs reads it). */
+export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
+
+/**
+ * The report numbers a session's log holds whose sentinel is still the reservation the hold names: each hold, and each
+ * one a release of the session's let go without deleting its sentinel yet (still running, or failed and given back by
+ * reconcileHeldReportNums). A number released, collected or reserved again is another reservation's and is not listed.
+ */
+export function heldReportNumsOf(sessionDir: string, dataRoot: string): number[] {
+  const records = readHeldRecords(sessionDir);
+  if (records === null) return [];
+  const named = [...records.held, ...[...records.letGo].flatMap(([n, { at }]) => (at === null ? [] : [[n, at] as const]))];
+  return [...new Set(named.filter(([n, key]) => readSentinelIdentity(dataRoot, n)?.key === key).map(([n]) => n))];
+}
+
+/** The holds a session's log names and the releases that last let each number go, read as guard-hook.mjs reads them; null without a log. */
+export function readHeldRecords(sessionDir: string): { held: Map<number, string>; letGo: Map<number, { id: string | null; at: string | null }> } | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  const held = new Map<number, string>();
+  const letGo = new Map<number, { id: string | null; at: string | null }>();
+  for (const line of text.split('\n')) {
+    const m = HELD_RECORD.exec(line);
+    if (!m) continue;
+    const num = Number(m[2]);
+    if (m[1] === '-') {
+      letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
+      held.delete(num);
+    } else if (m[3] !== undefined) {
+      held.set(num, m[3]);
+      letGo.delete(num);
+    } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num)!.at !== null && !held.has(num)) {
+      held.set(num, letGo.get(num)!.at!);
+      letGo.delete(num);
+    }
+  }
+  return { held, letGo };
+}
+
+const HELD_RECORD = /^([+-])(\d+)(?:=(\d+(?:~[A-Za-z0-9_-]{1,100})?)|@([A-Za-z0-9_-]{1,100}))?;$/;
+const SENTINEL_TOKEN = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** Which reservation `num`'s sentinel is: its created_at, and the key a hold names it by (guard-hook.mjs sentinelIdentity). */
+export function readSentinelIdentity(dataRoot: string, num: number): { at: number; key: string } | null {
+  const file = path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
+  let sentinel: { created_at?: unknown; token?: unknown };
+  try {
+    sentinel = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof sentinel;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
+    return null;
+  }
+  const at = typeof sentinel?.created_at === 'string' ? Date.parse(sentinel.created_at) : NaN;
+  if (Number.isNaN(at)) return null;
+  return { at, key: typeof sentinel.token === 'string' && SENTINEL_TOKEN.test(sentinel.token) ? `${at}~${sentinel.token}` : String(at) };
 }

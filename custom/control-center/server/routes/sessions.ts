@@ -4,7 +4,7 @@ import type { ServerConfig } from '../config.js';
 import { BusyError, liveWorkOn, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
 import { englishModeOf, listLaunchableModeIds, sessionRefusal } from '../claude/modes.js';
 import { isReportGated } from '../claude/honesty.js';
-import type { AppRowIdentity, SessionMeta } from '../claude/sessions.js';
+import { sameApplication, type AppRowIdentity, type SessionMeta } from '../claude/sessions.js';
 import { readPipeline } from '../domains/pipeline.js';
 import { localJdPath } from '../../shared/local-jd.js';
 import { dedupUrlKey } from '../../shared/dedup-url.js';
@@ -247,11 +247,14 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
    * Null when a tailored CV for the row may run, else the 409 reason naming the session in the way. A start, or a reply
    * to or fork of a finished session, is held by any live one. A reply to or fork of a session paused for a reply carries
    * that run on, so it is held only by one whose turn runs or is starting (two paused sessions would otherwise refuse
-   * each other's reply for good), and never by its own session.
+   * each other's reply for good), and never by its own session. `pin` is the application the new turn is for: a session
+   * pinned to a different one (the row a reindex moved off the number) does not hold it; one with no pin, or a turn whose
+   * application cannot be told, is held.
    */
-  const tailoredCvHolds = (row: string, own: { meta: SessionMeta; kind: 'reply' | 'fork' } | null = null): string | null => {
+  const tailoredCvHolds = (row: string, pin: AppRowIdentity | undefined, own: { meta: SessionMeta; kind: 'reply' | 'fork' } | null = null): string | null => {
     const holds = (m: SessionMeta) => own?.meta.status !== 'awaiting_user' || m.status !== 'awaiting_user' || turnsStarting.has(m.id);
-    const live = liveOrStarting().find((m) => tailoredCvRow(m.mode, m.target) === row && !(own?.kind === 'reply' && m.id === own.meta.id) && holds(m));
+    const otherApplication = (m: SessionMeta) => pin !== undefined && m.target.row !== undefined && !sameApplication(pin, m.target.row);
+    const live = liveOrStarting().find((m) => tailoredCvRow(m.mode, m.target) === row && !(own?.kind === 'reply' && m.id === own.meta.id) && !otherApplication(m) && holds(m));
     return live ? `session ${live.id} is already generating the tailored CV for tracker row #${row}. Open it instead.` : null;
   };
   /** The 409 reason a reply or fork is refused with when it would carry on Process inbox or an evaluation over the same pending rows, or null. */
@@ -260,7 +263,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!meta) return null;
     if (isProcessInbox(meta.mode)) return evaluationsHold(meta);
     const cvRow = tailoredCvRow(meta.mode, meta.target);
-    if (cvRow) return tailoredCvHolds(cvRow, { meta, kind });
+    if (cvRow) return tailoredCvHolds(cvRow, meta.target.row, { meta, kind });
     return meta.target.type === 'url' && meta.target.value ? processInboxHolds(meta.mode, [meta.target.value]) : null;
   };
 
@@ -292,13 +295,20 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const noCompanyFile = parsed.data.mode === 'sponsorship-check' ? sponsorCheckRefusal(parsed.data.target.value ?? '') : null;
     if (noCompanyFile) return reply.code(400).send({ error: noCompanyFile });
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
+    // The row an app session is for is read before the guards: the tailored CV hold goes by it, and nothing awaits between
+    // that check and the session's create, so two racing starts cannot both pass it.
+    let pin: AppRowIdentity | undefined;
+    if (parsed.data.target.type === 'app') {
+      pin = (await appRowAt(parsed.data.target.value)) ?? undefined;
+      parsed.data.target = { type: 'app', value: parsed.data.target.value, ...(pin ? { row: pin } : {}) };
+    }
     if (manager.isStartingInBatch(parsed.data.mode, parsed.data.target)) return reply.code(409).send({ error: parsed.data.target.type === 'company' ? `another sponsorship check is already starting for ${parsed.data.target.value?.trim()}` : `another batch evaluate is already starting ${parsed.data.target.value}` });
     const liveId = manager.liveEvaluationFor(parsed.data.mode, parsed.data.target);
     if (liveId) return reply.code(409).send({ error: `session ${liveId} is already ${liveWorkOn(parsed.data.target)}` });
     const inboxHeld = isProcessInbox(parsed.data.mode) ? evaluationsHold() : parsed.data.target.type === 'url' && parsed.data.target.value ? processInboxHolds(parsed.data.mode, [parsed.data.target.value]) : null;
     if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
     const cvRow = tailoredCvRow(parsed.data.mode, parsed.data.target);
-    const cvHeld = cvRow ? tailoredCvHolds(cvRow) : null;
+    const cvHeld = cvRow ? tailoredCvHolds(cvRow, pin) : null;
     if (cvHeld) return reply.code(409).send({ error: `Not started: ${cvHeld}` });
     const refused = parsed.data.blacklistAllowed ? unlockRefused(parsed.data.mode, req.headers) : null;
     if (refused) return reply.code(403).send({ error: refused });
@@ -309,10 +319,6 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       const upload = uploadTarget(opts.cfg.dataRoot, parsed.data.target.value);
       if (upload.kind === 'refused') return reply.code(400).send({ error: upload.reason });
       if (upload.kind === 'upload') parsed.data.target = { type: 'text', value: upload.path };
-    }
-    if (parsed.data.target.type === 'app') {
-      const row = await appRowAt(parsed.data.target.value);
-      parsed.data.target = { type: 'app', value: parsed.data.target.value, ...(row ? { row } : {}) };
     }
     const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
     let userPrompt = promptWithTarget(parsed.data.prompt, parsed.data.target);
