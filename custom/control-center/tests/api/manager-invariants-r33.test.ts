@@ -4,7 +4,7 @@
 // its row number for the application it pinned (R33-feat-a-L2-01).
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { runsEnded } from '../helpers/runs.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -192,6 +192,41 @@ describe('one tracker settles a turn across server processes (R33-claude-L1-01)'
         console.error = original;
       }
       expect(errors.filter((e) => e.includes(id))).toEqual([]);
+      expect(b.sessions.read(id)!.status).toBe('done');
+    });
+  }, 40_000);
+
+  // Fix-check FC-01 on R33-claude-L1-01: the standby's settled check read the session unguarded inside its timer, so a
+  // torn meta.json threw out of the timer as an uncaught exception.
+  it('given B standing by, when B cannot read the session for a while, then B warns, keeps standing by and lets go once A settled the turn', async () => {
+    await followedByBoth(async (_a, b, id) => {
+      const uncaught: unknown[] = [];
+      const onUncaught = (err: unknown) => void uncaught.push(err);
+      process.on('uncaughtException', onUncaught);
+      const read = b.sessions.store.read.bind(b.sessions.store);
+      let refused = 0;
+      const spy = vi.spyOn(b.sessions.store, 'read').mockImplementation((sid: string) => {
+        if (sid !== id) return read(sid);
+        refused += 1;
+        throw new SyntaxError('Unexpected end of JSON input');
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await until(() => refused > 0, 'a standby tick to read the session', 10_000);
+        // The tick has run past the read; any throw out of the timer has been raised by now.
+        await wait(50);
+      } finally {
+        spy.mockRestore();
+        process.off('uncaughtException', onUncaught);
+      }
+      try {
+        expect(uncaught).toEqual([]);
+        expect(warn.mock.calls.some((c) => String(c[0]).includes(id))).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+      await until(() => b.sessions.read(id)!.turns[0]!.endedAt !== null, 'the turn to be settled', 20_000);
+      await until(() => !b.sessions.isActive(id), 'B to let go of the turn');
       expect(b.sessions.read(id)!.status).toBe('done');
     });
   }, 40_000);

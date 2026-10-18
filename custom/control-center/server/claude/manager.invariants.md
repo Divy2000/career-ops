@@ -31,7 +31,8 @@ A session may start a turn, be forked from, or be deleted only when all of these
 A tracker holds the track claim from the moment it starts following the turn until the turn's outcome, report number,
 policy ack and kept reservation are all settled, so a run that ended while its turn is not yet settled is never idle.
 Only the track-claim holder settles a turn; a second tracker waits until the holder is gone or the turn has ended, and
-never claims a turn that has ended. The duplicate-evaluation checks count a session that is still finishing as live,
+never claims a turn that has ended. A standby that cannot read the session warns, holds no claim and asks again on
+its next try; nothing it reads throws out of its timer. The duplicate-evaluation checks count a session that is still finishing as live,
 wherever it finishes.
 
 ## Records

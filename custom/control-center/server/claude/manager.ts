@@ -1603,15 +1603,30 @@ export class SessionManager {
         if (Date.now() < standbyNextAt) return;
         standbyNextAt = Date.now() + TRACK_STANDBY_RETRY_MS;
         // A turn the holder settled (or a session deleted) is let go, never claimed: there is nothing left to settle.
-        const settled = () => {
-          const meta = this.store.read(id);
-          return !meta || Boolean(meta.turns.find((t) => t.n === n)?.endedAt);
+        // Null when the session cannot be read (a torn meta.json): the standby asks again on its next try.
+        const settled = (): boolean | null => {
+          try {
+            const meta = this.store.read(id);
+            return !meta || Boolean(meta.turns.find((t) => t.n === n)?.endedAt);
+          } catch (err) {
+            console.warn(`[sessions] session ${id}: could not read it while standing by for its turn ${n}, so it is asked again: ${(err as Error).message}`);
+            return null;
+          }
         };
-        if (settled()) return this.untrack(id);
+        const before = settled();
+        if (before === null) return;
+        if (before) return this.untrack(id);
         tracked.release = this.claimTrack(id);
         if (!tracked.release) return;
         // Asked again under the claim: the holder may have settled it and let go between the two.
-        if (settled()) return this.untrack(id);
+        const after = settled();
+        if (after === null) {
+          // Gives the claim back and stands by again, rather than take over a turn it cannot tell is still open.
+          tracked.release();
+          tracked.release = null;
+          return;
+        }
+        if (after) return this.untrack(id);
         resume();
       }
       safePull();
