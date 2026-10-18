@@ -85,6 +85,27 @@ describe('read endpoints', () => {
     }
   });
 
+  it('an unreadable pending.json or seen.json degrades the overview instead of failing it and every Application page (R31-srv-dom-a-L1-01)', async () => {
+    const own = await makeTestApp();
+    try {
+      const imm = path.join(own.cfg.dataRoot, 'data', 'immigration');
+      for (const name of ['pending.json', 'seen.json']) {
+        fs.rmSync(path.join(imm, name), { force: true });
+        fs.mkdirSync(path.join(imm, name));
+      }
+      const call = (url: string) => own.app.inject({ method: 'GET', url, headers: own.authed });
+      const app = await call('/api/tracker/1');
+      expect(app.statusCode, app.body).toBe(200);
+      expect(app.json().sponsorship).toMatchObject({ companyFile: { slug: 'acme-robotics' } });
+      const overview = await call('/api/immigration/overview');
+      expect(overview.statusCode, overview.body).toBe(200);
+      expect(overview.json()).toMatchObject({ pendingError: expect.stringMatching(/pending\.json could not be read/), seen: { error: expect.stringMatching(/seen\.json could not be read/) } });
+      expect((await call('/api/immigration/companies/acme-robotics')).statusCode).toBe(200);
+    } finally {
+      await own.close();
+    }
+  });
+
   it('GET /api/tracker/:n finds the company alert by its slug when the alert names the DOL legal name (SW2-tests-07 review)', async () => {
     const own = await makeTestApp();
     try {

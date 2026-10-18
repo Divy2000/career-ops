@@ -260,6 +260,41 @@ describe('immigration overview', () => {
     expect(o.policyChanges).toHaveLength(2);
   });
 
+  it('given every other immigration file or the logs folder cannot be read, when the overview is read, then each reports its own error and the rest still loads (R31-srv-dom-a-L1-01)', async () => {
+    const odd = copyFixtureRoot();
+    const imm = path.join(odd, 'data/immigration');
+    // A folder where a file should be cannot be read as one (EISDIR), a file where the logs folder should be cannot be listed (ENOTDIR).
+    for (const name of ['pending.json', 'seen.json', 'sponsor-tiers.json', 'policy-digest.md', 'policy-changes.tsv', 'company-alerts.tsv', 'official-feed.tsv']) {
+      fs.rmSync(path.join(imm, name), { recursive: true, force: true });
+      fs.mkdirSync(path.join(imm, name));
+    }
+    fs.rmSync(path.join(imm, 'logs'), { recursive: true });
+    fs.writeFileSync(path.join(imm, 'logs'), 'not a folder');
+    const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, odd, '2026-10-04');
+    expect(o.companies.map((c) => c.slug)).toEqual(['acme-robotics', 'globex-payments', 'initech-cloud']);
+    expect(o).toMatchObject({ pendingCount: null, pendingError: expect.stringMatching(/^pending\.json could not be read: .*EISDIR/), logDates: [], dailyLog: null });
+    expect(o.seen).toMatchObject({ error: expect.stringMatching(/^seen\.json could not be read: .*EISDIR/) });
+    expect(o.tiers).toMatchObject({ error: expect.stringMatching(/^sponsor-tiers\.json could not be read: .*EISDIR/) });
+    expect(o.alertsError).toMatch(/company-alerts\.tsv could not be read: .*EISDIR/);
+    expect(o.policyChangesError).toMatch(/policy-changes\.tsv could not be read: .*EISDIR/);
+    expect(o.filesError).toMatch(/policy-digest\.md: .*EISDIR/);
+    expect(o.filesError).toMatch(/official-feed\.tsv: .*EISDIR/);
+    expect(o.filesError).toMatch(/logs\/: .*ENOTDIR/);
+    expect((await readImmigrationOverview(DEFAULT_CODE_ROOT, root, '2026-10-04')).filesError).toBeNull();
+  });
+
+  it('given the newest daily log cannot be read, when the overview is read, then it reports it and still lists the log dates (R31-srv-dom-a-L1-01)', async () => {
+    const odd = copyFixtureRoot();
+    const logs = path.join(odd, 'data/immigration/logs');
+    const newest = fs.readdirSync(logs).filter((n) => n.endsWith('.log')).sort().pop()!;
+    fs.rmSync(path.join(logs, newest));
+    fs.mkdirSync(path.join(logs, newest));
+    const o = await readImmigrationOverview(DEFAULT_CODE_ROOT, odd, newest.replace(/\.log$/, ''));
+    expect(o.logDates[0]).toBe(newest.replace(/\.log$/, ''));
+    expect(o.dailyLog).toBeNull();
+    expect(o.filesError).toMatch(new RegExp(`logs/${newest.replace('.', '\\.')}: .*EISDIR`));
+  });
+
   it('reports a missing digest distinctly', async () => {
     const empty = copyFixtureRoot();
     fs.rmSync(path.join(empty, 'data/immigration'), { recursive: true });
