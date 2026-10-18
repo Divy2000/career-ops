@@ -219,6 +219,17 @@ Some intro text about the file.
     expect(parseBlacklist('| Company | Since | Scope | Reason | Ticket |\n| Acme | 2026-01-01 | company | no | T-1 |\n').unkept).toEqual(['Acme (T-1)']);
   });
 
+  it('given a | row with no company, when the blacklist is read, then its cells are listed as unkept so a save that would drop them is refused (R31-srv-dom-a-L2-01)', () => {
+    const table = '| Company | Since | Scope | Reason |\n|---------|-------|-------|--------|\n| Acme | 2026-01-01 | company | spam |\n|  | 2026-02-01 | company | TODO: agency, name? |\n';
+    const parsed = parseBlacklist(`# Blacklist\n\n${table}\n| | 2026-03-01 | | loose note |\n`);
+    expect(parsed.rows.map((r) => r.company)).toEqual(['Acme']);
+    expect(parsed.unkept).toEqual(['(no company) (2026-02-01, company, TODO: agency, name?)', '(no company) (2026-03-01, loose note)']);
+    // With no table at all, the same row is dropped on save too.
+    expect(parseBlacklist('# Blacklist\n\n| | 2026-02-01 | company | x |\n').unkept).toEqual(['(no company) (2026-02-01, company, x)']);
+    // A row with no cells at all and a separator hold nothing to lose.
+    expect(parseBlacklist(`${table}|  |  |  |  |\n|---|---|\n`).unkept).toEqual(['(no company) (2026-02-01, company, TODO: agency, name?)']);
+  });
+
   it('keeps the spacing of the text around the table where no row was taken out of it (SW8 review 3, review)', () => {
     const table = '| Company | Since | Scope | Reason |\n|---|---|---|---|\n| A | 2026-01-01 | company | x |\n';
     const parsed = parseBlacklist(`# Blacklist\n\nIntro.\n\n${table}\n## Notes\n\n\nKeep this spacing.\n\n| B | 2026-01-02 | company | y |\n\nMore.\n`);

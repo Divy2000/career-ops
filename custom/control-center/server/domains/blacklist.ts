@@ -67,7 +67,7 @@ export interface BlacklistParsed {
   extraColumns: string[];
   /** Why the table's header does not match the positions the scanner reads; null when it does. */
   columnWarning: string | null;
-  /** Cells of listed rows that have no column to go to (a row wider than the table, a scope that is neither company nor domain): a save would drop them, so it is refused. */
+  /** Cells a save would drop, so it is refused: cells of listed rows that have no column to go to (a row wider than the table, a scope that is neither company nor domain), and the cells of a row with no company, which the scanner skips. */
   unkept: string[];
 }
 
@@ -148,6 +148,18 @@ function noteLost(cells: string[], company: string, width: number, keepThird: bo
   if (lost.length) unkept.push(`${company} (${lost.join(', ')})`);
 }
 
+/**
+ * Records the cells of a `|` line the scanner skips for having no company (an empty or dash first cell): a save writes
+ * back only the rows it lists, so they would go. A separator or a header (first cell Company) holds no data.
+ */
+function noteCompanyless(line: string, unkept: string[]): void {
+  if (SEPARATOR.test(line)) return;
+  const [first = '', ...rest] = splitCells(line);
+  if (first.toLowerCase() === 'company') return;
+  const lost = rest.filter((c) => c !== '');
+  if (lost.length) unkept.push(`(no company) (${lost.join(', ')})`);
+}
+
 export function parseBlacklist(md: string): BlacklistParsed {
   const lines = md.split(/\r?\n/);
   // The table's header: a `|` line naming a Company column, with the markdown separator row under it.
@@ -158,6 +170,7 @@ export function parseBlacklist(md: string): BlacklistParsed {
     const loose = outsideTable(lines, (l) => {
       const row = scannerRow(l);
       if (row) noteLost(splitCells(l), row.company, 4, false, unkept);
+      else noteCompanyless(l, unkept);
       return row;
     });
     return { rows: loose.rows, preamble: loose.text.trim() ? loose.text : null, postamble: '', extraColumns: [], columnWarning: null, unkept };
@@ -178,6 +191,7 @@ export function parseBlacklist(md: string): BlacklistParsed {
   const read = (line: string, isHeader = false): BlacklistRow | null => {
     const cells = splitCells(line);
     const row = scannerRow(line, [...(keepThird ? [cells[2] ?? ''] : []), ...headerCells.slice(4).map((_, i) => cells[4 + i] ?? '')]);
+    if (!row && !isHeader) noteCompanyless(line, unkept);
     if (!row || isHeader) return row;
     noteLost(cells, row.company, Math.max(4, headerCells.length), keepThird, unkept);
     return row;
