@@ -40,25 +40,28 @@ const subscribe = (l: () => void) => {
 
 const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
 
-// This browser's latest own write, shared by its tabs: how many writes it has had taken (n) and the version the latest
-// left the file at. Only a write holding the Web Lock reads and replaces it. Versions name the file's content and
-// repeat, so only the counter says whether a read is older than a write.
-type OwnWrite = { n: number; etag: string | null };
-const OWN_KEY = 'career-ops-app-settings-own-write';
+// This browser's own writes, shared by its tabs: how many it has had taken (n) and the latest of them, each with the
+// version it was sent against (null: none) and the version it left. Only a write holding the Web Lock reads and
+// replaces this. Versions name the file's content and repeat, so only the counter says whether a read is older than a
+// write.
+type OwnWrites = { n: number; writes: Array<{ from: string | null; to: string }> };
+const OWN_KEY = 'career-ops-app-settings-own-writes';
+const OWN_MAX = 40;
 // This tab's copy: what it uses when storage cannot be written (blocked, full), so its own saves still follow each other.
-let ownHere: OwnWrite = { n: 0, etag: null };
+let ownHere: OwnWrites = { n: 0, writes: [] };
 let storageWorks = true;
-const readOwn = (): OwnWrite => {
+const isWrite = (w: unknown): w is OwnWrites['writes'][number] => !!w && typeof (w as { to?: unknown }).to === 'string' && ((w as { from?: unknown }).from === null || typeof (w as { from?: unknown }).from === 'string');
+const readOwn = (): OwnWrites => {
   if (!storageWorks) return ownHere;
   try {
-    const raw = JSON.parse(localStorage.getItem(OWN_KEY) ?? 'null') as Partial<OwnWrite> | null;
-    if (raw && Number.isSafeInteger(raw.n) && raw.n! >= 0 && typeof raw.etag === 'string') return { n: raw.n!, etag: raw.etag };
+    const raw = JSON.parse(localStorage.getItem(OWN_KEY) ?? 'null') as Partial<OwnWrites> | null;
+    if (raw && Number.isSafeInteger(raw.n) && Array.isArray(raw.writes) && raw.writes.every(isWrite) && raw.writes.length <= raw.n!) return { n: raw.n!, writes: raw.writes };
     return ownHere;
   } catch {
     return ownHere;
   }
 };
-const storeOwn = (own: OwnWrite) => {
+const storeOwn = (own: OwnWrites) => {
   ownHere = own;
   try {
     localStorage.setItem(OWN_KEY, JSON.stringify(own));
@@ -68,13 +71,22 @@ const storeOwn = (own: OwnWrite) => {
 };
 
 /**
- * The version a write is checked against. A read asked for before this browser's latest own write is behind only this
- * browser's tabs (the Web Lock ordered their writes), so the write goes on top of that one; any other read is written
- * as it is, and a change made elsewhere since is refused.
+ * The version a write is checked against. A read is behind only this browser's tabs (the Web Lock ordered their
+ * writes) when one of its own writes since that read was sent against the read's version, and no later own write was
+ * sent against a version other than the one before it left (that one wrote on top of a change made elsewhere, which
+ * the read never showed). Such a read is written on top of the latest own write; any other read as it is, and a
+ * change made elsewhere since is refused.
  */
-const ifMatchFor = (read: VersionedRead | undefined, own: OwnWrite): string | undefined => {
+const ifMatchFor = (read: VersionedRead | undefined, own: OwnWrites): string | undefined => {
   if (read?.etag === undefined) return undefined;
-  return read.ownAt !== undefined && read.ownAt < own.n && own.etag !== null ? own.etag : read.etag;
+  if (read.ownAt === undefined) return read.etag;
+  const first = own.n - own.writes.length;
+  for (let i = own.writes.length - 1; i >= 0 && first + i >= read.ownAt; i--) {
+    const w = own.writes[i]!;
+    if (w.from === read.etag) return own.writes.at(-1)!.to;
+    if (i > 0 && w.from !== own.writes[i - 1]!.to) break;
+  }
+  return read.etag;
 };
 
 /** A write's answer: the settings it left, or why it was refused, each as a read tagged with the counter it was answered at. */
@@ -88,7 +100,7 @@ const queueWrite = (patch: Partial<AppSettings>, reset: boolean, lastRead: () =>
     try {
       const written = await apiSend<Written>('PUT', url, patch, ifMatch === undefined ? {} : { 'if-match': ifMatch });
       if (!written.etag) return { ok: true, read: { ...written, problem: null } };
-      storeOwn({ n: own.n + 1, etag: written.etag });
+      storeOwn({ n: own.n + 1, writes: [...own.writes, { from: ifMatch ?? null, to: written.etag }].slice(-OWN_MAX) });
       return { ok: true, read: { ...written, problem: null, ownAt: own.n + 1 } };
     } catch (error) {
       return { ok: false, error, ownAt: own.n };

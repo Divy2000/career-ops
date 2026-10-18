@@ -16,14 +16,17 @@ random operation sequences.
 4. **Never defaults over an unreadable file.** When settings.json could not be read, both tabs show the problem with
    the defaults. A save sends only the patch, never the reset opt-in; the reset opt-in is sent only by the user's
    "Replace settings.json" action, with the very patch the server refused. (R33-feat-c-L2-01)
-5. **Version ownership.** The browser's latest own write is one record, `{ n, etag }`: a counter of this browser's
-   taken writes and the version the latest one left. Only a write, while it holds the Web Lock, reads and replaces it
-   (localStorage, or this tab's copy when storage is blocked). Every read put in the query cache carries `ownAt`, the
-   counter when that read was asked for (for a write's answer or refusal: the counter it was answered at).
-6. **If-Match is a pure function of (cached read, record).** A read asked for before this browser's latest own write
-   (`ownAt < n`) is behind only this browser, so the write is sent against `etag`; any other read is sent against its
-   own version. Versions are content hashes and repeat (A-B-A, a deleted or restored file), so a version is never
-   compared with an earlier one to decide this; only the counter orders. A read without a version sends no If-Match.
+5. **Version ownership.** This browser's own writes are one record, `{ n, writes }`: a counter of its taken writes
+   and the latest of them, each with the version it was sent against and the version it left. Only a write, while it
+   holds the Web Lock, reads and replaces it (localStorage, or this tab's copy when storage is blocked). Every read put
+   in the query cache carries `ownAt`, the counter when that read was asked for (for a write's answer or refusal: the
+   counter it was answered at).
+6. **If-Match is a pure function of (cached read, record).** A read is behind only this browser when an own write
+   since it (counter above `ownAt`) was sent against the read's version and no later own write was sent against a
+   version other than the one its predecessor left; it is then sent against the latest own write's version. Any other
+   read is sent against its own version, so a change made elsewhere that a sibling tab wrote on top of is still
+   refused for a tab that never showed it. Versions are content hashes and repeat (A-B-A, a deleted or restored file),
+   so only the counter orders reads and writes. A read without a version sends no If-Match.
 7. **Liveness.** A save from a read asked for after the file's last outside change (another browser or device, a
    hand edit, a restore) is taken. After a `settings-changed` refusal the current values are shown, the drafts kept,
    and the next save from them is taken unless the file changes outside again. (R34-feat-c-L1-01)

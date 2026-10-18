@@ -181,6 +181,31 @@ describe('app settings invariants: a refusal is a read of the file (invariant 5)
   });
 });
 
+describe('app settings invariants: safety across sibling tabs (invariant 8)', () => {
+  it('Given an outside change a sibling tab read and wrote on top of, when a tab that never read it saves, then the save is refused (FC-01)', async () => {
+    const [tabA, tabB] = [await openTab(), await openTab()];
+    outside({ logos: true, retention: 900 });
+    await refetch(tabB);
+    expect((await toggle(tabB)).status).toBe(200);
+    const afterB = structuredClone(settings);
+    // Tab A still shows the file from before the outside change: its save would undo the outside logos change.
+    const put = await toggle(tabA);
+    expect(put.status).toBe(409);
+    expect(settings).toEqual(afterB);
+  });
+
+  it('Given a sibling tab wrote on its own and then on top of an outside change, when a tab whose read predates them saves, then the save is refused', async () => {
+    const [tabA, tabB] = [await openTab(), await openTab()];
+    expect((await toggle(tabB)).status).toBe(200);
+    expect((await toggle(tabB)).status).toBe(200);
+    outside({ retention: 900 });
+    await refetch(tabB);
+    expect((await toggle(tabB)).status).toBe(200);
+    // The outside change came after tab A's read and tab B absorbed it: tab A is refused.
+    expect((await toggle(tabA)).status).toBe(409);
+  });
+});
+
 /** mulberry32: a small seeded PRNG, so a failing sequence can be replayed from its seed. */
 function prng(seed: number) {
   let a = seed >>> 0;
@@ -194,8 +219,8 @@ function prng(seed: number) {
 }
 
 describe('app settings invariants: seeded random sequences over two tabs', () => {
-  const SEEDS = 20;
-  const STEPS = 12;
+  const SEEDS = 30;
+  const STEPS = 14;
 
   it(`Given ${SEEDS} seeded sequences of saves, outside edits and reads, then every save is taken exactly when its base is the file's current version`, async () => {
     const base = Number(process.env.APP_SETTINGS_SEED ?? 1);
@@ -215,39 +240,45 @@ describe('app settings invariants: seeded random sequences over two tabs', () =>
   }, 30_000);
 
   /**
-   * The model, independent of how AppTab tracks versions: a tab's read shows the file as it was when asked for; the
-   * browser counts its taken writes. A save is based on the browser's latest own write when the tab's read was asked
-   * for before it, else on the tab's read; it must be taken exactly when that base is the file's current content.
+   * The model, from what happened to the file rather than from how AppTab tracks versions. A tab's read shows the file
+   * as it was when asked for. Each taken own write moved the file from `before` to `after`; a write whose `before` is
+   * not the previous own write's `after` wrote on top of an outside change. A save is based on this browser's latest
+   * own write when an own write since that read started from the read's version and no own write after that one
+   * wrote on top of an outside change; else on the tab's read. It must be taken exactly when
+   * that base is the file's current content.
    */
   async function runSequence(seed: number, log: string[]) {
     const rand = prng(seed);
     const tabs = [await openTab(), await openTab()];
-    let ownN = 0;
-    let ownContent: string | null = null;
+    const own: Array<{ before: string; after: string }> = [];
     const reads = tabs.map(() => ({ at: 0, content: etag() }));
+    const basedOn = (r: { at: number; content: string }) => {
+      for (let k = own.length; k > r.at; k--) {
+        const w = own[k - 1]!;
+        if (w.before === r.content) return own.at(-1)!.after;
+        if (k >= 2 && w.before !== own[k - 2]!.after) break;
+      }
+      return r.content;
+    };
     for (let step = 0; step < STEPS; step++) {
       const t = Math.floor(rand() * tabs.length);
       const op = rand();
       if (op < 0.5) {
-        const r = reads[t]!;
-        const based = r.at < ownN ? ownContent! : r.content;
+        const based = basedOn(reads[t]!);
         const file = etag();
         const put = await toggle(tabs[t]!);
         log.push(`tab ${t} toggles logos: ${put.status}`);
         expect(put.status, `tab ${t}'s save based on ${based}, file at ${file}`).toBe(based === file ? 200 : 409);
-        if (put.status === 200) {
-          ownN += 1;
-          ownContent = etag();
-        }
+        if (put.status === 200) own.push({ before: file, after: etag() });
         // Every save ends with a read of the file, taken or refused.
-        reads[t] = { at: ownN, content: etag() };
+        reads[t] = { at: own.length, content: etag() };
       } else if (op < 0.8) {
         const patch = rand() < 0.5 ? { logos: !settings.logos } : { retention: [200, 300][Math.floor(rand() * 2)]! };
         outside(patch);
         log.push(`outside ${JSON.stringify(patch)}`);
       } else {
         await refetch(tabs[t]!);
-        reads[t] = { at: ownN, content: etag() };
+        reads[t] = { at: own.length, content: etag() };
         log.push(`tab ${t} reads`);
       }
     }
