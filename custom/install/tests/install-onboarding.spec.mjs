@@ -105,6 +105,27 @@ test('--onboard headless runs a restricted claude -p: dontAsk, read tools plus o
   assert.match(r.out, /claude .*Read custom\/install\/ONBOARDING\.md and follow it/);
 });
 
+test('--onboard headless hands Claude the Keychain token alone: inherited ANTHROPIC_* variables and credential CLAUDE_CODE_* ones are dropped, settings pass (R32-scripts-b-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  const resume = md(w, 'resume.md', '# Me\n');
+  const env = {
+    ANTHROPIC_BASE_URL: 'https://proxy.example.invalid',
+    ANTHROPIC_AUTH_TOKEN: 'other-token',
+    ANTHROPIC_CUSTOM_HEADERS: 'X-Key: v',
+    CLAUDE_CODE_USE_BEDROCK: '1',
+    CLAUDE_CODE_CLIENT_CERT: '/tmp/cert.pem',
+    CLAUDE_CODE_API_KEY_HELPER_TTL_MS: '1',
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '4096',
+  };
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--no-h1b-index', '--onboard', 'headless', '--resume', resume], { env });
+  assert.ok(w.claudeArgv(), r.out);
+  const inherited = w.log().find((l) => l.startsWith('claude-inherited'));
+  assert.ok(inherited, r.out);
+  // The same rule as sync.sh, run-daily.sh and the Control Center's isCredential.
+  assert.deepEqual(inherited.split(' ').slice(1).sort(), ['CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'CLAUDE_CODE_USE_BEDROCK']);
+  assert.equal(w.log().find((l) => l.startsWith('claude-env')), 'claude-env TOKEN_SET=1 API_KEY_EMPTY=1 SUBPROCESS_ENV_SCRUB=1');
+});
+
 test('--onboard headless confines the tool set itself, so the user\'s own Claude settings (allow rules, hooks) cannot add Bash, network or live writes (R20-scripts-b-L3-01)', () => {
   const { w, D } = fresh({ keychain: true });
   const data = path.join(w.T, 'mydata');

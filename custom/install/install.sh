@@ -356,6 +356,22 @@ try {
 line(gate.problem ? "unapproved" : "approved", gate.version, approved.length ? approved.join(", ") : "none yet", gate.problem ? "-" : gate.identity, newest);
 ' 2>/dev/null || printf 'error\037node could not run the version gate\037unknown\037-\037'
 }
+# Unsets every inherited ANTHROPIC_* variable (keys, tokens, custom headers, and the endpoint they are sent to) and every
+# CLAUDE_CODE_* one with a credential name segment: the rule sync.sh, run-daily.sh and the Control Center's isCredential
+# apply. Called in the headless subshell, so the Claude that gets the Keychain token sees no other credential.
+strip_claude_credentials() {
+  local var
+  for var in $(compgen -e); do
+    case "$var" in
+      ANTHROPIC_*) unset "$var" ;;
+      CLAUDE_CODE_*)
+        case "_${var}_" in
+          *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
+        esac
+        ;;
+    esac
+  done
+}
 seed() { node "$SCRIPT_DIR/seed.mjs" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -1335,7 +1351,7 @@ else
         # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
         # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
         # It starts the real path the gate approved, not a symlink an update could re-point, with the autoupdater off.
-        if (cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" \
+        if (strip_claude_credentials && cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" \
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 DISABLE_AUTOUPDATER=1 \
           "${gate_identity%@*}" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
           --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
