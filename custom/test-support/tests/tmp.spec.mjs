@@ -363,6 +363,7 @@ test('specsWithoutTmpCheck tells template text from its substitutions: escapes, 
     'lone-dollar.spec.mjs': 'const t = `$x\n' + tmpImport + '\n`;\n',
     'comment-substitution.spec.mjs': 'const t = `${/*\n' + tmpImport + '\n*/1}`;\n',
     'line-comment-substitution.spec.mjs': 'const t = `${a // a ` here\n}`;\n' + tmpImport + '\n',
+    'object-substitution.spec.mjs': 'const t = `${{ a: 1 } // a ` here\n.a}`;\n' + tmpImport + '\n',
   }), ['backtick-string.spec.mjs', 'comment-substitution.spec.mjs', 'escaped-backtick.spec.mjs', 'escaped-substitution.spec.mjs', 'lone-brace.spec.mjs', 'lone-dollar.spec.mjs']);
 });
 
