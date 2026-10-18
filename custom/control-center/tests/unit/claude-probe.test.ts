@@ -113,6 +113,20 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
     expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
   });
 
+  it('stops before any real call or record when --version fails or prints no version', () => {
+    for (const [what, body] of [['a non-zero exit', 'echo "9.9.9 (Claude Code)"; echo boom >&2; exit 3'], ['no parseable version', 'echo garbage']]) {
+      const box = sandbox();
+      const claude = path.join(box.bin, 'claude');
+      fs.writeFileSync(claude, `#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\necho "$1" > "$f"\nif [ "$1" = "--version" ]; then ${body}; fi\nexit 0\n`, { mode: 0o755 });
+      const r = runProbe('claude-probe-reads.mjs', box, claude);
+      expect(r.status, what).toBe(1);
+      expect(r.stderr, what).toContain(`claude --version failed at ${claude}`);
+      const calls = fs.readdirSync(box.calls).map((n) => fs.readFileSync(path.join(box.calls, n), 'utf8').trim());
+      expect(calls, what).toEqual(['--version']);
+      expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-')), what).toEqual([]);
+    }
+  });
+
   it('still removes the home and ~/.claude canaries and prints the summary when the CLI cannot be spawned', () => {
     const box = sandbox();
     const claude = path.join(box.bin, 'claude');
