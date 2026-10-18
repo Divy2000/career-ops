@@ -26,6 +26,8 @@ function daily(dataRoot, pid) {
   fs.writeFileSync(path.join(dataRoot, 'data', 'immigration', '.run-daily.pid'), `${pid}\n`);
 }
 const plant = (dataRoot, claim) => fs.writeFileSync(claimFile(dataRoot), JSON.stringify(claim));
+// A fake for withRecordedSpawns (below): ps cannot be spawned at all.
+const PS_FAILS = `if (/(^|\\/)ps$/.test(file)) throw Object.assign(new Error('spawn ps ENOENT'), { code: 'ENOENT' });`;
 
 test('a free claim is taken, recorded with its owner, batch and time, and released only by its owner', () => {
   const r = root();
@@ -93,14 +95,11 @@ test('the running daily job keeps the claim; its pid reused by another process d
     daily(r, job.pid);
     plant(r, { owner: `daily:${job.pid}`, batch: null, at: new Date().toISOString() });
     assert.equal(tryClaim(r, { owner: 'session:s-new', batch: null }).ok, false);
-    // ps that cannot run proves nothing about the job: it keeps the claim.
-    const savedPath = process.env.PATH;
-    process.env.PATH = '';
-    try {
-      assert.equal(tryClaim(r, { owner: 'session:s-new', batch: null }).ok, false);
-    } finally {
-      process.env.PATH = savedPath;
-    }
+    // ps that cannot run proves nothing about the job: it keeps the claim. ps is called by absolute path, so a PATH
+    // without it would not stop it; the spawn itself fails instead (R32-tests-custom-L1-01).
+    const { calls, out } = withRecordedSpawns(`(c) => c.tryClaim(${JSON.stringify(r)}, { owner: 'session:s-new', batch: null }).ok`, { fake: PS_FAILS });
+    assert.equal(out, false);
+    assert.ok(calls.some((call) => call.file === '/bin/ps'), 'the check never reached ps');
   } finally {
     job.stop();
   }
@@ -138,13 +137,8 @@ test('a SIGKILLed daily job, whose dead pid .run-daily.pid still names, loses it
   daily(r, dead);
   plant(r, { owner: `daily:${dead}`, batch: null, at: new Date().toISOString() });
   // Without ps, only the liveness check can tell the job is gone.
-  const savedPath = process.env.PATH;
-  process.env.PATH = '';
-  try {
-    assert.deepEqual(tryClaim(r, { owner: 'session:s-taker', batch: null }), { ok: true });
-  } finally {
-    process.env.PATH = savedPath;
-  }
+  const { out } = withRecordedSpawns(`(c) => c.tryClaim(${JSON.stringify(r)}, { owner: 'session:s-taker', batch: null })`, { fake: PS_FAILS });
+  assert.deepEqual(out, { ok: true });
   assert.equal(readClaim(r).owner, 'session:s-taker');
 });
 
@@ -266,9 +260,17 @@ test('a start claim in the earlier format holds when ps cannot run, however old 
   const r = root();
   plant(r, { owner: 'starting:legacy', batch: null, at: new Date(Date.now() - 25 * 60 * 60_000).toISOString(), pid: process.pid, pidStart: 'Thu Jan  1 00:00:00 1970' });
   // ps is called by absolute path (R31-srv-core-L2-01), so a PATH without it no longer stops it: the spawn fails instead.
-  const fake = `if (/(^|\\/)ps$/.test(file)) throw Object.assign(new Error('spawn ps ENOENT'), { code: 'ENOENT' });`;
-  const { out } = withRecordedSpawns(`(c) => c.tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok`, { fake });
+  const { out } = withRecordedSpawns(`(c) => c.tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok`, { fake: PS_FAILS });
   assert.equal(out, false);
+});
+
+test('a start claim naming its live process by epoch start time holds when ps cannot run, though its start time names another start (R32-tests-custom-L1-01)', () => {
+  const r = root();
+  // With ps running, a start time of 0 is proof the pid was reused (the R31-srv-core-L2-01 test below sees it say no).
+  plant(r, { owner: 'starting:x', batch: null, at: new Date().toISOString(), pid: process.pid, pidStart: 0 });
+  const { calls, out } = withRecordedSpawns(`(c) => c.tryClaim(${JSON.stringify(r)}, { owner: 'daily:1', batch: null }).ok`, { fake: PS_FAILS });
+  assert.equal(out, false);
+  assert.ok(calls.some((call) => call.file === '/bin/ps'), 'the check never reached ps');
 });
 
 test('a start claim in the earlier format is taken over once a day old, even when its text names this process (R28-tests-custom-L1-01 review 3)', () => {
@@ -429,6 +431,7 @@ try { tryClaim(${JSON.stringify(r)}, { owner: 'session:s-1', batch: null }); pro
  * Runs `body` in a child that loads policy-claim.mjs with execFileSync wrapped: each call's file and environment is
  * recorded, and `fake` (when given) answers instead of the real spawn. Resolves the recorded calls and the body's output.
  */
+
 function withRecordedSpawns(body, { fake = '', env = {} } = {}) {
   const code = `const { createRequire, syncBuiltinESMExports } = await import('node:module');
 const cp = createRequire(import.meta.url)('node:child_process');
