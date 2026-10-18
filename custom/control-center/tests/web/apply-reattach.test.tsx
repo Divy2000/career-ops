@@ -798,7 +798,8 @@ describe('Given the row number now belongs to another application (R32-feat-a-L2
     const inner = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       if (input === '/api/sessions' && init?.method !== 'POST') {
-        return json(listed ? [{ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'running', target: { type: 'app', value: '12' } }] : []);
+        // The server pins the row a session started on (#264), so it starts the new owner's CV beside this one.
+        return json(listed ? [{ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'running', target: { type: 'app', value: '12', row: ROW_12 } }] : []);
       }
       return inner(input, init);
     });
@@ -816,6 +817,49 @@ describe('Given the row number now belongs to another application (R32-feat-a-L2
 });
 
 // The tracker query refetches after a delete elsewhere, so the number can change owner while the page stays open.
+// The server pins the application an app session started on (target.row), so the CV session of the row's earlier owner
+// is told apart from the new owner's however it was started; a session from before the pin is held by its number alone.
+describe('Given a live tailored CV session on a reused row number (R33-feat-a-X-01, R33-feat-a-L2-01)', () => {
+  const BETA_12 = { company: 'Beta Labs', role: 'Data Engineer', report: 44 };
+  const generate = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Generate CV PDF'));
+  const listing = (target: SessionMeta['target']) => {
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && init?.method !== 'POST') return json([{ ...URL_SESSION, id: 's-pdf-old', mode: 'pdf', status: 'running', target }]);
+      return inner(input, init);
+    });
+  };
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+  });
+
+  it('When it was started elsewhere for the earlier owner, Then it does not hold Generate CV PDF off and is not linked as the new owner\'s', async () => {
+    // Started from AskDrawer or the Documents tab: no cc.apply.row marker, only the row the server pinned.
+    listing({ type: 'app', value: '12', row: ROW_12 });
+    await openApply('12', undefined, BETA_12);
+    await until(() => generate() && !generate()!.disabled && generate(), 'Generate CV PDF on');
+    expect(host.querySelector('a[href="/sessions/s-pdf-old"]')).toBeNull();
+  });
+
+  it('When it was started elsewhere for the row shown, Then Generate CV PDF stays off and links it', async () => {
+    listing({ type: 'app', value: '12', row: BETA_12 });
+    sessionStorage.setItem('cc.apply.row.s-pdf-old', JSON.stringify(ROW_12));
+    await openApply('12', undefined, BETA_12);
+    await until(() => host.querySelector('a[href="/sessions/s-pdf-old"]'), 'the link to the running CV session');
+    expect(generate()!.disabled).toBe(true);
+  });
+
+  it('When it carries no pinned row, Then the server holds the number, so Generate CV PDF stays off and links the session in the way', async () => {
+    listing({ type: 'app', value: '12' });
+    sessionStorage.setItem('cc.apply.row.s-pdf-old', JSON.stringify(ROW_12));
+    await openApply('12', undefined, BETA_12);
+    await until(() => host.querySelector('a[href="/sessions/s-pdf-old"]'), 'the link to the running CV session');
+    expect(generate()!.disabled).toBe(true);
+    expect(host.textContent).toContain('the earlier application');
+  });
+});
+
 describe('Given the row number changes owner while its Apply page is open (R33-feat-a-L1-01)', () => {
   const BETA_12 = { company: 'Beta Labs', role: 'Data Engineer', report: 44 };
   let reindex: (identity: typeof ROW_12) => void;
