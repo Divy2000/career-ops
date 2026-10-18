@@ -130,7 +130,12 @@ describe('invariant 9: recordReadProbe records only a complete, uninterrupted ru
     ['a signal stopped the run', { stopped: true }, undefined, /stopped by a signal/],
     ['a call did not run to its end', { incomplete: ['c1-today (spawn failed: ENOENT)'] }, undefined, /c1-today/],
     ['--only with no record', { only: new Set(['C1']) }, undefined, /needs an existing record for 9\.9\.9/],
-    ['--only with a record of another version', { only: new Set(['C1']) }, { version: '1.0.0', cases: {} }, /needs an existing record for 9\.9\.9/],
+    ['--only with a record of another version', { only: new Set(['C1']) }, { version: '1.0.0', model: 'haiku', shape: SHAPE, cases: {} }, /needs an existing record for 9\.9\.9/],
+    // R34-supervisor-L2-01: the old cases ran against another invocation shape or model, so they say nothing about this one.
+    ['--only with a record of the same version but another shape', { only: new Set(['C1']) }, { version: '9.9.9', model: 'haiku', shape: { flags: ['--tools'] }, cases: { C2: 'pass' } }, /needs an existing record for 9\.9\.9 .*shape/],
+    ['--only with a record of the same version but another hook timeout', { only: new Set(['C1']) }, { version: '9.9.9', model: 'haiku', shape: { ...SHAPE, hookTimeout: 60 }, cases: { C2: 'pass' } }, /needs an existing record for 9\.9\.9 .*shape/],
+    ['--only with a record of the same version but another model', { only: new Set(['C1']) }, { version: '9.9.9', model: 'sonnet', shape: SHAPE, cases: { C2: 'pass' } }, /needs an existing record for 9\.9\.9 .*model/],
+    ['--only with a record of the same version that names no shape', { only: new Set(['C1']) }, { version: '9.9.9', model: 'haiku', cases: { C2: 'pass' } }, /needs an existing record for 9\.9\.9 .*shape/],
   ];
   for (const [what, over, prev, reason] of refusals) {
     it(`given ${what}, when the run asks to record, then it is refused and the contract is untouched`, () => {
@@ -140,6 +145,13 @@ describe('invariant 9: recordReadProbe records only a complete, uninterrupted ru
       expect(JSON.stringify(contract)).toBe(before);
     });
   }
+
+  it('given --only and a record of the same version, model and shape with its keys in another order, when it records, then the cases merge', () => {
+    const shape = { hookTimeout: 30, flags: ['--restricted'], preToolUseMatcher: 'Read' };
+    const prev = { version: '9.9.9', model: 'haiku', shape: { preToolUseMatcher: 'Read', flags: ['--restricted'], hookTimeout: 30 }, cases: { C2: 'pass' }, info: {}, history: [] };
+    const { contract } = recordReadProbe(contractWith([], prev), run({ shape, only: new Set(['C1']), cases: { C0: 'fail', C1: 'pass' } }));
+    expect(contract.claude.readProbe.cases).toMatchObject({ C1: 'pass', C2: 'pass' });
+  });
 
   it('given every case passes, when it records, then the version is approved and C0 passes', () => {
     const { contract, cases } = recordReadProbe(contractWith(['1.0.0']), run());
@@ -162,7 +174,9 @@ describe('invariant 9: recordReadProbe records only a complete, uninterrupted ru
     for (let i = 0; i < 400; i++) {
       const note = `seed ${SEED} iteration ${i}`;
       const prevVersion = pick(rand, [null, '9.9.9', '1.0.0']);
-      const prev = prevVersion ? { version: prevVersion, cases: Object.fromEntries(ids.filter(() => rand() < 0.6).map((id) => [id, pick(rand, results)])), info: { old: true }, history: [{ probedAt: 'x', cases: [], runs: 1 }] } : undefined;
+      const prevModel = pick(rand, ['haiku', 'haiku', 'sonnet']);
+      const prevShape = pick(rand, [SHAPE, SHAPE, { flags: ['--restricted', '--tools'] }, undefined]);
+      const prev = prevVersion ? { version: prevVersion, model: prevModel, ...(prevShape ? { shape: prevShape } : {}), cases: Object.fromEntries(ids.filter(() => rand() < 0.6).map((id) => [id, pick(rand, results)])), info: { old: true }, history: [{ probedAt: 'x', cases: [], runs: 1 }] } : undefined;
       const approved = rand() < 0.3 ? ['9.9.9'] : ['1.0.0'];
       const selected = ids.filter(() => rand() < 0.5);
       const only = rand() < 0.5 && selected.length ? new Set(selected) : null;
@@ -171,7 +185,7 @@ describe('invariant 9: recordReadProbe records only a complete, uninterrupted ru
       const r = run({ cases, only, stopped: rand() < 0.15, incomplete: rand() < 0.15 ? ['c9-settings (killed by SIGKILL)'] : [] });
       const contract = contractWith(approved, prev);
       const before = JSON.stringify(contract);
-      const mayWrite = !r.stopped && r.incomplete.length === 0 && (!only || prevVersion === '9.9.9');
+      const mayWrite = !r.stopped && r.incomplete.length === 0 && (!only || (prevVersion === '9.9.9' && prevModel === 'haiku' && prevShape === SHAPE));
       if (!mayWrite) {
         expect(() => recordReadProbe(contract, r), note).toThrow();
         expect(JSON.stringify(contract), note).toBe(before);

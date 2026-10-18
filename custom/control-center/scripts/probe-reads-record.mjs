@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const settled = (result) => result === 'pass' || result === 'info';
+/** JSON with object keys sorted, so two shapes compare equal whatever order their keys were written in. */
+const canonical = (v) => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
 
 /**
  * The contract with this run's read-probe record, or a throw naming why nothing may be recorded. Never mutates
  * `contract`. `run` is { version, probedAt, model, shape, cases, info, runs, only: Set|null, stopped, incomplete: string[] }:
  * a signal (stopped) or any call that did not run to its end (incomplete) would replace the last real record with
- * cases that never ran, and a targeted re-run (--only) merges into the record of the same version only.
+ * cases that never ran, and a targeted re-run (--only) merges only into a record of the same version, model and shape.
  * Returns { contract, cases } with the merged cases and C0 recomputed from the approved versions.
  */
 export function recordReadProbe(contract, run) {
@@ -17,8 +19,9 @@ export function recordReadProbe(contract, run) {
   const next = structuredClone(contract);
   const approved = next.claude.approvedVersions ?? [];
   const prev = next.claude.readProbe;
-  const merging = Boolean(run.only) && prev?.version === run.version;
-  if (run.only && !merging) throw new Error(`--record with --only needs an existing record for ${run.version}; run every case first`);
+  // A previous case says something about this run only if it ran on the same CLI version, model and invocation shape.
+  const merging = Boolean(run.only) && prev?.version === run.version && prev.model === run.model && prev.shape !== undefined && canonical(prev.shape) === canonical(run.shape);
+  if (run.only && !merging) throw new Error(`--record with --only needs an existing record for ${run.version} with this model (${run.model}) and invocation shape; run every case first`);
   const cases = { ...(merging ? prev.cases : {}), ...run.cases };
   const info = { ...(merging ? prev.info : {}), ...run.info };
   const history = [...(merging ? (prev.history ?? []) : []), { probedAt: run.probedAt, cases: Object.keys(run.cases).filter((id) => id !== 'C0').sort(), runs: run.runs }];

@@ -42,7 +42,9 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
 
 9. **Only a complete, uninterrupted run is recorded.** `probe-reads-record.mjs` `recordReadProbe` is the one decision:
    it refuses when a signal stopped the run, when `incomplete` is not empty (invariant 6), or for
-   `--only` without an existing record of the same version. Otherwise it merges (`--only`) or replaces the record,
+   `--only` unless the existing record has the same version, model and invocation shape (compared key-order
+   independently; a record without a shape never matches), because its old cases say nothing about another shape.
+   Otherwise it merges (`--only`) or replaces the record,
    adds the version to `approvedVersions` only when every non-C0 case is `pass` or `info`, and recomputes C0.
 10. **contract.json is the old bytes or the new record, never a torn file.** The write goes to a sibling temp file
     and is renamed over it; a failed write removes the temp file and leaves contract.json untouched.
