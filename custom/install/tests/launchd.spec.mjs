@@ -392,6 +392,30 @@ test('a plist that fails plutil -lint never replaces the installed one or reache
   assert.doesNotMatch(r.log, /^launchctl (?!print )/m);
 });
 
+test('Given launchd refuses the rewritten plist, a reinstall puts the previous plist back and loads it again, so a job stays scheduled (R35-scripts-b-X-01)', () => {
+  const r = run(['--jobs', 'daily'], { existing: [DAILY], env: { STUB_BOOTSTRAP_FAIL_MATCH: '^<\\?xml ' } });
+  assert.notEqual(r.status, 0);
+  assert.equal(plistText(r, DAILY), 'PRE-EXISTING');
+  assert.deepEqual(r.plists, [`${DAILY}.plist`]);
+  const calls = r.log.split('\n').filter((c) => c.startsWith('launchctl bootstrap '));
+  assert.equal(calls.length, 2, r.log);
+  assert.ok(calls.every((c) => c.endsWith(`/${DAILY}.plist`)), r.log);
+  assert.match(r.stderr, /com\.career-ops\.immigration-watch.*previous/);
+});
+
+test('Given launchd refuses a first install, the script says the job is not scheduled and leaves no backup file behind (R35-scripts-b-X-01)', () => {
+  const r = run(['--jobs', 'daily'], { env: { STUB_BOOTSTRAP_FAIL_MATCH: '^<\\?xml ' } });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /launchd refused com\.career-ops\.immigration-watch; it is not scheduled/);
+  assert.ok(r.plists.every((f) => !f.startsWith('.')), r.plists.join(' '));
+});
+
+test('Given launchd loads a reinstalled job, the copy of the previous plist is removed (R35-scripts-b-X-01)', () => {
+  const r = run(['--jobs', 'all'], { existing: [DAILY, SYNC] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.plists, [`${DAILY}.plist`, `${SYNC}.plist`]);
+});
+
 test('a plist that passes lint replaces the installed one', () => {
   const r = run(['--jobs', 'daily'], { existing: [DAILY] });
   assert.equal(r.status, 0, r.stderr);

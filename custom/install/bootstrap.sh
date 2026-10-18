@@ -13,8 +13,9 @@ main() {
   }
 
   # A repository URL as shown: an https://user:token@host URL loses its userinfo, which can hold a credential (the same
-  # rule as redact_url in install.sh). Only what is printed is redacted; git clone gets the URL as given.
-  redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^@/]*@#\1#'; }
+  # rule as redact_url in install.sh). The userinfo runs to the last @ before the first / (a raw @ in a password
+  # included). Only what is printed is redacted; git clone gets the URL as given.
+  redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1#'; }
 
   # A --dir value as install.sh's abspath reads it (~ and ~/ are home, a relative path is under the current folder), so
   # both scripts name one checkout even when the shell left a quoted ~ alone.

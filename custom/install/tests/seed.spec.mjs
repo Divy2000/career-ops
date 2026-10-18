@@ -135,6 +135,34 @@ test('copy-documents gives a different file of the same name a -1 suffix and nev
   assert.equal(fs.readFileSync(path.join(data, 'documents/projects/proj-1.md'), 'utf8'), '# New\n');
 });
 
+test('Given a doc whose extension holds regex characters, copy-documents copies it, and a twin with the same suffix is reused (R35-scripts-b-X-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  for (const name of ['project.[', 'notes.(', 'a.b\\']) {
+    const a = put(path.join(d, 'src', name), `${name}\n`);
+    const res = seed(['copy-documents', '--data', data, '--docs', a]);
+    assert.equal(res.status, 0, `${name}: ${res.stderr}`);
+    assert.equal(res.stdout.trim(), `copied\tdoc\t${path.join(data, 'documents/projects', name)}`);
+    assert.match(seed(['copy-documents', '--data', data, '--docs', a]).stdout, /^present\tdoc\t/);
+  }
+  put(path.join(data, 'documents/projects/x.md'), 'OTHER\n');
+  put(path.join(data, 'documents/projects/x-2.md'), 'TWIN\n');
+  const twin = seed(['copy-documents', '--data', data, '--docs', put(path.join(d, 'src', 'x.md'), 'TWIN\n')]);
+  assert.equal(twin.stdout.trim(), `present\tdoc\t${path.join(data, 'documents/projects/x-2.md')}`);
+});
+
+test('Given an identical file whose name only matches the doc name as a regex, copy-documents still copies the doc under its own name (R35-scripts-b-X-02)', () => {
+  const d = tmp();
+  const data = path.join(d, 'data');
+  put(path.join(data, 'documents/projects/proj.ppp'), 'SAME\n');
+  put(path.join(data, 'documents/projects/projxmd'), 'SAME\n');
+  for (const name of ['proj.p+', 'proj.md']) {
+    const res = seed(['copy-documents', '--data', data, '--docs', put(path.join(d, 'src', name), 'SAME\n')]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), `copied\tdoc\t${path.join(data, 'documents/projects', name)}`);
+  }
+});
+
 test('copy-documents is idempotent: an identical earlier copy is reported present, not duplicated', () => {
   const d = tmp();
   const data = path.join(d, 'data');

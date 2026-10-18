@@ -169,6 +169,24 @@ label_disabled() {
   return 1
 }
 
+# A reinstall in flight: the label whose previous plist is kept at PREV_COPY until the new one is loaded. However the
+# script ends before that (a refusal, an error, a signal), the previous plist goes back and is loaded again.
+PREV_LABEL="" PREV_COPY=""
+restore_prev() {
+  [ -n "$PREV_COPY" ] || return 0
+  local label="$PREV_LABEL" copy="$PREV_COPY"
+  PREV_LABEL="" PREV_COPY=""
+  if mv -f "$copy" "$AGENTS/$label.plist" && launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"; then
+    echo "error: the new plist for $label was not loaded; the previous one was put back and loaded again" >&2
+  else
+    echo "error: the new plist for $label was not loaded, and the previous one could not be loaded again; check $AGENTS/$label.plist" >&2
+  fi
+}
+trap 'restore_prev' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 write_plist() { # label script hour minute weekday(or empty) logdir
   local label="$1" script="$2" hour="$3" minute="$4" weekday="$5" logdir="$6"
   local wd="" envxml vars="" xdata xroot tmp kept="" off=0 sched reinstall=0
@@ -215,16 +233,32 @@ PLIST
     exit 1
   fi
   chmod 644 "$tmp"
-  mv -f "$tmp" "$AGENTS/$label.plist"
   if [ "$reinstall" = 1 ] && label_disabled "$label"; then off=1; kept="${kept:+$kept; }left off, as set in the Control Center"; fi
-  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   if [ "$off" = 1 ]; then
+    mv -f "$tmp" "$AGENTS/$label.plist"
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
     echo "installed $label ($kept)"
     return 0
   fi
+  # The previous plist is kept beside it until the new one is loaded (restore_prev), so a failed reinstall never leaves
+  # the user with no scheduled job.
+  if [ -f "$AGENTS/$label.plist" ]; then
+    local prev=""
+    if ! prev="$(mktemp "$AGENTS/.$label.prev.XXXXXX")" || ! cp -p "$AGENTS/$label.plist" "$prev"; then
+      rm -f "$tmp" ${prev:+"$prev"}
+      echo "error: could not keep a copy of the installed plist for $label; the installed job was left as it was" >&2
+      exit 1
+    fi
+    PREV_LABEL="$label" PREV_COPY="$prev"
+  fi
+  mv -f "$tmp" "$AGENTS/$label.plist"
+  launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   # Disabling is persistent and bootstrap refuses a disabled label: a fresh install, or --reset, turns the job on.
-  launchctl enable "gui/$(id -u)/$label"
-  launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"
+  if ! { launchctl enable "gui/$(id -u)/$label" && launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"; }; then
+    [ -n "$PREV_COPY" ] || echo "error: launchd refused $label; it is not scheduled" >&2
+    exit 1
+  fi
+  if [ -n "$PREV_COPY" ]; then rm -f "$PREV_COPY"; PREV_LABEL="" PREV_COPY=""; fi
   echo "installed $label${kept:+ ($kept)}"
 }
 
