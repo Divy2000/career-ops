@@ -697,8 +697,14 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
 }
 try {
   buildLayout();
-  const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
-  summary.version = (v.stdout.match(/\d+\.\d+\.\d+/) ?? [null])[0];
+  const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
+  if (v.error) throw new Error(`claude not runnable at ${claudeBin}: ${v.error.message}`);
+  summary.version = ((v.stdout ?? '').match(/\d+\.\d+\.\d+/) ?? [null])[0];
+  // Every case and --record need a working CLI with a known version; a null one would be recorded as approved.
+  if (v.status !== 0 || !summary.version) {
+    const tail = redact(String(v.stderr ?? '').trim()).slice(-200);
+    throw new Error(`claude --version failed at ${claudeBin} (${v.status === 0 ? 'no version in its output' : v.status === null ? `signal ${v.signal}` : `exit ${v.status}`}${tail ? `: ${tail}` : ''})`);
+  }
   const contract = JSON.parse(fs.readFileSync(CONTRACT_FILE, 'utf8'));
   const approved = contract.claude.approvedVersions ?? [];
   summary.cases.C0 = approved.includes(summary.version) ? 'pass' : 'fail';

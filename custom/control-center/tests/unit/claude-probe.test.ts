@@ -102,6 +102,31 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
     }
   });
 
+  it('names the missing binary and its ENOENT instead of a null-stdout TypeError when --version cannot be spawned (R33-supervisor-X-01)', () => {
+    const box = sandbox();
+    const missing = path.join(box.bin, 'no-such-claude');
+    const r = runProbe('claude-probe-reads.mjs', box, missing);
+    expect(r.status).toBe(1);
+    expect(r.stderr).not.toMatch(/TypeError/);
+    expect(r.stderr).toContain(`claude not runnable at ${missing}`);
+    expect(r.stderr).toMatch(/ENOENT/);
+    expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
+  });
+
+  it('stops before any real call or record when --version fails or prints no version', () => {
+    for (const [what, body] of [['a non-zero exit', 'echo "9.9.9 (Claude Code)"; echo boom >&2; exit 3'], ['no parseable version', 'echo garbage']]) {
+      const box = sandbox();
+      const claude = path.join(box.bin, 'claude');
+      fs.writeFileSync(claude, `#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\necho "$1" > "$f"\nif [ "$1" = "--version" ]; then ${body}; fi\nexit 0\n`, { mode: 0o755 });
+      const r = runProbe('claude-probe-reads.mjs', box, claude);
+      expect(r.status, what).toBe(1);
+      expect(r.stderr, what).toContain(`claude --version failed at ${claude}`);
+      const calls = fs.readdirSync(box.calls).map((n) => fs.readFileSync(path.join(box.calls, n), 'utf8').trim());
+      expect(calls, what).toEqual(['--version']);
+      expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-')), what).toEqual([]);
+    }
+  });
+
   it('still removes the home and ~/.claude canaries and prints the summary when the CLI cannot be spawned', () => {
     const box = sandbox();
     const claude = path.join(box.bin, 'claude');
