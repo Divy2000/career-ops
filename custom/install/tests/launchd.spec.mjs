@@ -403,10 +403,17 @@ test('Given launchd refuses the rewritten plist, a reinstall puts the previous p
   assert.match(r.stderr, /com\.career-ops\.immigration-watch.*previous/);
 });
 
-test('Given launchd refuses a first install, the script fails and leaves no backup file behind (R35-scripts-b-X-01)', () => {
+test('Given launchd refuses a first install, the script says the job is not scheduled and leaves no backup file behind (R35-scripts-b-X-01)', () => {
   const r = run(['--jobs', 'daily'], { env: { STUB_BOOTSTRAP_FAIL_MATCH: '^<\\?xml ' } });
   assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /launchd refused com\.career-ops\.immigration-watch; it is not scheduled/);
   assert.ok(r.plists.every((f) => !f.startsWith('.')), r.plists.join(' '));
+});
+
+test('Given launchd loads a reinstalled job, the copy of the previous plist is removed (R35-scripts-b-X-01)', () => {
+  const r = run(['--jobs', 'all'], { existing: [DAILY, SYNC] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.plists, [`${DAILY}.plist`, `${SYNC}.plist`]);
 });
 
 test('a plist that passes lint replaces the installed one', () => {
