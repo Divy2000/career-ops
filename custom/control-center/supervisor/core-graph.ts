@@ -153,7 +153,7 @@ export async function watchCoreGraph(codeRoot: string, entries: GraphEntries, on
       const next = new Set(files());
       const added = [...next].filter((f) => !watched.has(f));
       const gone = [...watched].filter((f) => !next.has(f));
-      if (gone.length) await watcher.unwatch(gone);
+      if (gone.length) watcher.unwatch(gone);
       if (added.length) watcher.add(added);
       watched = next;
       for (const f of added) if (fs.existsSync(f)) onChange(f);

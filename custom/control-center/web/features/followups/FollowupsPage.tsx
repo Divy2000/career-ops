@@ -214,8 +214,8 @@ export function CadenceTab() {
                           void refresh();
                         }
                       }}
-                      onPin={pin}
-                      onDelete={remove}
+                      onPin={(row, date) => void pin(row, date)}
+                      onDelete={(row) => void remove(row)}
                     />
                   ))}
                 </tbody>

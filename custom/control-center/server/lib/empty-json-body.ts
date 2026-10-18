@@ -1,4 +1,7 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+
+/** The callback half of FastifyBodyParser: Fastify's default JSON parser is this form and returns nothing. */
+type CallbackBodyParser = (req: FastifyRequest, body: string, done: (err: Error | null, body?: unknown) => void) => void;
 
 /**
  * Routes registered inside `register` accept a JSON content-type with an empty body (a button that posts nothing),
@@ -7,7 +10,7 @@ import type { FastifyInstance } from 'fastify';
  */
 export async function withEmptyJsonBody(app: FastifyInstance, register: (scope: FastifyInstance) => void): Promise<void> {
   await app.register(async (scope) => {
-    const strict = scope.getDefaultJsonParser('error', 'error');
+    const strict = scope.getDefaultJsonParser('error', 'error') as CallbackBodyParser;
     scope.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
       if ((body as string).length === 0) {
         done(null, undefined);
