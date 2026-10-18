@@ -17,6 +17,10 @@ Every piece of shared state has exactly one owner at a time, and the owner is re
 | A session's report number | the session record | `meta.reportNum` | at reservation | `setReportNum(null)` before the first await of the release |
 | A report number a session reserved itself | the session | `{guard}/held-report-nums.log` (`+N=<sentinel key>;`) | when its `reserve-report-num.mjs` output is read | the session's own release (`-N`), or the sentinel no longer being that reservation |
 
+A track claim that cannot be written (a full disk, a read-only guard folder) is never read as held: a reconcile or a
+standby stands by and asks again, and only a turn this process just spawned is followed without one, unless a live
+tracker holds it (or that cannot be told either).
+
 A process claim names a live process. One whose holder is dead or a reused PID is taken over; a live holder is never
 displaced, however long it takes.
 

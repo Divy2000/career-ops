@@ -957,7 +957,7 @@ export class SessionManager {
     }
     const policy = this.effectivePolicy(meta.mode) ?? policyForClass(meta.policyClass);
     const state = this.readTurnState(meta.id, turn.n);
-    this.track(meta.id, turn.n, turn.runId, policy, state, '');
+    this.track(meta.id, turn.n, turn.runId, policy, state, '', { spawned: false });
   }
 
   close(): void {
@@ -1488,7 +1488,7 @@ export class SessionManager {
       throw new TurnStartedError(message);
     }
     // The turn is recorded: it is followed (and finalized once) whatever else fails, or a reply would leave it open.
-    this.track(meta.id, n, run.id, policy, state, token);
+    this.track(meta.id, n, run.id, policy, state, token, { spawned: true });
     try {
       this.emit(meta.id, { type: 'status', status: 'running', turn: n });
       this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
@@ -1498,9 +1498,10 @@ export class SessionManager {
     return began;
   }
 
-  private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {
+  /** `spawned`: the turn is one this process just spawned. */
+  private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string, opts: { spawned: boolean }): void {
     if (this.active.has(id)) return;
-    const tracked: Tracked = { timer: null, release: this.claimTrack(id), settling: false };
+    const tracked: Tracked = { timer: null, release: this.claimTrack(id, opts.spawned), settling: false };
     this.active.set(id, tracked);
     const progressFile = path.join(this.store.guardDirOf(id), 'turns', String(n), 'progress.json');
     const parser = new StreamParser();
@@ -1638,7 +1639,7 @@ export class SessionManager {
         const before = settled();
         if (before === null) return;
         if (before) return this.untrack(id);
-        tracked.release = this.claimTrack(id);
+        tracked.release = this.claimTrack(id, false);
         if (!tracked.release) return;
         // Asked again under the claim: the holder may have settled it and let go between the two.
         const after = settled();
@@ -1689,15 +1690,30 @@ export class SessionManager {
   }
 
   /**
-   * Takes the session's track claim, or null while another live tracker holds it. A claim that cannot be written (a
-   * guard folder gone read-only) is warned of and the turn is followed without it: left unfollowed it would never end.
+   * Takes the session's track claim, or null (the tracker stands by and asks again) while another live tracker holds it.
+   * A track claim that cannot be written (a full disk, a guard folder gone read-only) is warned of: a turn this process
+   * just spawned is followed without it (left unfollowed it would never end) unless a live tracker holds the claim, and
+   * any other tracker stands by, since it cannot tell whether a live peer is following the turn.
    */
-  private claimTrack(id: string): (() => void) | null {
+  private claimTrack(id: string, spawned: boolean): (() => void) | null {
     try {
       return this.takeSessionClaim(id, TRACK_CLAIM_FILE);
     } catch (err) {
+      if (!spawned || this.trackClaimMaybeHeld(id)) {
+        console.warn(`[sessions] session ${id}: could not take its track claim, so it stands by and asks again: ${(err as Error).message}`);
+        return null;
+      }
       console.warn(`[sessions] session ${id}: could not take its track claim, so another server process cannot see it finishing: ${(err as Error).message}`);
       return () => {};
+    }
+  }
+
+  /** Whether a live process may hold the session's track claim: true when that cannot be told either. */
+  private trackClaimMaybeHeld(id: string): boolean {
+    try {
+      return this.trackClaimHeld(id);
+    } catch {
+      return true;
     }
   }
 
