@@ -10,7 +10,7 @@
  * DOM without starting a supervisor.
  */
 export const RECOVERY_SCRIPT = `const LABELS = new Map([
-  ['revert', { busy: 'Reverting...', refused: 'Revert refused: ', failed: 'Revert failed: ', done: 'Reverted: ', confirm: 'Confirm revert', ask: 'A revert restores the bytes the turn replaced and deletes files it created. Press "Confirm revert" again to confirm.' }],
+  ['revert', { busy: 'Reverting...', refused: 'Revert refused: ', failed: 'Revert failed: ', partial: 'Revert partly applied: ', done: 'Reverted: ', confirm: 'Confirm revert', ask: 'A revert restores the bytes the turn replaced and deletes files it created. Press "Confirm revert" again to confirm.' }],
   ['restart', { busy: 'Restarting the server...', refused: 'Restart failed: ', failed: 'Restart failed: ', done: '', confirm: 'Confirm restart', ask: 'A restart drains the running server and its open sessions. Press "Confirm restart" again to confirm.' }],
 ]);
 const KEPT = 'cc-recovery-outcome';
@@ -92,16 +92,20 @@ document.addEventListener('submit', async (e) => {
   try {
     const res = await fetch(form.action, { method: 'POST', credentials: 'same-origin', headers: { 'X-CC': '1', 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(form)).toString() });
     const text = await res.text();
-    if (res.ok) {
+    // A revert that failed part way changed files too: the reload shows them reverted, with what failed kept above.
+    const partial = !res.ok && labels.partial && res.headers.get('x-cc-revert') === 'partial';
+    if (res.ok || partial) {
       try {
-        if (labels.done) storage()?.setItem(KEPT, labels.done + text);
+        const prefix = partial ? labels.partial : labels.done;
+        if (prefix) storage()?.setItem(KEPT, prefix + text);
       } catch {
         // Storage full or blocked: the reload still shows the new state, only without the per-file outcome.
       }
       location.reload();
       return;
     }
-    show(out, labels.refused + text);
+    // Turned down (4xx) changed nothing; a server error (5xx) is a failure, not a refusal.
+    show(out, (res.status >= 500 ? labels.failed : labels.refused) + text);
     if (form.dataset.cc === 'restart') void refreshStatus();
   } catch (err) {
     show(out, labels.failed + err.message);

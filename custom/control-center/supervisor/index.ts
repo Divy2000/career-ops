@@ -363,7 +363,7 @@ async function main(): Promise<void> {
       }
       const form = new URLSearchParams(await readBody(req));
       const r = recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: CODE_ROOT, dataRoot }, sessionId: form.get('sessionId') ?? '', turn: Number(form.get('turn')), abs: form.get('abs'), serverRunning: bg.active !== null });
-      res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(r.text);
+      res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff', ...(r.partial ? { 'x-cc-revert': 'partial' } : {}) }).end(r.text);
       return true;
     }
     if (url.pathname === '/__recovery/restart' && req.method === 'POST') {

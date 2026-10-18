@@ -16,7 +16,7 @@ const ERROR = [
   '    at Server.setupListenHandle [as _listen2] (node:net:2167:16)',
 ].join('\n');
 
-const reply = (status: number, text: string) => vi.fn(async () => ({ ok: status < 300, status, text: async () => text }));
+const reply = (status: number, text: string, headers: Record<string, string> = {}) => vi.fn(async () => ({ ok: status < 300, status, headers: new Headers(headers), text: async () => text }));
 const form = (kind: string) => document.querySelector<HTMLFormElement>(`form[data-cc="${kind}"]`)!;
 const press = (kind: string) => form(kind).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 /** Both steps: the first press asks, the second confirms and sends. */
@@ -173,6 +173,31 @@ describe('the recovery page script', () => {
     expect(status().querySelector('pre')!.textContent).toBe('plan.md: no-snapshot');
     expect(sessionStorage.length).toBe(0);
   });
+  it('a revert that failed part way says so after the page reloads, so the files it did revert show their new state (R32-supervisor-L2-02)', async () => {
+    document.body.innerHTML = PAGE;
+    const text = 'revert failed at b.txt: EACCES: permission denied\nalready reverted before the failure:\na.txt: restored';
+    vi.stubGlobal('fetch', reply(500, text, { 'x-cc-revert': 'partial' }));
+    submit('revert');
+    await until(() => sessionStorage.length > 0, 'the outcome kept for the reload');
+    document.body.innerHTML = PAGE;
+    load();
+    expect(status().firstChild!.textContent).toBe('Revert partly applied: revert failed at b.txt: EACCES: permission denied');
+    expect(status().querySelector('pre')!.textContent).toBe('already reverted before the failure:\na.txt: restored');
+    expect(status().textContent).not.toContain('refused');
+  });
+
+  it('a revert the server failed (5xx) reads as failed, and one it turned down (4xx) as refused (R32-supervisor-L2-02)', async () => {
+    document.body.innerHTML = PAGE;
+    vi.stubGlobal('fetch', reply(500, 'revert failed at b.txt: EACCES: permission denied\nnothing was reverted'));
+    submit('revert');
+    await until(() => status().textContent!.startsWith('Revert failed:'), 'the revert failure');
+    expect(status().firstChild!.textContent).toBe('Revert failed: revert failed at b.txt: EACCES: permission denied');
+    expect(sessionStorage.length).toBe(0);
+    vi.stubGlobal('fetch', reply(409, 'the session is still running'));
+    submit('revert');
+    await until(() => status().textContent!.startsWith('Revert refused:'), 'the revert refusal');
+  });
+
   it('a successful revert whose outcome cannot be kept (storage full) still reloads, and is never shown as failed', async () => {
     document.body.innerHTML = PAGE;
     const fetch = reply(200, 'notes.md: restored');
