@@ -22,6 +22,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { childEnv } from '../server/system/child-env.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..');
@@ -257,7 +258,10 @@ async function stopCalls(children, ms) {
 }
 // Set once a signal stops the probe: no new call starts, and the main flow leaves the cleanup and exit to the signal.
 let stopping = null;
-const BASE_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
+// What the app gives a Claude session (server/system/child-env.ts over server/claude/invocation.ts buildEnv), with every
+// CLAUDE* nested-session variable dropped as well. The Keychain token is the only Claude or Anthropic credential a call
+// gets; other variables the shell exports pass, as they do to the app's sessions.
+const INHERITED = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
 
 function runClaude(name, opts) {
   const sessionId = crypto.randomUUID();
@@ -270,8 +274,7 @@ function runClaude(name, opts) {
   if (disallowed.length) argv.push('--disallowedTools', disallowed.join(','));
   if (opts.allowedTools?.length) argv.push('--allowedTools', ...opts.allowedTools);
   argv.push('--settings', prep.settingsFile, '--strict-mcp-config', '--model', MODEL, '--effort', 'medium', '--max-turns', String(opts.maxTurns ?? 14));
-  const env = {
-    ...BASE_ENV,
+  const env = childEnv({
     CLAUDE_CODE_OAUTH_TOKEN: TOKEN,
     ANTHROPIC_API_KEY: '',
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
@@ -283,7 +286,7 @@ function runClaude(name, opts) {
     CC_SESSION_DIR: prep.dir,
     CC_TURN_DIR: prep.dir,
     ...(opts.configDir ? { CLAUDE_CONFIG_DIR: opts.configDir } : {}),
-  };
+  }, INHERITED);
   return new Promise((resolve) => {
     const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     running.add(child);
@@ -613,7 +616,7 @@ function cleanTranscripts() {
     else console.error(`left in place (not this probe's project dir): ${dir}`);
   }
   // A call stopped before its first hook ran has a project folder no hook log names; the default config dir is the
-  // only one outside T (BASE_ENV drops CLAUDE_CONFIG_DIR, and the per-case config dirs live in T).
+  // only one outside T (INHERITED drops CLAUDE_CONFIG_DIR, and the per-case config dirs live in T).
   const projects = path.join(CONFIG_HOME, 'projects');
   if (fs.existsSync(projects)) {
     for (const d of fs.readdirSync(projects)) if (d.includes(unique)) fs.rmSync(path.join(projects, d), { recursive: true, force: true });
@@ -694,7 +697,7 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
 }
 try {
   buildLayout();
-  const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: { ...BASE_ENV, DISABLE_AUTOUPDATER: '1' } });
+  const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
   summary.version = (v.stdout.match(/\d+\.\d+\.\d+/) ?? [null])[0];
   const contract = JSON.parse(fs.readFileSync(CONTRACT_FILE, 'utf8'));
   const approved = contract.claude.approvedVersions ?? [];

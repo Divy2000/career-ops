@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { childEnv } from '../server/system/child-env.ts';
 
 /**
  * The claude binary, resolved as supervisor/preflight.ts resolveClaudeBin does so the probe tests the one the app runs:
@@ -62,9 +63,12 @@ function readKeychainToken() {
 }
 const token = readKeychainToken();
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-probe-'));
-// Same as claude-probe-reads.mjs: no nested-session or provider variables reach the CLI, and it never auto-updates past the approved version.
-const BASE_ENV = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k))), DISABLE_AUTOUPDATER: '1' };
-const env = { ...BASE_ENV, CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: '' };
+// Same as claude-probe-reads.mjs: the environment the app gives a Claude session (server/system/child-env.ts), minus
+// every CLAUDE* nested-session variable, never auto-updating past the approved version. The Keychain token is the only
+// Claude or Anthropic credential the CLI gets; other variables the shell exports pass, as they do to the app's sessions.
+const INHERITED = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
+const BASE_ENV = childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED);
+const env = childEnv({ DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: '' }, INHERITED);
 const redact = (s) => String(s).split(env.CLAUDE_CODE_OAUTH_TOKEN).join('<redacted>');
 
 const hookLog = path.join(dir, 'hook-log.ndjson');

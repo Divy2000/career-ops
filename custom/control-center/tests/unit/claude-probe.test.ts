@@ -464,3 +464,24 @@ describe('the probes read the Keychain as the preflight does (R32-supervisor-L2-
     }, 40_000);
   }
 });
+
+describe('the probes give the CLI the environment the app gives its Claude sessions (R32-supervisor-X-02)', () => {
+  for (const script of ['claude-probe.mjs', 'claude-probe-reads.mjs']) {
+    it(`given a shell that exports repository and data-file overrides, when ${script} runs, then every CLI call gets them as server/system/child-env.ts leaves them`, () => {
+      const box = sandbox();
+      const claude = path.join(box.bin, 'claude');
+      // Records each call's first argument and environment, one file per call; every case call fails at once.
+      fs.writeFileSync(claude, '#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\n{ echo "ARG1=$1"; env; } > "$f"\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nexit 1\n', { mode: 0o755 });
+      const r = runProbe(script, box, claude, { GIT_DIR: path.join(box.root, 'other-repo'), GIT_CONFIG_KEY_0: 'core.hooksPath', CAREER_OPS_PIPELINE: path.join(box.root, 'elsewhere.md') });
+      const calls = fs.readdirSync(box.calls).map((n) => fs.readFileSync(path.join(box.calls, n), 'utf8').split('\n'));
+      const cases = calls.filter((lines) => lines[0] === 'ARG1=-p');
+      expect(cases.length, r.stdout + r.stderr).toBeGreaterThan(0);
+      for (const lines of calls) {
+        expect(lines.filter((l) => /^(GIT_DIR|GIT_CONFIG_KEY_0)=/.test(l))).toEqual([]);
+        expect(lines).toContain('CAREER_OPS_PIPELINE=');
+        expect(lines.find((l) => l.startsWith('NODE_OPTIONS='))).toMatch(/--import=file:.*local-file-guard\.mjs/);
+      }
+      for (const lines of cases) expect(lines).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${FAKE_TOKEN}`);
+    }, 60_000);
+  }
+});
