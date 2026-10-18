@@ -25,7 +25,8 @@ const CELL = /^[^|\r\n]*$/;
 
 /**
  * Lengths are capped by blacklistOverCap, not here: a cell already in the file passes through as is, whatever its
- * length, and `since` is checked by the route (YYYY-MM-DD for new rows, a legacy cell kept as it is).
+ * length, and `since` is checked by the route (YYYY-MM-DD for new rows, a legacy cell kept as it is). The number of
+ * `extra` cells is bounded by the route against the file's own extra columns, so any table the editor loads stays savable.
  */
 export const blacklistRowSchema = z.object({
   company: z.string().min(1).regex(/^[^|\r\n]+$/, 'no pipes or line breaks'),
@@ -33,7 +34,7 @@ export const blacklistRowSchema = z.object({
   scope: z.enum(['company', 'domain']),
   reason: z.string().regex(CELL, 'no pipes or line breaks'),
   /** Cells of the file's other columns (BlacklistParsed.extraColumns), in order; only present when the file has some. */
-  extra: z.array(z.string().regex(CELL, 'no pipes or line breaks')).max(50).optional(),
+  extra: z.array(z.string().regex(CELL, 'no pipes or line breaks')).optional(),
 });
 export type BlacklistRow = z.infer<typeof blacklistRowSchema>;
 

@@ -308,3 +308,71 @@ describe('Company history with a relative CAREER_OPS_PORTALS (R18-srv-dom-a-L2-0
     }
   });
 });
+
+describe('concurrent loads of one insight share a single run (R32-srv-dom-a-X-02)', () => {
+  const gated = () => {
+    let runs = 0;
+    const gates: Array<{ resolve: (r: { code: number; stdout: string; stderr: string }) => void; reject: (e: Error) => void }> = [];
+    const exec: Exec = () => {
+      runs += 1;
+      return new Promise((resolve, reject) => gates.push({ resolve, reject }));
+    };
+    return { exec, gates, runs: () => runs };
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  it('given no cache, when two loads arrive while the script runs, then the script runs once and both get its result', async () => {
+    const cfg = testConfig();
+    const g = gated();
+    const a = readInsight(cfg, g.exec, 'funnelVelocity');
+    const b = readInsight(cfg, g.exec, 'funnelVelocity');
+    await settle();
+    expect(g.runs()).toBe(1);
+    g.gates[0]!.resolve({ code: 0, stdout: '{"n":1}', stderr: '' });
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra).toMatchObject({ kind: 'ok', json: { n: 1 } });
+    expect(rb).toMatchObject({ kind: 'ok', json: { n: 1 } });
+  });
+
+  it('given a run in flight, when a recompute is asked for, then it joins that run instead of starting another', async () => {
+    const cfg = testConfig();
+    const g = gated();
+    const a = readInsight(cfg, g.exec, 'funnelVelocity');
+    const b = readInsight(cfg, g.exec, 'funnelVelocity', { recompute: true });
+    await settle();
+    expect(g.runs()).toBe(1);
+    g.gates[0]!.resolve({ code: 0, stdout: '{"n":2}', stderr: '' });
+    expect((await b).json).toEqual({ n: 2 });
+    await a;
+  });
+
+  it('given a shared run that throws, when the next load arrives, then the script runs again', async () => {
+    const cfg = testConfig();
+    const g = gated();
+    const a = readInsight(cfg, g.exec, 'funnelVelocity');
+    const b = readInsight(cfg, g.exec, 'funnelVelocity');
+    await settle();
+    g.gates[0]!.reject(new Error('spawn failed'));
+    await expect(a).rejects.toThrow('spawn failed');
+    await expect(b).rejects.toThrow('spawn failed');
+    const c = readInsight(cfg, g.exec, 'funnelVelocity');
+    await settle();
+    expect(g.runs()).toBe(2);
+    g.gates[1]!.resolve({ code: 0, stdout: '{"n":3}', stderr: '' });
+    expect((await c).json).toEqual({ n: 3 });
+  });
+
+  it('given a shared run that fails, when the next load arrives, then the script runs again', async () => {
+    const cfg = testConfig();
+    const g = gated();
+    const a = readInsight(cfg, g.exec, 'funnelVelocity');
+    await settle();
+    g.gates[0]!.resolve({ code: 1, stdout: '', stderr: 'boom' });
+    expect((await a).kind).toBe('failed');
+    const b = readInsight(cfg, g.exec, 'funnelVelocity');
+    await settle();
+    expect(g.runs()).toBe(2);
+    g.gates[1]!.resolve({ code: 0, stdout: '{}', stderr: '' });
+    await b;
+  });
+});
