@@ -38,7 +38,7 @@ test.describe('dates are the viewer\'s local day', () => {
     await page.getByRole('button', { name: 'Log follow-up for Acme Robotics' }).click();
     await expect(page.getByLabel('Follow-up date')).toHaveValue('2026-10-05');
     await page.getByRole('button', { name: 'Pin next follow-up for Acme Robotics in 7 days' }).click();
-    await expect.poll(() => pins).toEqual([{ appNum: 1, date: '2026-10-12' }]);
+    await expect.poll(() => pins).toEqual([{ appNum: 1, expectCompany: 'Acme Robotics', expectRole: 'Senior Backend Engineer', date: '2026-10-12' }]);
   });
 
   test('a new blacklist row is dated the local day', async ({ page }) => {
