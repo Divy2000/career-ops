@@ -3,6 +3,7 @@ import { localJdPath } from '@shared/local-jd';
 import { dedupUrlKey } from '@shared/dedup-url';
 import type { SessionMeta } from '@shared/api';
 import { startEvaluateSession, startSavedJdSession, useSessions } from '../../lib/sessions';
+import { isReportGatedMode } from '../pipeline/evaluating';
 
 /** Where a posting reference opens: the posting URL, or the saved JD a `local:jds/<file>` reference points at. */
 export const postingHref = (ref: string) => {
@@ -12,10 +13,13 @@ export const postingHref = (ref: string) => {
 
 const ACTIVE = new Set(['queued', 'running', 'awaiting_user']);
 
+/** GET /api/sessions marks a session whose status ended while its process is still stopping. */
+type ListedSession = SessionMeta & { stopping?: true };
+
 /**
- * The evaluation of a posting reference that is still queued, running or waiting on the user, if any. Neither the
- * sessions route nor the manager dedupes oferta sessions by target, so a page offers this session instead of a second
- * paid one.
+ * The evaluation of a posting reference that is still queued, running or waiting on the user, if any, in any
+ * report-gated mode (oferta, auto-pipeline, a localized oferta). A cancelled one still stopping counts too: the server
+ * refuses a new evaluation of its posting until it exits. A page offers this session instead of a start that fails.
  */
 export function useActiveEvaluation() {
   const sessions = useSessions();
@@ -23,9 +27,9 @@ export function useActiveEvaluation() {
 }
 
 /** The active evaluation of a posting reference in a given sessions list (a fresh read, say, rather than the poll). */
-export function activeEvaluationIn(sessions: readonly SessionMeta[], ref: string): SessionMeta | undefined {
+export function activeEvaluationIn(sessions: readonly ListedSession[], ref: string): SessionMeta | undefined {
   const key = postingRefKey(ref);
-  return sessions.find((s) => s.mode === 'oferta' && ACTIVE.has(s.status) && s.target.value !== null && postingRefKey(s.target.value) === key);
+  return sessions.find((s) => isReportGatedMode(s.mode) && (ACTIVE.has(s.status) || s.stopping === true) && s.target.value !== null && postingRefKey(s.target.value) === key);
 }
 
 /** A posting URL by the key POST /api/pipeline/add dedups it on (two spellings of one posting are one); a saved JD as is. */
