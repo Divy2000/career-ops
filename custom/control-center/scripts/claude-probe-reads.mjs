@@ -14,7 +14,8 @@
 //   --record  writes the result to server/core/contract.json (claude.readProbe) and
 //             adds the version to claude.approvedVersions when every gate case passed
 //   --keep    keeps the temp layout for inspection (the home canary is always removed)
-//   --raw-only / --guarded-only  run one half of C13 (WebFetch with a logging hook, or with the guard hook)
+//   --raw-only / --guarded-only  run one half of C13 (WebFetch with a logging hook, or with the guard hook);
+//             --record refuses such a run, since the other half never ran
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -481,6 +482,8 @@ async function webfetchGroup(name, hook) {
 }
 
 groups.push({ ids: ['C13'], run: async () => {
+  // A half left out never ran: --record must not replace the last real C13 or its raw-hook info with it.
+  for (const [flag, half] of [['--raw-only', 'c13-guarded'], ['--guarded-only', 'c13-raw']]) if (args.includes(flag)) incomplete.push(`${half} (not run: ${flag})`);
   const raw = args.includes('--guarded-only') ? null : await webfetchGroup('c13-raw', 'log');
   if (args.includes('--raw-only')) return { cases: { C13: { result: 'fail', why: 'guarded half not run (--raw-only)' } }, info: { webFetchRaw: { localHits: raw.mine, canaries: raw.canaries, perUrl: raw.per } } };
   const guarded = await webfetchGroup('c13-guarded', 'guard');

@@ -614,6 +614,17 @@ out({ type: 'result', is_error: false, permission_denials: [] });
     }
     expect(recorded).not.toMatch(/cc-reads-probe-(?!XXXXXX)/);
   }, 60_000);
+
+  for (const flag of ['--raw-only', '--guarded-only']) {
+    it(`given a record of this version, model and shape, when the probe records --only C13 ${flag}, then contract.json is left as it was (R35-supervisor-X-02)`, () => {
+      const box = sandbox();
+      const before = fs.readFileSync(box.contract, 'utf8');
+      const r = runActing(box, actingCli(box, JSON.parse(before).claude.readProbe.version), ['--only', 'C13', flag, '--record']);
+      expect(r.status, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/nothing recorded/);
+      expect(fs.readFileSync(box.contract, 'utf8')).toBe(before);
+    }, 60_000);
+  }
 });
 
 describe('claude-probe.mjs ends every CLI process group it starts (invariant 11)', () => {

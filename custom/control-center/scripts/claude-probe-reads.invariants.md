@@ -27,7 +27,8 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
    throwing. A settled call is out of `running`.
 6. **The run knows which calls did not run to their end.** `runClaude` adds a call to `incomplete` when its spawn
    failed, it timed out, it was killed (exit status null), its process group outlived 5 s of kills, or it was never
-   started (stopping); the main flow adds every group that threw.
+   started (stopping); the main flow adds every group that threw, and C13 adds the half `--raw-only` or `--guarded-only`
+   leaves out.
 
 ## Exit and cleanup
 
