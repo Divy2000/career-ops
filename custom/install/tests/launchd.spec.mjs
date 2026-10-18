@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import '../../test-support/tmp.mjs';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(HERE, '..', '..', 'launchd', 'install.sh');
@@ -21,13 +22,9 @@ const mkTmp = (prefix) => {
   return d;
 };
 
-// Runs a bash script with stdin closed. A script stuck in a loop is killed (SIGXCPU) once it, or any one process it
-// starts, has used `cpuSeconds` of CPU time: a tight wall-clock timeout instead killed healthy runs on a loaded
-// machine, where a run that needs well under a second of CPU took longer than 30 s. `hangMs` is only the backstop for
-// what the CPU limit cannot see (a child that blocks, a loop of short-lived children), sized so that no healthy run
-// reaches it however loaded the machine is.
-function runScript(script, args, { cwd, env, cpuSeconds = 30, hangMs = 600_000 }) {
-  return spawnSync('bash', ['-c', 'ulimit -t "$1" && shift && exec bash "$@"', 'bash', String(cpuSeconds), script, ...args], { cwd, env, encoding: 'utf8', timeout: hangMs, stdio: ['ignore', 'pipe', 'pipe'] });
+// Runs a bash script with stdin closed, bounded by CPU time with a wall-clock backstop for hangs (see spawnCpuLimited).
+function runScript(script, args, { cwd, env, cpuSeconds, hangMs }) {
+  return spawnCpuLimited('bash', [script, ...args], { cwd, env, cpuSeconds, hangMs, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
 function run(args, { env = {}, marker = null, existing = [], existingXml = {}, homeName = 'home', claude = null, localClaude = null, relativeClaude = false, realPlutil = false, nodeAt = 'bin', nodeShim = false } = {}) {

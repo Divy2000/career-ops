@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
 import { isNestedCheckout } from '../../../lib/mjs-files.mjs';
 
@@ -15,13 +16,34 @@ const LIB = path.join(HERE, '..', 'lib.mjs');
 const CLI = path.join(HERE, '..', 'cli.mjs');
 
 const tmp = () => tempDir('ci-seed-');
-const run = (script, args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+const runNode = (args, options = {}) => spawnCpuLimited(process.execPath, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options });
+const run = (script, args, limits = {}) => runNode([script, ...args], limits);
 const seed = (args) => run(SEED, args);
 const put = (file, data) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, data);
   return file;
 };
+const nodeScript = (body) => put(path.join(tmp(), 'script.mjs'), body);
+
+test('Given a loaded machine, a seed CLI run is bounded by CPU time, not by a tight wall-clock timeout (R34-flake-walltime)', () => {
+  const r = run(nodeScript("import { execFileSync } from 'node:child_process';\nprocess.stdout.write(execFileSync('sh', ['-c', 'ulimit -t'], { encoding: 'utf8' }));\n"), []);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '30\n');
+});
+
+test('Given a seed CLI run that spins in a loop, it is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = run(nodeScript('for (;;);\n'), [], { cpuSeconds: 1 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the spinning run was not killed');
+});
+
+test('Given a seed CLI run that never ends while using no CPU, it is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = run(nodeScript('setInterval(() => {}, 1000);\n'), [], { hangMs: 1000 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the blocked run was not killed');
+});
+
 const tree = (dir) => {
   const out = {};
   const walk = (d) => {
@@ -331,7 +353,7 @@ for (const name of ${JSON.stringify(which === 'renameSync' ? ['renameSync', 'lin
 }
 syncBuiltinESMExports();
 `);
-const seedWith = (preload, args) => spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, SEED, ...args], { encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'] });
+const seedWith = (preload, args) => runNode(['--import', pathToFileURL(preload).href, SEED, ...args]);
 
 for (const which of ['writeFileSync', 'renameSync']) {
   test(`given the volume fills during ${which}, when cv-write --replace runs, then it fails, keeps cv.md, and leaves no temp file or stray backup (R27-scripts-b-L1-02)`, () => {
@@ -861,7 +883,7 @@ test('given a clock far from UTC, when cv-write --replace backs up cv.md, then t
   // Etc/GMT-14 is UTC+14, so a UTC stamp is never inside the local window below.
   const local = (ms) => new Date(ms + 14 * 3600_000).toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, '');
   const before = local(Date.now() - 1000);
-  const res = spawnSync(process.execPath, [SEED, 'cv-write', '--data', data, '--resume', r, '--replace'], { encoding: 'utf8', timeout: 20000, env: { ...process.env, TZ: 'Etc/GMT-14' } });
+  const res = runNode([SEED, 'cv-write', '--data', data, '--resume', r, '--replace'], { stdio: 'pipe', env: { ...process.env, TZ: 'Etc/GMT-14' } });
   const after = local(Date.now() + 1000);
   const [kind, backup] = res.stdout.trim().split('\t');
   assert.equal(kind, 'replaced', res.stderr);

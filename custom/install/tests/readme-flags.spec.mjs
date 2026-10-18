@@ -12,6 +12,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const INSTALL_REL = 'custom/install/install.sh';
@@ -81,10 +82,14 @@ function documentedFlags(markdown) {
   return out;
 }
 
-function accepts(installer, args) {
+// `--help` after the documented arguments: the parser reads them first, so an unknown flag or a missing value exits 2.
+function runHelp(installer, args, limits = {}) {
   const home = tempDir('readme-flags-home-');
-  // `--help` after the documented arguments: the parser reads them first, so an unknown flag or a missing value exits 2.
-  const r = spawnSync('bash', [installer, ...args, '--help'], { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home } });
+  return spawnCpuLimited('bash', [installer, ...args, '--help'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home }, ...limits });
+}
+
+function accepts(installer, args) {
+  const r = runHelp(installer, args);
   return { ok: r.status === 0 && /Usage:/.test(r.stdout), why: `exit ${r.status}: ${(r.stderr || r.stdout).trim().split('\n')[0]}` };
 }
 
@@ -114,6 +119,30 @@ for (const ref of refsToCheck()) test(`every installer flag the README documents
   }
   const rejected = invocations.map((args) => ({ args, ...accepts(file, args) })).filter((r) => !r.ok).map((r) => `${r.args.join(' ')} (${r.why})`);
   assert.deepEqual(rejected, [], `install.sh at ${label} rejects what the README documents`);
+});
+
+function fakeInstaller(body) {
+  const file = path.join(tempDir('readme-flags-fake-'), 'install.sh');
+  writeFileSync(file, body);
+  return file;
+}
+
+test('Given a loaded machine, an installer --help run is bounded by CPU time, not by a tight wall-clock timeout (R34-flake-walltime)', () => {
+  const r = runHelp(fakeInstaller('ulimit -t\n'), ['--yes']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '30\n');
+});
+
+test('Given an installer that spins in a loop, its --help run is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = runHelp(fakeInstaller('while :; do :; done\n'), [], { cpuSeconds: 1 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the spinning installer was not killed');
+});
+
+test('Given an installer that blocks on a child that never ends, its --help run is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = runHelp(fakeInstaller('exec sleep 60\n'), [], { hangMs: 1000 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the blocked installer was not killed');
 });
 
 test('the check reads its ref from --ref, --ref= or CAREER_OPS_INSTALL_CHECK_REF, and defaults to the working tree', () => {
