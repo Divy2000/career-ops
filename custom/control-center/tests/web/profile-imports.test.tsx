@@ -93,7 +93,7 @@ async function typeInto(label: string, text: string) {
   });
 }
 /** A projects preview made before the library loads is checked against no ETag, so it reads stale (Append disabled) once it does. */
-const libraryLoaded = () => until(() => !button('Add project').disabled, 'the library');
+const libraryLoaded = () => until(() => button('Add project')?.disabled === false, 'the library');
 const textOf = (label: string) => host.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)!.value;
 
 /** Uploads a PDF, lets its parse run, edits the draft, then lands the parse result, which is held behind the banner. */
