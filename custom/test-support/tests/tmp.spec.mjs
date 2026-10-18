@@ -386,8 +386,9 @@ test('specsWithoutTmpCheck tells a regex literal from a division, so a backtick 
     'regex-slash-in-class.spec.mjs': 'const re = /[/`]/;\n' + tmpImport + '\n',
     'regex-escaped-slash.spec.mjs': 'const re = /\\/`/;\n' + tmpImport + '\n',
     'regex-flags.spec.mjs': 'const re = /a/gi; const t = `\n' + tmpImport + '\n`;\n',
+    'regex-closed-class.spec.mjs': 'const re = /[a]/; const t = `\n' + tmpImport + '\n`;\n',
     'division.spec.mjs': 'const y = a / 2 + `\n' + tmpImport + '\n`;\n',
     'division-after-paren.spec.mjs': 'const y = (a) / 2 + `\n' + tmpImport + '\n`;\n',
     'misread-division.spec.mjs': 'const y = n++ / 2;\n' + tmpImport + '\nconst z = a / b;\n',
-  }), ['division-after-paren.spec.mjs', 'division.spec.mjs', 'regex-flags.spec.mjs']);
+  }), ['division-after-paren.spec.mjs', 'division.spec.mjs', 'regex-closed-class.spec.mjs', 'regex-flags.spec.mjs']);
 });
