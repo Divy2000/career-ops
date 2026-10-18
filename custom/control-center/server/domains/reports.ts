@@ -61,21 +61,43 @@ export function reportNumberOf(name: string): number | null {
   return m ? parseInt(m[1]!, 10) : null;
 }
 
-/** Index of real report files by number (RESERVED placeholders excluded). */
-export function listReportFiles(dataRoot: string): Map<number, string> {
+/**
+ * Names of the files under reports/, a symlink to a file included: a folder named like a report (a session that wrote
+ * reports/099-acme.md/jd.txt) is no report.
+ */
+function reportDirFiles(dataRoot: string): string[] {
   const dir = path.join(dataRoot, 'reports');
-  const out = new Map<number, string>();
-  let names: string[];
+  const linkedFile = (name: string) => {
+    try {
+      return fs.statSync(path.join(dir, name)).isFile();
+    } catch {
+      return false;
+    }
+  };
   try {
-    names = fs.readdirSync(dir);
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile() || (e.isSymbolicLink() && linkedFile(e.name)))
+      .map((e) => e.name);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
-  for (const name of names.sort()) {
-    if (isReservedReportFile(name)) continue;
-    const num = reportNumberOf(name);
-    if (num !== null && !out.has(num)) out.set(num, name);
+}
+
+/** Names of the real report files under reports/, sorted: numbered, RESERVED placeholders excluded. */
+export function listReportNames(dataRoot: string): string[] {
+  return reportDirFiles(dataRoot)
+    .filter((name) => !isReservedReportFile(name) && reportNumberOf(name) !== null)
+    .sort();
+}
+
+/** Index of real report files by number; when two share a number, the first by name. */
+export function listReportFiles(dataRoot: string): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const name of listReportNames(dataRoot)) {
+    const num = reportNumberOf(name)!;
+    if (!out.has(num)) out.set(num, name);
   }
   return out;
 }
@@ -136,41 +158,67 @@ export function splitSections(body: string): { intro: string; sections: ReportSe
 }
 
 /**
- * The report's own `## Machine Summary` section. oferta writes it directly after the header and the archived JD last;
- * the batch prompt writes the archived JD first and the Machine Summary after it. So it is the first such heading before
- * any `## Job Description` heading, or else the last one after it that the lettered blocks follow ("## A) ...", which
- * the batch prompt writes next and keeps lettered in every language). Inside the JD only a report template section is
- * a heading (the splitSections rule), so a JD's own yaml fence or "## Responsibilities" is the posting's text, and a
- * JD's own "## Machine Summary" is never the report's. The section ends at the next `##` heading outside a fence.
+ * The report's own `## Machine Summary` section. oferta writes it directly after the header, then the lettered blocks,
+ * and the archived JD last; the batch prompt writes the archived JD first, then the Machine Summary and the lettered
+ * blocks ("## A) ..." to "## G) ...", kept lettered in every language). So it is the first such heading before any
+ * `## Job Description` heading, or else the last one after it, and only in the batch layout: no lettered block before
+ * the JD, and the blocks follow it in order from A) through at least F) (the blocks before Block G existed) without
+ * starting over. Inside the JD only a report template section is a heading (the splitSections rule), so a JD's own
+ * yaml fence or "## Responsibilities" is the posting's text; a JD's own "## Machine Summary" ends the JD there, so the
+ * block order is what tells it apart: one followed by a JD's "## A) Requirements" either starts over at the report's
+ * own A) or never reaches F). The section ends at the next `##` heading outside a fence.
  */
-const LETTERED_SECTION = /^(?:[A-Z]\)|Block\s[A-Z]\s*(?:$|[(:\u2014\u2013-]))/i;
+const LETTERED_SECTION = /^(?:([A-Z])\)|Block\s([A-Z])\s*(?:$|[(:\u2014\u2013-]))/i;
+const MACHINE_SUMMARY = /^Machine Summary\s*$/;
+
+function sectionLetter(heading: string): string | null {
+  const m = heading.match(LETTERED_SECTION);
+  return m ? (m[1] ?? m[2]!).toUpperCase() : null;
+}
+
+/** The `##` headings outside fences, by line index, the JD's own headings left out (the splitSections rule). */
+function reportHeadings(lines: string[]): Array<{ i: number; heading: string }> {
+  const out: Array<{ i: number; heading: string }> = [];
+  let inFence = false;
+  let inJd = false;
+  lines.forEach((line, i) => {
+    if (/^```/.test(line)) inFence = !inFence;
+    const h = !inFence ? line.match(/^##\s+(.*)$/) : null;
+    if (!h) return;
+    const heading = h[1]!.trim();
+    if (inJd && !REPORT_SECTION.test(heading)) return;
+    inJd = JD_HEADING.test(heading);
+    out.push({ i, heading });
+  });
+  return out;
+}
+
+/** True when the headings run A), B), ... in order through at least F), never repeating or going back a letter. */
+function lettersInOrder(headings: string[]): boolean {
+  let last = '';
+  for (const h of headings) {
+    const letter = sectionLetter(h);
+    if (letter === null) continue;
+    if (last === '' ? letter !== 'A' : letter <= last) return false;
+    last = letter;
+  }
+  return last >= 'F';
+}
 
 function machineSummarySection(md: string): { line: number; content: string } | null {
   const lines = md.split('\n');
-  let inFence = false;
-  let inJd = false;
-  let seenJd = false;
-  let found: { line: number; content: string } | null = null;
-  let start = -1;
-  for (let i = 0; i <= lines.length; i++) {
-    const line = lines[i];
-    if (line !== undefined && /^```/.test(line)) inFence = !inFence;
-    const h = line !== undefined && !inFence ? line.match(/^##\s+(.*)$/) : null;
-    if (line !== undefined && !h) continue;
-    const heading = h ? h[1]!.trim() : '';
-    if (h && inJd && !REPORT_SECTION.test(heading)) continue;
-    if (start !== -1) {
-      const section = { line: start + 1, content: lines.slice(start + 1, i).join('\n') };
-      start = -1;
-      if (!seenJd) return section;
-      if (h && LETTERED_SECTION.test(heading)) found = section;
-    }
-    if (!h) break;
-    inJd = JD_HEADING.test(heading);
-    if (inJd) seenJd = true;
-    if (/^Machine Summary\s*$/.test(h[1]!)) start = i;
-  }
-  return found;
+  const hs = reportHeadings(lines);
+  const section = (k: number) => ({ line: hs[k]!.i + 1, content: lines.slice(hs[k]!.i + 1, hs[k + 1]?.i ?? lines.length).join('\n') });
+  const jd = hs.findIndex((h) => JD_HEADING.test(h.heading));
+  const own = hs.findIndex((h, k) => (jd === -1 || k < jd) && MACHINE_SUMMARY.test(h.heading));
+  if (own !== -1) return section(own);
+  if (jd === -1 || hs.slice(0, jd).some((h) => sectionLetter(h.heading) !== null)) return null;
+  let last = -1;
+  hs.forEach((h, k) => {
+    if (k > jd && MACHINE_SUMMARY.test(h.heading)) last = k;
+  });
+  if (last === -1 || sectionLetter(hs[last + 1]?.heading ?? '') !== 'A') return null;
+  return lettersInOrder(hs.slice(last + 1).map((h) => h.heading)) ? section(last) : null;
 }
 
 function machineSummary(section: { line: number; content: string } | null, file: string): Record<string, unknown> | null {
@@ -277,13 +325,25 @@ export function readReport(dataRoot: string, num: number): ReportRead {
   if (!file) {
     let names: string[];
     try {
-      names = fs.readdirSync(dir);
+      names = reportDirFiles(dataRoot);
     } catch {
       return { kind: 'missing', num };
     }
     const reserved = names.find((n) => isReservedReportFile(n) && reportNumberOf(n) === num);
     return reserved ? { kind: 'reserved', num, file: reserved } : { kind: 'missing', num };
   }
+  return parseReportFile(dir, file, num);
+}
+
+/** Reads one report by its file name, for a caller that knows which file it means when two share a number. */
+export function readReportFile(dataRoot: string, file: string): ReportRead {
+  const num = reportNumberOf(file);
+  if (num === null) throw new Error(`not a numbered report file: ${file}`);
+  if (!listReportNames(dataRoot).includes(file)) return { kind: 'missing', num };
+  return parseReportFile(path.join(dataRoot, 'reports'), file, num);
+}
+
+function parseReportFile(dir: string, file: string, num: number): ReportRead {
   const read = readText(path.join(dir, file));
   if (read.kind === 'missing') return { kind: 'missing', num };
   try {

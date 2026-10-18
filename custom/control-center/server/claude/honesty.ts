@@ -2,9 +2,7 @@
 // process exited cleanly, produced output and, for report-producing modes, a
 // new report appeared under reports/ (RESERVED sentinels ignored). A verdict
 // line alone is never trusted; the score is read from the new report header.
-import fs from 'node:fs';
-import path from 'node:path';
-import { isReservedReportFile, reportNumberOf, readReport } from '../domains/reports.js';
+import { listReportNames, readReportFile, reportNumberOf } from '../domains/reports.js';
 import { englishModeOf, type PolicyClass } from './modes.js';
 import type { EnvelopeKind } from './envelopes.js';
 import type { SessionStatus } from './sessions.js';
@@ -16,20 +14,13 @@ export interface NewReport {
 }
 
 export function snapshotReports(dataRoot: string): Set<string> {
-  try {
-    // Only files: a folder named like a report (a session that wrote reports/099-acme.md/jd.txt) is no report.
-    const entries = fs.readdirSync(path.join(dataRoot, 'reports'), { withFileTypes: true });
-    return new Set(entries.filter((e) => e.isFile() && !isReservedReportFile(e.name) && reportNumberOf(e.name) !== null).map((e) => e.name));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
-    throw err;
-  }
+  return new Set(listReportNames(dataRoot));
 }
 
 /** A report's header score; null when it has none or cannot be read (EACCES, gone again): it still counts as new. */
-function scoreOf(dataRoot: string, num: number): number | null {
+function scoreOf(dataRoot: string, file: string): number | null {
   try {
-    const read = readReport(dataRoot, num);
+    const read = readReportFile(dataRoot, file);
     return read.kind === 'ok' ? read.report.score : null;
   } catch {
     return null;
@@ -42,7 +33,7 @@ export function detectNewReports(dataRoot: string, before: Set<string>): NewRepo
   for (const file of snapshotReports(dataRoot)) {
     if (before.has(file)) continue;
     const num = reportNumberOf(file)!;
-    out.push({ num, file, score: scoreOf(dataRoot, num) });
+    out.push({ num, file, score: scoreOf(dataRoot, file) });
   }
   return out.sort((a, b) => a.num - b.num);
 }

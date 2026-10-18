@@ -249,6 +249,17 @@ describe('a PDF header path that cannot be resolved', () => {
     }
   });
 
+  it('takes company, role and score from the evaluated report file when another report shares its number (R34-srv-dom-b-L1-02)', async () => {
+    const root = tempDir('cc-pp-dupnum-');
+    fs.mkdirSync(path.join(root, 'data'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `## Pending\n\n- [ ] ${URL}\n`);
+    fs.writeFileSync(path.join(root, 'reports', '042-aaa-old.md'), '# Evaluation: Old Co - Old Role\n\n**Score:** 2.1/5\n**PDF:** pending\n');
+    fs.writeFileSync(path.join(root, 'reports', '042-zzz-new.md'), '# Evaluation: New Co - New Role\n\n**Score:** 4.6/5\n**PDF:** pending\n');
+    expect(await markPipelineEvaluated(DEFAULT_CODE_ROOT, root, URL, '042-zzz-new.md')).toBe(true);
+    expect(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8')).toContain(`- [x] #042 | ${URL} | New Co | New Role | 4.6/5 | PDF ❌`);
+  });
+
   it('refuses a bare-date digest such as 2026-10-17.md, which is no report, and leaves the Pending row alone (R28-srvx-rev-01)', async () => {
     const root = tempDir('cc-pp-digest-');
     fs.mkdirSync(path.join(root, 'data'), { recursive: true });

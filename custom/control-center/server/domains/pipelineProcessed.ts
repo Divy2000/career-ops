@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
-import { readReport, reportNumberOf } from './reports.js';
+import { readReportFile, reportNumberOf } from './reports.js';
 import { inside } from '../lib/paths.js';
 import { isProcessedHeading, pipelineSection, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
 import { WRITTEN_SEGMENT } from './pipeline.js';
@@ -170,7 +170,7 @@ export async function markPipelineEvaluated(codeRoot: string, dataRoot: string, 
   const num = reportNumberOf(reportFile);
   if (num === null) throw new Error(`not a numbered report file: ${reportFile}`);
   const report = reportFile.match(/^\d+/)![0];
-  const read = readReport(dataRoot, num);
+  const read = readReportFile(dataRoot, reportFile);
   const r = read.kind === 'ok' ? read.report : null;
   const posting: EvaluatedPosting = { report, company: r?.company ?? '', role: r?.role ?? '', score: r?.score ?? null, pdf: pdfGenerated(r?.pdf ?? null, dataRoot) };
   const { withPipelineLock } = await importCore<PipelineLock>(codeRoot, 'pipeline-lock.mjs');
