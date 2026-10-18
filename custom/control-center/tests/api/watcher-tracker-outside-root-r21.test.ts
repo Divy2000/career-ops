@@ -22,11 +22,26 @@ describe('the watcher with CAREER_OPS_TRACKER outside the data root (FU-trkwatch
     else process.env.CAREER_OPS_TRACKER = before;
   });
 
-  /** Writes `file` until the app's watcher reports it, as set-status.mjs would rewrite it. */
+  /**
+   * Writes `file` until the app's watcher reports it, as set-status.mjs would rewrite it, and returns the events that
+   * name it. Other events are ignored: FSEvents can replay the fixture copy made just before the watcher started.
+   */
   async function reported(app: TestApp, file: string, write: (i: number) => string): Promise<Changed[]> {
+    // Compared by real folder and name: the watcher may report a symlinked folder's other spelling (/var vs /private/var).
+    const spelling = (p: string) => {
+      try {
+        return path.join(fs.realpathSync(path.dirname(p)), path.basename(p));
+      } catch (err) {
+        // A reported unlink can name a folder that is already gone.
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return p;
+        throw err;
+      }
+    };
+    const target = spelling(file);
+    const names = (ev: Changed) => ev.paths.some((p) => spelling(path.resolve(app.cfg.dataRoot, p)) === target);
     const seen: Changed[] = [];
     const off = app.bus.onEvent((ev: BusEvent) => {
-      if (ev.type === 'data.changed') seen.push(ev.payload as Changed);
+      if (ev.type === 'data.changed' && names(ev.payload as Changed)) seen.push(ev.payload as Changed);
     });
     try {
       // FSEvents can miss a write made right after the watcher starts, so the write is repeated until one is seen.
