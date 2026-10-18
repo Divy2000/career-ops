@@ -10,7 +10,7 @@ import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
 import { readReportFile, reportNumberOf } from './reports.js';
 import { inside } from '../lib/paths.js';
 import { isProcessedHeading, pipelineSection, processedHeadingFor, unescapeMarkdownUrl } from './inboxSkip.js';
-import { WRITTEN_SEGMENT } from './pipeline.js';
+import { trailingLabelRun } from './pipeline.js';
 import { dedupUrlKey } from '../../shared/dedup-url.js';
 
 const HEADING_RE = /^##\s+(.+?)\s*$/;
@@ -132,8 +132,12 @@ export function moveToProcessed(text: string, url: string, posting: EvaluatedPos
     remove.add(i);
     if (listed.has(target) || processedLine !== null) continue;
     // Company and role are the positional cells after the URL: a rank, posted, trust or note segment a writer appended
-    // (rank-pipeline.mjs puts the rank right after a bare URL) is not one, so the report's own values stand in.
-    const parts = body.split('|').map((s) => s.trim()).filter((cell, i) => i === 0 || !WRITTEN_SEGMENT.test(cell));
+    // (rank-pipeline.mjs puts the rank right after a bare URL) is not one, so the report's own values stand in. Labels
+    // are only the trailing run the Pipeline page reads as labels, so a company or role that reads like one stays. A
+    // label right after a lone company is still a label here, where the page shows it as the title: the report's role
+    // is the better title to write.
+    const cells = body.split('|').map((s) => s.trim());
+    const parts = cells.slice(0, trailingLabelRun(cells));
     processedLine = `- [x] #${posting.report} | ${cell} | ${parts[1] || markdownField(posting.company)} | ${parts[2] || markdownField(posting.role)} | ${scoreCell(posting.score)} | PDF ${posting.pdf ? '✅' : '❌'}`;
   }
   if (remove.size === 0) return { text, moved: false };
