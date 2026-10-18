@@ -302,6 +302,63 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   });
 }
 
+test('given a density render that died but whose output pipes are still open, when the render is stopped in that window, then its temp HTML is removed too (R32-scripts-a-L1-01)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  // Every generate-pdf.mjs leaves a short-lived process holding its stdout and stderr, so after it dies its 'close'
+  // comes up to 15 seconds after its exit.
+  const preload = path.join(root, 'hold-pipes.mjs');
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}import { spawn } from 'node:child_process';\nif (isGenerate) spawn('sleep', ['15'], { stdio: ['ignore', 'inherit', 'inherit'] }).unref();\n`);
+  const tmp = fs.realpathSync(tempDir('render-tmp-'));
+  const child = spawn(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}`, TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
+  child.stderr.setEncoding('utf8').on('data', (d) => { out += d; });
+  const exited = new Promise((resolve) => child.on('close', (status, signal) => resolve({ status, signal, out })));
+  await waitFor(() => renderTemps(root).length > 0, 'the temp HTML of a density render');
+  const kids = spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean).map(Number);
+  assert.equal(kids.length, 1, 'one generate-pdf.mjs runs');
+  // Killed outright, so its own finally never removes the temp HTML; its pipes stay open in the leftover process.
+  process.kill(kids[0], 'SIGKILL');
+  await waitFor(() => spawnSync('kill', ['-0', String(kids[0])]).status !== 0, 'the density render to exit');
+  child.kill('SIGTERM');
+  const end = await exited;
+  assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'no draft or temp HTML is left beside the input');
+  assert.deepEqual(scratchIn(root), []);
+  assert.equal(fs.readFileSync(html, 'utf8'), before);
+});
+
+test('given a final strict render that overflowed and exited but whose output pipes are still open, when the render is stopped in that window, then the input and the output get back what they had (R32-scripts-a-L1-01)', { timeout: 240000 }, async () => {
+  const root = dataRoot({ cv: cvMarkdownFor(fixture) });
+  const html = buildInto(root, fixture);
+  const before = fs.readFileSync(html, 'utf8');
+  const pdf = path.join(root, 'output', 'cv-test.pdf');
+  // The final generate-pdf.mjs writes its PDF and then exits as a --strict-pages overflow does, leaving a short-lived
+  // process holding its stdout and stderr, so its 'close' comes up to 15 seconds after its exit.
+  const preload = path.join(root, 'overflow-hold-pipes.mjs');
+  fs.writeFileSync(preload, `${PRELOAD_ARGS}import { spawn } from 'node:child_process';\nimport { writeSync } from 'node:fs';\nif (isFinal) {\n  spawn('sleep', ['15'], { stdio: ['ignore', 'inherit', 'inherit'] }).unref();\n  process.on('exit', () => { writeSync(2, 'over the page budget (--strict-pages requested)\\n'); process.exitCode = 1; });\n}\n`);
+  const child = spawn(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1', '--strict-pages'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  child.stdout.setEncoding('utf8').on('data', (d) => { out += d; });
+  child.stderr.setEncoding('utf8').on('data', (d) => { out += d; });
+  const exited = new Promise((resolve) => child.on('close', (status, signal) => resolve({ status, signal, out })));
+  await waitFor(() => fs.readFileSync(html, 'utf8') !== before, 'the publish step');
+  await waitFor(() => fs.existsSync(pdf), 'the final render to write the PDF');
+  await waitFor(() => spawnSync('pgrep', ['-P', String(child.pid)], { encoding: 'utf8' }).stdout.trim() === '', 'the final render to exit');
+  child.kill('SIGTERM');
+  const end = await exited;
+  assert.notEqual(end.status, 0, `an interrupted render must not read as a success: ${JSON.stringify(end)}`);
+  assert.equal(fs.readFileSync(html, 'utf8'), before, 'the overflowing layout was refused, so the input keeps its own');
+  assert.equal(fs.existsSync(pdf), false, 'the refused PDF does not stay at the output');
+  assert.deepEqual(scratchIn(root), []);
+});
+
 test('given another render\'s temp HTML in the same folder, when a render is stopped, then that file is left alone (R15-scripts-a-L1-01)', { timeout: 240000 }, async () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
