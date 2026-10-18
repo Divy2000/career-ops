@@ -101,6 +101,12 @@ test('interactiveOnboardPrompt names ONBOARDING.md, cv.md and the project docs',
   assert.match(p, /documents\/projects\/a\.md, documents\/projects\/b\.md/);
 });
 
+test('interactiveOnboardPrompt lists a resume that was not applied to cv.md as its own input (R31-scripts-b-L2-03)', () => {
+  const p = interactiveOnboardPrompt({ cv: 'documents/cv/resume.md', cvApplied: false, docs: [] });
+  assert.ok(!p.includes('cv.md (from'), p);
+  assert.ok(p.endsWith('Inputs: documents/cv/resume.md (differs from cv.md; not applied)'), p);
+});
+
 test('interactiveOnboardPrompt without inputs is just the instruction', () => {
   assert.equal(interactiveOnboardPrompt({ cv: null, docs: [] }), 'Read custom/install/ONBOARDING.md and follow it.');
 });

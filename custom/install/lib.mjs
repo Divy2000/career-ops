@@ -130,9 +130,10 @@ export function parseDoctorState(text) {
 
 const ONBOARD_BASE = 'Read custom/install/ONBOARDING.md and follow it.';
 
-export function interactiveOnboardPrompt({ cv, docs }) {
+/** `cvApplied` false: cv.md was kept and differs from the resume copy, so the copy is an input of its own. */
+export function interactiveOnboardPrompt({ cv, cvApplied = true, docs }) {
   const inputs = [];
-  if (cv) inputs.push(`cv.md (from ${cv})`);
+  if (cv) inputs.push(cvApplied ? `cv.md (from ${cv})` : `${cv} (differs from cv.md; not applied)`);
   inputs.push(...docs);
   return inputs.length === 0 ? ONBOARD_BASE : `${ONBOARD_BASE} Inputs: ${inputs.join(', ')}`;
 }
@@ -324,8 +325,9 @@ export function main(argv) {
       return 0;
     }
     case 'onboard-prompt': {
-      const [cv, ...docs] = rest;
-      process.stdout.write(`${interactiveOnboardPrompt({ cv: cv || null, docs })}\n`);
+      const cvApplied = rest[0] !== '--cv-not-applied';
+      const [cv, ...docs] = cvApplied ? rest : rest.slice(1);
+      process.stdout.write(`${interactiveOnboardPrompt({ cv: cv || null, cvApplied, docs })}\n`);
       return 0;
     }
     case 'render-headless': {
