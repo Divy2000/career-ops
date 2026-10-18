@@ -1104,10 +1104,16 @@ test('an absolute H1B_INDEX_PATH through the real folder of a symlinked checkout
 });
 
 test('an H1B_INDEX_PATH other than the default raises no daily-job note when this run does not install the job: onboarding unfinished, or a dry run (R18-scripts-b-L2-01 review)', () => {
-  for (const [name, files, flags] of [['onboarding unfinished', {}, []], ['dry run', READY_FILES, ['--dry-run']]]) {
+  for (const [name, files, flags, status, reached] of [
+    ['onboarding unfinished', {}, [], 3, /onboarding/i],
+    ['dry run', READY_FILES, ['--dry-run'], 0, /Dry run finished\. Nothing was changed\./],
+  ]) {
     const { w, D } = fresh({ keychain: true });
     w.makeCheckout(D, { files: { ...files, 'data/h1b/shared.gz': 'x' } });
     const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none', ...flags], { env: { H1B_INDEX_PATH: 'data/h1b/shared.gz' } });
+    assert.equal(r.status, status, `${name}\n${r.out}`);
+    assert.match(r.out, reached, `${name}\n${r.out}`);
+    assert.equal(w.calls('launchd-install').length, 0, `${name}\n${r.out}`);
     assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, `${name}\n${r.out}`);
   }
 });
@@ -1128,6 +1134,11 @@ test('an H1B_INDEX_PATH through the target of a dangling data/h1b symlink names 
   fs.mkdirSync(path.join(D, 'data'), { recursive: true });
   fs.symlinkSync(target, path.join(D, 'data/h1b'));
   const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(target, 'index.ndjson.gz') } });
+  // The index download itself fails through the dangling link (exit 3), but the run still reaches and installs the job.
+  assert.equal(r.status, 3, r.out);
+  assert.equal(w.calls('h1b-install').length, 1, r.out);
+  assert.match(r.out, /The H-1B index download failed/, r.out);
+  assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
   assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
 });
 
