@@ -32,7 +32,7 @@ describe('a cancelled turn another server process is still finalizing (R33-claud
    * Server A follows a turn and, finalizing it, blocks in its report-number release; the user cancelled it through
    * server B, which does not track it. B sees a cancelled session whose run has ended and whose turn has not.
    */
-  async function peerFinalizing(): Promise<{ a: TestApp; b: TestApp; id: string; open: () => void; dataRoot: string; restore: () => void }> {
+  async function peerFinalizing(mode = 'advisor', target: SessionMeta['target'] = { type: 'none', value: null }): Promise<{ a: TestApp; b: TestApp; id: string; open: () => void; dataRoot: string; restore: () => void }> {
     const dataRoot = copyFixtureRoot();
     const guardRoot = tempDir('cc-r33-finalize-guard-');
     let releasing = false;
@@ -55,7 +55,7 @@ describe('a cancelled turn another server process is still finalizing (R33-claud
     };
     const a = await makeTestApp({ dataRoot, guardRoot }, { exec: slowRelease });
     const b = await makeTestApp({ dataRoot, guardRoot });
-    const meta = a.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null, reportNum: 7 });
+    const meta = a.sessions.store.create({ mode, policyClass: a.sessions.effectivePolicy(mode)!.policyClass, target, model: null, reportNum: 7 });
     a.sessions.store.setStatus(meta.id, 'done');
     await a.sessions.send(meta.id, 'What is overdue?');
     await until(() => a.sessions.read(meta.id)!.turns.length === 1, 'turn 1 to begin');
@@ -95,6 +95,18 @@ describe('a cancelled turn another server process is still finalizing (R33-claud
     try {
       await expect(s.b.sessions.delete(s.id)).rejects.toThrow(/still finishing/);
       expect(s.b.sessions.read(s.id)).not.toBeNull();
+    } finally {
+      await teardown(s);
+    }
+  }, 40_000);
+
+  it('given A still finalizing a cancelled evaluation, when B checks for a live evaluation of its posting, then it names that session', async () => {
+    const target = { type: 'url' as const, value: 'https://jobs.example.com/synthetic/r33-peer-finalizing' };
+    const s = await peerFinalizing('oferta', target);
+    try {
+      expect(s.b.sessions.liveEvaluationFor('oferta', target)).toBe(s.id);
+      const res = await s.b.app.inject({ method: 'POST', url: '/api/sessions', headers: s.b.authedWrite, payload: { mode: 'oferta', target, prompt: 'Evaluate it' } });
+      expect(res.statusCode).toBe(409);
     } finally {
       await teardown(s);
     }
@@ -159,6 +171,25 @@ describe('one tracker settles a turn across server processes (R33-claude-L1-01)'
       await until(() => b.sessions.read(id)!.turns[0]!.endedAt !== null, 'the turn to be settled', 20_000);
       await until(() => !b.sessions.isActive(id), 'B to let go of the turn');
       expect(deltas()).toBe(2);
+      expect(b.sessions.read(id)!.status).toBe('done');
+    });
+  }, 40_000);
+
+  it('given B standing by, when A settles the turn and its run record goes, then B lets go without settling the turn again', async () => {
+    await followedByBoth(async (a, b, id) => {
+      const runId = a.sessions.read(id)!.turns[0]!.runId;
+      await until(() => a.sessions.read(id)!.turns[0]!.endedAt !== null && !a.sessions.isActive(id), 'A to settle the turn', 20_000);
+      await runsEnded(a.cfg.dataRoot);
+      fs.rmSync(a.runner.store.dirOf(runId), { recursive: true, force: true });
+      const errors: string[] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => void errors.push(args.map(String).join(' '));
+      try {
+        await until(() => !b.sessions.isActive(id), 'B to let go of the turn');
+      } finally {
+        console.error = original;
+      }
+      expect(errors.filter((e) => e.includes(id))).toEqual([]);
       expect(b.sessions.read(id)!.status).toBe('done');
     });
   }, 40_000);
@@ -297,6 +328,7 @@ describe('a tailored CV session holds its row number for the application it pinn
     { name: 'pinned to an earlier application a reindex moved off the number', pinned: ACME, status: 202 },
     { name: 'started before rows were pinned (no pin)', pinned: undefined, status: 409 },
     { name: 'pinned to the same company under another report', pinned: { ...GLOBEX, report: 4 }, status: 202 },
+    { name: 'pinned to the same application before it had a report', pinned: { ...GLOBEX, report: null }, status: 409 },
   ];
   for (const c of cases) {
     it(`given a running pdf session on #3 ${c.name}, when a tailored CV starts for #3, then it answers ${c.status}`, async () => {

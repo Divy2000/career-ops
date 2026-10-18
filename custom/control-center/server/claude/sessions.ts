@@ -14,9 +14,12 @@ export type SessionStatus = 'queued' | 'running' | 'awaiting_user' | 'done' | 'e
 export type TargetType = 'app' | 'url' | 'company' | 'text' | 'none';
 export type AppRowIdentity = { company: string; role: string; report: number | null };
 
-/** Whether two pinned rows are one application: the comparison the Apply page's sameRow makes too. */
+/**
+ * Whether two pinned rows may be one application: the same company and role, and no two different reports. A row pinned
+ * before its report was linked (null) cannot be told apart from the same row with one, so it counts as the same.
+ */
 export function sameApplication(a: AppRowIdentity, b: AppRowIdentity): boolean {
-  return a.company === b.company && a.role === b.role && a.report === b.report;
+  return a.company === b.company && a.role === b.role && (a.report === null || b.report === null || a.report === b.report);
 }
 
 export interface SessionTurn {

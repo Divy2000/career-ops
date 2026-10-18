@@ -487,7 +487,7 @@ export class SessionManager {
 
   /** Live, or a cancelled turn still stopping (its process lives until SIGKILL) or finalizing: it may yet write its report. */
   private isLive(m: SessionMeta): boolean {
-    return LIVE_STATUSES.has(m.status) || this.active.has(m.id);
+    return LIVE_STATUSES.has(m.status) || this.stillFinishing(m);
   }
 
   async send(id: string, prompt: string, opts: { blacklistAllowed?: boolean } = {}): Promise<SessionMeta> {
@@ -1642,12 +1642,16 @@ export class SessionManager {
         // Asking costs a ps of the holder, so a standby asks every few seconds rather than on every tick.
         if (Date.now() < standbyNextAt) return;
         standbyNextAt = Date.now() + TRACK_STANDBY_RETRY_MS;
-        tracked.release = this.claimTrack(id);
-        if (!tracked.release) {
+        // A turn the holder settled (or a session deleted) is let go, never claimed: there is nothing left to settle.
+        const settled = () => {
           const meta = this.store.read(id);
-          if (!meta || meta.turns.find((t) => t.n === n)?.endedAt) this.untrack(id);
-          return;
-        }
+          return !meta || Boolean(meta.turns.find((t) => t.n === n)?.endedAt);
+        };
+        if (settled()) return this.untrack(id);
+        tracked.release = this.claimTrack(id);
+        if (!tracked.release) return;
+        // Asked again under the claim: the holder may have settled it and let go between the two.
+        if (settled()) return this.untrack(id);
         resume();
       }
       safePull();

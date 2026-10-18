@@ -29,7 +29,9 @@ A session may start a turn, be forked from, or be deleted only when all of these
 
 A tracker holds the track claim from the moment it starts following the turn until the turn's outcome, report number,
 policy ack and kept reservation are all settled, so a run that ended while its turn is not yet settled is never idle.
-Only the track-claim holder settles a turn; a second tracker waits until the holder is gone or the turn has ended.
+Only the track-claim holder settles a turn; a second tracker waits until the holder is gone or the turn has ended, and
+never claims a turn that has ended. The duplicate-evaluation checks count a session that is still finishing as live,
+wherever it finishes.
 
 ## Records
 
@@ -42,5 +44,6 @@ Only the track-claim holder settles a turn; a second tracker waits until the hol
 - `isStartingInBatch` is true only while a fan-out (Batch evaluate) is starting the posting; a single start, reply or
   fork holding a posting claim is not a batch.
 - A live tailored CV (pdf) session holds its tracker row number for the application it pinned (`target.row`). One
-  pinned to a different application than the one the request names does not hold it; one with no pin, or a request
-  whose application cannot be told, holds it. The check and the session's create run with no await between them.
+  pinned to a different application than the one the request names (another company or role, or two different
+  reports) does not hold it; one with no pin, one pinned before its report was linked, or a request whose application
+  cannot be told, holds it. The check and the session's create run with no await between them.
