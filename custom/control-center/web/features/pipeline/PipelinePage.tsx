@@ -1,4 +1,4 @@
-import { useRef, useMemo, useState } from 'react';
+import { useRef, useMemo, useState, useSyncExternalStore } from 'react';
 import { getRouteApi, useNavigate, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePipeline, useShortlist } from '../../lib/queries';
@@ -83,7 +83,8 @@ function AddUrls({ onDone }: { onDone: (added: number) => void }) {
   }
   return (
     <div className="card stack" role="dialog" aria-label="Add URLs to the pipeline">
-      <textarea aria-label="Posting URLs" rows={4} placeholder="One posting URL per line" value={text} onChange={(e) => setText(e.target.value)} />
+      {/* Locked while the add is on its way: its answer clears the box, which would drop any URL typed meanwhile. */}
+      <textarea aria-label="Posting URLs" rows={4} placeholder="One posting URL per line" value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
       {error && (
         <p role="alert" className="danger-text">
           {error}
@@ -295,12 +296,27 @@ function Inbox() {
   );
 }
 
+// A start can fail after its row unmounted (a filter, Show done, a refreshed list, the Inbox's error card): the failure
+// is kept by the row's reference, so the row shows it when it is shown again instead of an enabled button alone.
+const jdStartErrors = new Map<string, string>();
+const jdErrorListeners = new Set<() => void>();
+function setJdStartError(reference: string, error: string | null): void {
+  if (error === null) jdStartErrors.delete(reference);
+  else jdStartErrors.set(reference, error);
+  for (const fn of jdErrorListeners) fn();
+}
+const subscribeJdErrors = (fn: () => void) => {
+  jdErrorListeners.add(fn);
+  return () => void jdErrorListeners.delete(fn);
+};
+
 /** A saved-JD row's evaluation: Evaluate visible and Process inbox take posting URLs only, so it starts from here. */
 function EvaluateJd({ reference, label, running, checking }: { reference: string; label: string; running: boolean; checking: boolean }) {
   const navigate = useNavigate();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const error = useSyncExternalStore(subscribeJdErrors, () => jdStartErrors.get(reference) ?? null);
+  const setError = (e: string | null) => setJdStartError(reference, e);
   const go = async () => {
     const jd = localJdPath(reference);
     if (jd === null) return;
