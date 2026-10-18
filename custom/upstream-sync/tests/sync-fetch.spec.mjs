@@ -358,6 +358,25 @@ test('the lock marker the re-exec sets stays out of every child of the locked ru
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
+test('inherited Anthropic credentials are dropped before any child of the sync runs; the Keychain token goes only to claude (R31-scripts-b-X-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const seen = path.join(w.base, 'security-env.txt');
+  mkdirSync(home);
+  try {
+    const inherited = {
+      ANTHROPIC_API_KEY: 'sk-api', ANTHROPIC_AUTH_TOKEN: 'sk-auth', ANTHROPIC_BASE_URL: 'https://proxy.invalid',
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-oauth', CLAUDE_CODE_API_KEY_HELPER: 'x', CLAUDE_CODE_EFFORT_LEVEL: 'low',
+    };
+    const res = runSync(w, { home, inherited, security: `env > "${seen}"\nexit 44` });
+    assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
+    // Names only: the values in this environment can be the developer's real credentials.
+    const names = readFileSync(seen, 'utf8').split('\n').map((l) => l.split('=')[0]);
+    assert.deepEqual(names.filter((n) => /^(ANTHROPIC_|CLAUDE_CODE_.*(TOKEN|KEY))/.test(n)), []);
+    assert.ok(names.includes('CLAUDE_CODE_EFFORT_LEVEL'), 'a non-credential CLAUDE_CODE_* setting is kept');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
 test('a sync whose claude is too old to keep the token out of hooks and tools stops before it touches the worktree (R15-scripts-b-L3-01)', () => {
   const w = makeWorld();
   const home = path.join(w.base, 'home');

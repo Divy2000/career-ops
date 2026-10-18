@@ -16,6 +16,20 @@
 # Scheduled by ~/Library/LaunchAgents/com.career-ops.upstream-sync.plist.
 # Manual run: custom/upstream-sync/sync.sh [--no-merge]
 set -uo pipefail
+# Every Anthropic credential a manual or launchd start may carry goes before any child runs (the data-root resolver,
+# the installs, upstream's suite, Claude): every ANTHROPIC_* variable, and every CLAUDE_CODE_* one with a credential
+# name segment (the rule run-daily.sh and the Control Center server apply). Claude gets the Keychain token alone.
+for var in $(compgen -e); do
+  case "$var" in
+    ANTHROPIC_*) unset "$var" ;;
+    CLAUDE_CODE_*)
+      case "_${var}_" in
+        *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
+      esac
+      ;;
+  esac
+done
+unset var
 
 LIVE="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=custom/upstream-sync/lib.sh
