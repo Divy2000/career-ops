@@ -70,6 +70,12 @@ export function useSaveSettings() {
   return { save, error };
 }
 
+/** After a save answers, its draft is cleared only if the user has not typed past what it sent. */
+const keepNewer =
+  (sent: string | null) =>
+  (current: string | null): string | null =>
+    current === sent ? null : current;
+
 /** App settings: logos opt-in and run retention (spec 2.14 App). */
 export function AppTab() {
   const q = useAppSettings();
@@ -108,11 +114,12 @@ export function AppTab() {
                 <button
                   type="button"
                   disabled={retention === null || Number(retention) === s.retention}
-                  onClick={() =>
-                    void save({ retention: Number(retention) }, 'Retention saved').then((ok) => {
-                      if (ok) setRetention(null);
-                    })
-                  }
+                  onClick={() => {
+                    const sent = retention;
+                    void save({ retention: Number(sent) }, 'Retention saved').then((ok) => {
+                      if (ok) setRetention(keepNewer(sent));
+                    });
+                  }}
                 >
                   Save
                 </button>
@@ -167,7 +174,10 @@ export function EngineSettings() {
             </label>
             <div className="fields__value row gap">
               <input id="setting-model" value={model ?? s.modelDefault} placeholder="CLI default" onChange={(e) => setModel(e.target.value)} />
-              <button type="button" disabled={model === null || model === s.modelDefault} onClick={() => void save({ modelDefault: model ?? '' }, 'Model default saved').then((ok) => ok && setModel(null))}>
+              <button type="button" disabled={model === null || model === s.modelDefault} onClick={() => {
+                  const sent = model;
+                  void save({ modelDefault: sent ?? '' }, 'Model default saved').then((ok) => ok && setModel(keepNewer(sent)));
+                }}>
                 Save
               </button>
             </div>
@@ -183,14 +193,15 @@ export function EngineSettings() {
               <button
                 type="button"
                 disabled={budget5 === null && budget7 === null}
-                onClick={() =>
-                  void save({ usageBudgets: { fiveHourTokens: toBudget(budget5, s.usageBudgets.fiveHourTokens), sevenDayTokens: toBudget(budget7, s.usageBudgets.sevenDayTokens) } }, 'Budgets saved').then((ok) => {
+                onClick={() => {
+                  const [sent5, sent7] = [budget5, budget7];
+                  void save({ usageBudgets: { fiveHourTokens: toBudget(sent5, s.usageBudgets.fiveHourTokens), sevenDayTokens: toBudget(sent7, s.usageBudgets.sevenDayTokens) } }, 'Budgets saved').then((ok) => {
                     if (ok) {
-                      setBudget5(null);
-                      setBudget7(null);
+                      setBudget5(keepNewer(sent5));
+                      setBudget7(keepNewer(sent7));
                     }
-                  })
-                }
+                  });
+                }}
               >
                 Save budgets
               </button>

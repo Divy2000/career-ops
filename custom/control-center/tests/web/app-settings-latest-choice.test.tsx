@@ -65,6 +65,13 @@ async function mount(which: 'AppTab' | 'EngineSettings', fresh = false) {
   return host;
 }
 
+async function type(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 async function click(el: HTMLElement) {
   await act(async () => el.click());
 }
@@ -93,5 +100,43 @@ describe('app settings: the latest local choice wins', () => {
     await drain();
     expect(settings.logos).toBe(false);
     await until(() => host.querySelector<HTMLInputElement>('#setting-logos')?.checked === false, 'the box showing off');
+  });
+
+  it('Given a retention save on its way, when the field is changed again, then its answer keeps the newer draft', async () => {
+    const host = await mount('AppTab');
+    const field = await until(() => host.querySelector<HTMLInputElement>('#setting-retention'), 'the retention field');
+    await type(field, '600');
+    await click([...host.querySelectorAll('button')].find((b) => b.textContent === 'Save')!);
+    await until(() => pending.length > 0, 'the save on its way');
+    await type(host.querySelector<HTMLInputElement>('#setting-retention')!, '800');
+    await drain();
+    expect(settings.retention).toBe(600);
+    expect(host.querySelector<HTMLInputElement>('#setting-retention')!.value).toBe('800');
+    expect([...host.querySelectorAll('button')].find((b) => b.textContent === 'Save')!.disabled).toBe(false);
+  });
+
+  it('Given a model save on its way, when the field is changed again, then its answer keeps the newer draft', async () => {
+    const host = await mount('EngineSettings');
+    const field = await until(() => host.querySelector<HTMLInputElement>('#setting-model'), 'the model field');
+    await type(field, 'opus');
+    await click([...host.querySelectorAll('button')].find((b) => b.textContent === 'Save')!);
+    await until(() => pending.length > 0, 'the save on its way');
+    await type(host.querySelector<HTMLInputElement>('#setting-model')!, 'sonnet');
+    await drain();
+    expect(settings.modelDefault).toBe('opus');
+    expect(host.querySelector<HTMLInputElement>('#setting-model')!.value).toBe('sonnet');
+  });
+
+  it('Given a 5h budget save on its way, when the 7d budget is typed, then its answer keeps the 7d draft', async () => {
+    const host = await mount('EngineSettings');
+    const five = await until(() => host.querySelector<HTMLInputElement>('#setting-budget-5h'), 'the 5h field');
+    await type(five, '1000');
+    await click([...host.querySelectorAll('button')].find((b) => b.textContent === 'Save budgets')!);
+    await until(() => pending.length > 0, 'the save on its way');
+    await type(host.querySelector<HTMLInputElement>('[aria-label="7 day token budget"]')!, '9000');
+    await drain();
+    expect(settings.usageBudgets).toEqual({ fiveHourTokens: 1000, sevenDayTokens: null });
+    expect(host.querySelector<HTMLInputElement>('#setting-budget-5h')!.value).toBe('1000');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="7 day token budget"]')!.value).toBe('9000');
   });
 });
