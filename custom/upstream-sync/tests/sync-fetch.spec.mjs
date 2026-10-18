@@ -211,7 +211,7 @@ test('deps_fingerprint falls back to package.json when the root has no tracked l
 
 // ---- sync.sh end to end, as far as it can go without Keychain, Claude or network ----
 
-function runSync(world, { home, inherited = {}, security = 'exit 44' }) {
+function runSync(world, { home, inherited = {}, security = 'exit 44', osascript = 'exit 0' }) {
   const syncDir = path.join(world.live, 'custom/upstream-sync');
   mkdirSync(syncDir, { recursive: true });
   for (const f of ['sync.sh', 'keep-fork-readme.sh', 'lib.sh', 'sync-prompt.md']) copyFileSync(path.join(SYNC_DIR, f), path.join(syncDir, f));
@@ -222,7 +222,7 @@ function runSync(world, { home, inherited = {}, security = 'exit 44' }) {
   // The Keychain is never touched: a stub that finds no item stops the run right after the fetch checks.
   for (const dir of [bin, path.join(home, '.local/bin')]) {
     stub(dir, 'security', security);
-    stub(dir, 'osascript', 'exit 0');
+    stub(dir, 'osascript', osascript);
   }
   // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
   // weekly sync runs these specs) would send this run's log into the user's real data/upstream-sync.
@@ -288,6 +288,40 @@ test('sync.sh uses the shared helpers: no bare "git fetch upstream main", no unc
   assert.match(sync, /install_root_deps ignore-scripts/);
   assert.match(sync, /update_live_checkout/, 'the live checkout is updated through the tested helper, which reinstalls only on a dependency change');
   assert.match(sync, /\^\[0-9\]\+\$/, 'BEHIND is checked to be numeric');
+});
+
+// The real AppleScript compiler, minus the notification: "display notification X with title Y" becomes "return X",
+// so the text the user would see is printed, and a message that breaks the script fails to compile as it does live.
+const COMPILING_OSASCRIPT = (shown) => `args=()
+for a in "$@"; do
+  a="\${a//display notification/return}"
+  args+=("\${a%% with title *}")
+done
+/usr/bin/osascript "\${args[@]}" >> "${shown}"`;
+
+test('Given contract.json is unparseable, when the sync gate fails with JSON.parse text holding double quotes, then the notification still shows that text (R33-scripts-b-L2-01)', { skip: process.platform !== 'darwin' && 'osascript is macOS only' }, () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const shown = path.join(w.base, 'shown.txt');
+  mkdirSync(home);
+  try {
+    const claudeDir = path.join(w.live, 'custom/control-center/server/claude');
+    mkdirSync(claudeDir, { recursive: true });
+    copyFileSync(path.join(REPO_ROOT, 'custom/control-center/server/claude/confinement.mjs'), path.join(claudeDir, 'confinement.mjs'));
+    mkdirSync(path.join(w.live, 'custom/control-center/server/core'), { recursive: true });
+    writeFileSync(path.join(w.live, 'custom/control-center/server/core/contract.json'), '<<<<<<< HEAD\n{}\n');
+    stub(path.join(w.base, 'claude-bin'), 'claude', 'echo "2.1.300 (Claude Code)"');
+    const res = runSync(w, {
+      home,
+      inherited: { CC_CLAUDE_BIN: path.join(w.base, 'claude-bin', 'claude') },
+      security: 'echo test-token',
+      osascript: COMPILING_OSASCRIPT(shown),
+    });
+    assert.equal(res.status, 1, res.log);
+    const failure = res.log.match(/^!!! (.*)$/m)?.[1];
+    assert.match(failure ?? '', /cannot check claude .* against the approved Claude Code versions: .*"/, res.log);
+    assert.equal(readFileSync(shown, 'utf8').replace(/ \(log: data\/upstream-sync\/\d{4}-\d{2}-\d{2}\.log\)\n$/, ''), failure);
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
 test('Given the shell exports a data root (as the launchd plist does), the runSync harness keeps sync.sh under test logging to the test checkout and never into that root', () => {
