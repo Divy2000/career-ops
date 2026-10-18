@@ -79,12 +79,32 @@ const SHAPE = {
 };
 
 // ---- token: Keychain -> child env only ----
-const tokenRead = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8' });
-if (tokenRead.status !== 0 || !tokenRead.stdout.trim()) {
-  console.error('Keychain item career-ops-claude-token not found');
-  process.exit(1);
+/**
+ * The OAuth token, read as supervisor/preflight.ts reads it: bounded, because a locked keychain waits at an unlock
+ * prompt nobody may answer (over SSH, before login), and missing only on exit 44 (errSecItemNotFound) or a blank value.
+ * Any other failure leaves the item where it is, so the probe says it could not be read rather than send the user to
+ * recreate a token that is fine. Exits 1 with the reason; never prints the token.
+ */
+function readKeychainToken() {
+  const KEYCHAIN_TIMEOUT_MS = 8000;
+  const r = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8', timeout: KEYCHAIN_TIMEOUT_MS, killSignal: 'SIGKILL' });
+  const unreadable = (why) => `Could not read Keychain item career-ops-claude-token: ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
+  let problem = null;
+  if (r.error?.code === 'ETIMEDOUT') problem = unreadable(`security timed out after ${KEYCHAIN_TIMEOUT_MS / 1000}s`);
+  else if (r.error?.code === 'ENOENT') problem = 'Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin).';
+  else if (r.error) problem = unreadable(`security could not be run (${r.error.message})`);
+  else if (r.status === 44 || (r.status === 0 && !r.stdout.trim())) problem = 'Keychain item career-ops-claude-token not found';
+  else if (r.status !== 0) {
+    const tail = String(r.stderr ?? '').trim().slice(-200);
+    problem = unreadable(`security failed (${r.status === null ? `signal ${r.signal}` : `exit ${r.status}`}${tail ? `: ${tail}` : ''})`);
+  }
+  if (problem) {
+    console.error(problem);
+    process.exit(1);
+  }
+  return r.stdout.trim();
 }
-const TOKEN = tokenRead.stdout.trim();
+const TOKEN = readKeychainToken();
 const redact = (s) => String(s ?? '').split(TOKEN).join('[redacted]');
 
 // ---- layout ----

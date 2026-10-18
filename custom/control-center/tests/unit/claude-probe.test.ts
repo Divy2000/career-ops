@@ -422,3 +422,45 @@ describe('claude-probe-reads.mjs --record', () => {
     expect(fs.readFileSync(contract, 'utf8')).toBe(before);
   }, 40_000);
 });
+
+describe('the probes read the Keychain as the preflight does (R32-supervisor-L2-03)', () => {
+  /** A sandbox whose `security` runs `body`, and a claude that records every call. */
+  function keychainBox(body: string) {
+    const box = sandbox();
+    fs.writeFileSync(path.join(box.bin, 'security'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, '#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\necho "$1" > "$f"\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+    return { box, claude };
+  }
+
+  for (const script of ['claude-probe.mjs', 'claude-probe-reads.mjs']) {
+    it(`given a locked keychain that cannot prompt, when ${script} runs, then it says the item could not be read rather than that it is missing`, () => {
+      const { box, claude } = keychainBox("echo 'User interaction is not allowed.' >&2\nexit 36");
+      const r = runProbe(script, box, claude);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/Could not read Keychain item career-ops-claude-token: security failed \(exit 36: User interaction is not allowed\.\)/);
+      expect(r.stderr).toMatch(/security unlock-keychain/);
+      expect(r.stderr).not.toMatch(/not found/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+      expect(fs.readdirSync(box.tmp)).toEqual([]);
+    });
+
+    it(`given no Keychain item (security exit 44), when ${script} runs, then it says the item is not found`, () => {
+      const { box, claude } = keychainBox("echo 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.' >&2\nexit 44");
+      const r = runProbe(script, box, claude);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/Keychain item career-ops-claude-token not found/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+    });
+
+    it(`given a security that waits at an unlock prompt, when ${script} runs, then it gives up after 8 s and says so`, () => {
+      const { box, claude } = keychainBox('exec sleep 30');
+      const started = Date.now();
+      const r = runProbe(script, box, claude);
+      expect(Date.now() - started).toBeLessThan(20_000);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/Could not read Keychain item career-ops-claude-token: security timed out after 8s/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+    }, 40_000);
+  }
+});
