@@ -14,7 +14,7 @@ import { LOG_JOBS, type ScheduleJob, type ScheduleService } from '../system/sche
 import type { DailyJobWatch } from '../system/daily.js';
 import { listLogDates, localDate, logHasStart, parseDailyLog, withJobState } from '../domains/immigration.js';
 import { readText } from '../domains/files.js';
-import { appSettingsPatchSchema, readSettings, SETTINGS_REL, updateSettings, type SettingsRead } from '../domains/settings.js';
+import { ALL_SETTINGS_KEPT, appSettingsPatchSchema, readSettings, SETTINGS_REL, updateSettings, type SettingsRead } from '../domains/settings.js';
 import { computeUsage, type UsageRead } from '../domains/usage.js';
 import { INSIGHT_SCRIPTS, readInsight, type InsightScript } from '../domains/insightsCache.js';
 import { readContacts, readInterviews } from '../domains/contacts.js';
@@ -147,7 +147,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
       return reply.code(409).send({ code: written.code, problem: written.problem, error: `${SETTINGS_REL} could not be read (${written.problem}), so saving would replace it with defaults. Fix the file by hand, or save again with ?reset=1 to replace it.` });
     }
     const next = written.settings;
-    opts.applySettings({ settings: next, problem: null, readable: true, etag: written.etag });
+    opts.applySettings({ settings: next, problem: null, kept: ALL_SETTINGS_KEPT, etag: written.etag });
     bus.publish('data.changed', { domain: 'config' });
     return { ...next, etag: written.etag };
   });

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -1248,6 +1248,34 @@ describe('hand edits to settings.json reach the runner (R34-srv-dom-b-L2-01)', (
       writeFile(own, JSON.stringify({ claudeConcurrency: 9, retention: 'x', future: true }));
       expect((await readIn(own)).problem).toEqual(expect.any(String));
       expect(own.runner.claudeSlots).toBe(3);
+    } finally {
+      await own.close();
+    }
+  });
+  it('given a hand edit with a bad retention and other valid values, when the page reads it, then the runner keeps its retention and uses the valid slot cap (FC-01)', async () => {
+    const own = await makeTestApp();
+    try {
+      writeFile(own, JSON.stringify({ retention: 5000 }));
+      await readIn(own);
+      const setRetention = vi.spyOn(own.runner.store, 'setRetention');
+      writeFile(own, JSON.stringify({ logos: true, retention: 'x', claudeConcurrency: 3 }));
+      expect(await readIn(own)).toMatchObject({ logos: true, retention: 500, claudeConcurrency: 3, problem: expect.any(String) });
+      expect(own.runner.claudeSlots).toBe(3);
+      expect(setRetention).not.toHaveBeenCalled();
+    } finally {
+      await own.close();
+    }
+  });
+  it('given a hand edit with a bad slot cap and only a valid logos value, when the page reads it, then the runner keeps its slot cap and retention', async () => {
+    const own = await makeTestApp();
+    try {
+      writeFile(own, JSON.stringify({ claudeConcurrency: 4, retention: 5000 }));
+      await readIn(own);
+      const setRetention = vi.spyOn(own.runner.store, 'setRetention');
+      writeFile(own, JSON.stringify({ logos: true, claudeConcurrency: 9 }));
+      expect((await readIn(own)).problem).toEqual(expect.any(String));
+      expect(own.runner.claudeSlots).toBe(4);
+      expect(setRetention).not.toHaveBeenCalled();
     } finally {
       await own.close();
     }

@@ -36,10 +36,14 @@ export function mergeSettings(current: StoredSettings, patch: Partial<AppSetting
 }
 
 /**
- * `readable` is false when nothing in settings.json could be used (half-typed JSON, not an object, every known value
- * invalid): `settings` are then only the defaults, not what the user wrote.
+ * `kept` names the settings that come from what the user wrote: every setting of a readable file (a default fills a
+ * missing one), only the valid values of a file with a problem, none of a file with nothing readable (half-typed
+ * JSON, not an object, every known value invalid). The other values of a file with a problem are only defaults.
  */
-export type SettingsRead = { settings: AppSettings; problem: string | null; readable: boolean; etag: string };
+export type SettingsRead = { settings: AppSettings; problem: string | null; kept: ReadonlySet<keyof AppSettings>; etag: string };
+
+export const ALL_SETTINGS_KEPT: ReadonlySet<keyof AppSettings> = new Set(Object.keys(appSettingsSchema.shape) as Array<keyof AppSettings>);
+const NONE_KEPT: ReadonlySet<keyof AppSettings> = new Set();
 
 /** The version a write is checked against: the file's bytes, so a hand edit counts as a change too. */
 const ABSENT_ETAG = 'none';
@@ -61,27 +65,27 @@ function readSettingsFile(dataRoot: string): SettingsRead & { unknown: UnknownFi
   try {
     raw = fs.readFileSync(abs, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { settings: DEFAULT_SETTINGS, problem: null, readable: true, etag: ABSENT_ETAG, unknown: NO_UNKNOWN };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { settings: DEFAULT_SETTINGS, problem: null, kept: ALL_SETTINGS_KEPT, etag: ABSENT_ETAG, unknown: NO_UNKNOWN };
     throw err;
   }
   return { ...parseSettings(raw), etag: etagOf(raw) };
 }
 
-function parseSettings(raw: string): { settings: AppSettings; problem: string | null; readable: boolean; unknown: UnknownFields } {
+function parseSettings(raw: string): { settings: AppSettings; problem: string | null; kept: ReadonlySet<keyof AppSettings>; unknown: UnknownFields } {
   let rawValue: unknown;
   try {
     rawValue = JSON.parse(raw);
   } catch (err) {
-    return { settings: DEFAULT_SETTINGS, problem: `settings.json is not valid JSON: ${(err as Error).message}`, readable: false, unknown: NO_UNKNOWN };
+    return { settings: DEFAULT_SETTINGS, problem: `settings.json is not valid JSON: ${(err as Error).message}`, kept: NONE_KEPT, unknown: NO_UNKNOWN };
   }
   const unknown = unknownFields(rawValue);
   const parsed = storedSettingsSchema.safeParse(rawValue);
-  if (parsed.success) return { settings: mergeSettings(parsed.data, {}), problem: null, readable: true, unknown };
+  if (parsed.success) return { settings: mergeSettings(parsed.data, {}), problem: null, kept: ALL_SETTINGS_KEPT, unknown };
   // One bad value must not reset its valid neighbors: a one-field PUT over such a file keeps every good setting.
   const kept = keepValidSettings(rawValue);
-  const { usageBudgets, ...keptTop } = kept;
-  const readable = Object.keys(keptTop).length > 0 || Object.keys(usageBudgets ?? {}).length > 0;
-  return { settings: mergeSettings(kept, {}), problem: `settings.json has invalid values: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}`, readable, unknown };
+  // A budgets object none of whose budgets is valid supplies nothing.
+  const keptKeys = (Object.keys(kept) as Array<keyof AppSettings>).filter((k) => k !== 'usageBudgets' || Object.keys(kept.usageBudgets ?? {}).length > 0);
+  return { settings: mergeSettings(kept, {}), problem: `settings.json has invalid values: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}`, kept: new Set(keptKeys), unknown };
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);

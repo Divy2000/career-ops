@@ -80,16 +80,15 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   const runnerOpts = { claudeSlots: initial.claudeConcurrency, retention: initial.retention, readToken };
   const runner = new Runner(cfg.dataRoot, bus, runnerOpts);
   // The version of settings.json the runner runs on. Any read that sees another version applies it, so the settings
-  // page never shows values the runner is not using; a file with an invalid value applies the valid ones it keeps.
-  // A file with nothing readable (half-typed JSON, every value invalid) keeps the last good settings: it must not drop
-  // retention to the default and prune runs.
+  // page never shows values the runner is not using. Only values the file supplies are applied: a slot cap or retention
+  // that is invalid or missing from a file with a problem (half-typed JSON, a typo) keeps the last good value, so a
+  // bad edit never drops retention to the default and prunes runs.
   let appliedEtag = initialRead.etag;
   const applySettings = (read: SettingsRead) => {
     if (read.etag === appliedEtag) return;
-    if (!read.readable) return;
     appliedEtag = read.etag;
-    runnerOpts.claudeSlots = read.settings.claudeConcurrency;
-    runner.store.setRetention(read.settings.retention);
+    if (read.kept.has('claudeConcurrency')) runnerOpts.claudeSlots = read.settings.claudeConcurrency;
+    if (read.kept.has('retention')) runner.store.setRetention(read.settings.retention);
     // A raised cap frees slots now, not at the next run event.
     runner.reschedule();
   };
