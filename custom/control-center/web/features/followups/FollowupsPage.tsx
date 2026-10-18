@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFollowups } from '../../lib/queries';
@@ -235,6 +235,11 @@ export function RepliesTab() {
   const [body, setBody] = useState('');
   const [invite, setInvite] = useState('');
   const [result, setResult] = useState<unknown>(null);
+  // The inputs stay editable while an action runs, so its answer is applied only to the text it was run with.
+  const latest = useRef({ subject, from, body, invite });
+  useEffect(() => {
+    latest.current = { subject, from, body, invite };
+  });
   return (
     <div className="stack">
       <div className="card" aria-labelledby="paste-heading">
@@ -249,7 +254,8 @@ export function RepliesTab() {
           <ActionButton meta={actions.data?.find((a) => a.id === 'followups.replyPaste')} disabled={busy !== null || !subject.trim() || !body.trim()} params={{ subject, from, body }} onRun={(p) => run('followups.replyPaste', p).then((out) => {
               // A paste always appends a new candidate (every paste gets a fresh message_id), so the form is cleared on
               // success: a second click would otherwise append the same email twice.
-              if (out) {
+              const now = latest.current;
+              if (out && now.subject === p.subject && now.from === p.from && now.body === p.body) {
                 setSubject('');
                 setFrom('');
                 setBody('');
@@ -264,7 +270,7 @@ export function RepliesTab() {
         <ActionButton meta={actions.data?.find((a) => a.id === 'followups.inviteMatch')} disabled={busy !== null || !invite.trim()} params={{ text: invite }} onRun={(p) => {
             // A failed match must not leave the previous invite's row under the new text.
             setResult(null);
-            return run('followups.inviteMatch', p).then((out) => out && 'result' in out && setResult(out.result));
+            return run('followups.inviteMatch', p).then((out) => out && 'result' in out && latest.current.invite === p.text && setResult(out.result));
           }} />
         {result !== null && <pre tabIndex={0} className="log mono small">{typeof result === 'string' ? result : JSON.stringify(result, null, 2)}</pre>}
       </div>

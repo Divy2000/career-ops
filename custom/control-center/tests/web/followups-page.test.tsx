@@ -38,20 +38,22 @@ const ACTIONS: ActionMeta[] = [{ id: 'followups.contactsVcf', label: 'Export vCa
 
 let host: HTMLElement;
 let root: Root;
-let inviteAnswer: () => Response;
+let inviteAnswer: () => Response | Promise<Response>;
+let replyAnswer: () => Response | Promise<Response>;
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 beforeEach(() => {
   launchers = [];
   CADENCE = ACTIVE;
   inviteAnswer = () => json(200, { result: { row: 12, company: 'Globex' } });
+  replyAnswer = () => json(200, { result: { added: 1 } });
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
       if (url === '/api/followups') return json(200, CADENCE);
       if (url === '/api/actions') return json(200, ACTIONS);
       if (url === '/api/actions/followups.inviteMatch') return inviteAnswer();
-      if (url === '/api/actions/followups.replyPaste') return json(200, { result: { added: 1 } });
+      if (url === '/api/actions/followups.replyPaste') return replyAnswer();
       if (url === '/api/contacts') return json(200, { kind: 'ok', path: 'data/contacts.tsv', rows: [], skipped: 0 });
       if (url === '/api/actions/followups.contactsVcf') return json(200, { result: 'BEGIN:VCARD\nEND:VCARD\n' });
       return json(404, { error: 'not stubbed' });
@@ -148,6 +150,55 @@ describe('Follow-ups page', () => {
     expect(from.value).toBe('');
     expect(body.value).toBe('');
   });
+  it('Given a reply paste in flight, When the user types a different email before it answers, Then the success keeps the new email (R32-feat-a-L1-01)', async () => {
+    let answer!: (r: Response) => void;
+    replyAnswer = () => new Promise<Response>((resolve) => (answer = resolve));
+    const { RepliesTab } = await import('@web/features/followups/FollowupsPage');
+    await render(RepliesTab);
+    const subject = await until(() => host.querySelector<HTMLInputElement>('input[aria-label="Reply subject"]'), 'the subject box');
+    const body = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Reply body"]')!;
+    const type = (el: HTMLInputElement | HTMLTextAreaElement, value: string) =>
+      act(async () => {
+        const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    await type(subject, 'Email A');
+    await type(body, 'Body of email A');
+    const paste = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Paste a reply'))!;
+    await until(() => paste() && !paste().disabled, 'Paste a reply enabled');
+    await act(async () => paste().click());
+    await until(() => answer || undefined, 'the paste request');
+    await type(subject, 'Email B');
+    await type(body, 'Body of email B');
+    await act(async () => answer(json(200, { result: { added: 1 } })));
+    await until(() => host.textContent?.includes('Done'), 'the paste result');
+    expect(subject.value).toBe('Email B');
+    expect(body.value).toBe('Body of email B');
+  });
+
+  it('Given an invite match in flight, When the invite text is edited before it answers, Then the old result is not shown under the new text (R32-feat-a-L1-01)', async () => {
+    let answer!: (r: Response) => void;
+    inviteAnswer = () => new Promise<Response>((resolve) => (answer = resolve));
+    const { RepliesTab } = await import('@web/features/followups/FollowupsPage');
+    await render(RepliesTab);
+    const text = await until(() => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Invite text"]'), 'the invite box');
+    const type = async (value: string) =>
+      act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(text, value);
+        text.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    const match = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Match invite'))!;
+    await type('Invite from Globex');
+    await until(() => match() && !match().disabled, 'Match invite');
+    await act(async () => match().click());
+    await until(() => answer || undefined, 'the match request');
+    await type('Invite from Initech');
+    await act(async () => answer(json(200, { result: { row: 12, company: 'Globex' } })));
+    await until(() => host.textContent?.includes('Done'), 'the match result');
+    expect(host.textContent).not.toContain('Globex');
+  });
+
   it('Given a vCard export, When its download link is clicked, Then the blob URL outlives the click so WebKit can still read it (R28-feat-a-L1-01)', async () => {
     const { ContactsTab } = await import('@web/features/followups/FollowupsPage');
     await render(() => createElement(ContactsTab));
