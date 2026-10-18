@@ -7,7 +7,7 @@ import { QuickEvaluate } from './QuickEvaluate';
 import { localDate } from '@shared/local-date';
 import type { ShortlistRow, TrackerRow } from '@shared/api';
 import { useActiveEvaluation, useStartEvaluation } from './evaluate';
-import { postingHref } from '../../lib/posting-href';
+import { PostingRefLink, postingHref } from '../../lib/posting-href';
 import { useSessions } from '../../lib/sessions';
 import { describeError } from '../../lib/actions';
 import { DiscardReasonPicker, rowIdentity, sameRow, StatusMessage, useSetStatus, type RowIdentity } from '../tracker/StatusControl';
@@ -361,9 +361,7 @@ export function TodayPage() {
                     <ul className="bullets">
                       {fresh.data.offers.map((o) => (
                         <li key={o.url}>
-                          <a href={o.url} target="_blank" rel="noreferrer noopener">
-                            {o.title}
-                          </a>{' '}
+                          <PostingRefLink posting={o.url}>{o.title}</PostingRefLink>{' '}
                           <span className="muted">{o.company}</span> <span className="faint mono">{o.firstSeen}</span> <Pill>{o.ats}</Pill>
                         </li>
                       ))}

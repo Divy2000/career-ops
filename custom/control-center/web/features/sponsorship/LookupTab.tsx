@@ -9,6 +9,7 @@ import { Md } from '../../components/Md';
 import { SessionPanel } from '../../components/SessionPanel';
 import { Empty, Pill, SponsorPill, alertTone } from '../../components/ui';
 import { MAX_COMPANY_QUERY_LENGTH, parseCompanyQuery } from '@shared/companyQuery';
+import { postingUrl } from '@shared/posting-url';
 import type { H1bCheck, LookupResult, SearchResult } from '@shared/api';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
@@ -180,7 +181,7 @@ function LocalData({ r }: { r: LookupResult }) {
                       <Pill tone={alertTone(a.status ?? '')}>{a.status}</Pill>
                     </td>
                     <td>
-                      {a.url ? (
+                      {postingUrl(a.url) !== null ? (
                         <a href={a.url} target="_blank" rel="noreferrer noopener">
                           {a.headline}
                         </a>
