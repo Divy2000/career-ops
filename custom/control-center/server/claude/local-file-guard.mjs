@@ -135,7 +135,9 @@ if (typeof nodeModule.registerHooks === 'function') {
     },
   });
 } else {
-  const main = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;
+  // The entry script is a resolution base here (load the Playwright it will import), not a main-module check.
+  const [, entry] = process.argv;
+  const main = entry ? pathToFileURL(entry).href : undefined;
   let playwright = null;
   try {
     playwright = requireFrom(main)('playwright');
