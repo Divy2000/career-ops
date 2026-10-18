@@ -84,8 +84,9 @@ function tidy(spans: DigestSpan[]): DigestSpan[] {
   return out.filter((s) => s.text !== '');
 }
 
-// A period after these ends no sentence: dotted initials (U.S., e.g.) are caught by shape, the rest by name.
-const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec', 'no', 'nos', 'vs', 'etc', 'approx', 'dept', 'gov', 'inc', 'corp', 'co', 'ltd', 'mr', 'mrs', 'ms', 'dr', 'st', 'jr', 'sr', 'est', 'fig']);
+// A period after these ends no sentence: dotted initials (U.S., e.g.) and one-letter initials (Donald J.) are caught by
+// shape, the rest, including citation abbreviations (90 Fed. Reg.), by name.
+const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec', 'no', 'nos', 'vs', 'etc', 'approx', 'dept', 'gov', 'inc', 'corp', 'co', 'ltd', 'mr', 'mrs', 'ms', 'dr', 'st', 'jr', 'sr', 'est', 'fig', 'fed', 'reg', 'sec', 'pub', 'rev', 'pt']);
 
 /** Where the first sentence of `text` ends (after its . ! or ?), or -1: a period after an abbreviation, or before a lowercase word or a number ("Oct. 15"), is no end. */
 function sentenceEnd(text: string): number {
@@ -94,7 +95,7 @@ function sentenceEnd(text: string): number {
     if (text[i] === '.') {
       // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
       const word = (text.slice(0, i).split(/\s/).pop() ?? '').replace(/^[(["'\u2018\u201c]+/u, '');
-      if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) continue;
+      if (/^(?:\p{L}\.)+\p{L}$/u.test(word) || /^\p{Lu}$/u.test(word)) continue;
       if (ABBREVIATIONS.has(word.toLowerCase())) continue;
     }
     const next = /^\s+(\S)/.exec(text.slice(i + 1))?.[1];

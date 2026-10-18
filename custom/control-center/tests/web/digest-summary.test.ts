@@ -26,6 +26,12 @@ describe('summarizeDigest', () => {
     expect(lines('- A memo [Dr. Smith] explains the change. Later text.')).toEqual(['A memo [Dr. Smith] explains the change.']);
   });
 
+  it('does not end the first sentence after a one-letter initial or a citation abbreviation (R33-shared-comp-X-01)', () => {
+    expect(lines('- President Donald J. Trump signed a proclamation raising the H-1B fee to $100,000. Later text.')).toEqual(['President Donald J. Trump signed a proclamation raising the H-1B fee to $100,000.']);
+    expect(lines('- DHS published the weighted-selection rule at 90 Fed. Reg. 45678 today. Later text.')).toEqual(['DHS published the weighted-selection rule at 90 Fed. Reg. 45678 today.']);
+    expect(lines('- The rule cites 8 U.S.C. Sec. 1184 and Pub. L. 117 in Pt. 214. Later text.')).toEqual(['The rule cites 8 U.S.C. Sec. 1184 and Pub. L. 117 in Pt. 214.']);
+  });
+
   it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
     expect(lines('- The rule applies in the U.S. Employers must file by Monday.')).toEqual(['The rule applies in the U.S. Employers must file by Monday.']);
   });
