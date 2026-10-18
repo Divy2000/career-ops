@@ -364,6 +364,8 @@ export function revertTurn(sessionDir: string, meta: MetaLike, n: number, ctx: R
 
 /** Errors applyReverts annotated with the file that failed and the files written before it. */
 const annotated = new WeakSet<Error>();
+/** The annotated errors whose failure came before any file was written. */
+const nothingReverted = new WeakSet<Error>();
 
 /**
  * Writes the checked plans in order. A write that fails leaves the files before it already written: its error (code and
@@ -381,6 +383,7 @@ function applyReverts(plans: RevertPlan[]): Array<{ abs: string; result: RevertR
       const done = written.length ? `\nalready reverted before the failure:\n${resultLines(written)}` : '\nnothing was reverted';
       err.message = `revert failed at ${path.basename(p.abs)}: ${err.message}${done}`;
       annotated.add(err);
+      if (!written.length) nothingReverted.add(err);
       throw err;
     }
   }
@@ -520,14 +523,32 @@ export function sessionRunsEnded(dataRoot: string, sessionId: string, startOf: (
  * queued so the refused revert leaves every run for the next server to run.
  */
 export function markQueuedRunsLost(dataRoot: string, sessionId: string): boolean {
+  return markQueuedRunsLostTracked(dataRoot, sessionId) !== null;
+}
+
+type MarkedRun = { file: string; meta: Record<string, unknown> };
+
+/** Puts the runs markQueuedRunsLost marked back to their metas from before. */
+function restoreMarkedRuns(marked: MarkedRun[]): void {
+  for (const m of marked) {
+    try {
+      replaceFile(m.file, JSON.stringify(m.meta, null, 2));
+    } catch {
+      /* A run left lost is only not run again: with the revert refused, that loses its turn but harms no file. */
+    }
+  }
+}
+
+/** markQueuedRunsLost, returning the runs it marked (with their metas from before), or null when it refused. */
+function markQueuedRunsLostTracked(dataRoot: string, sessionId: string): MarkedRun[] | null {
   const runs = path.join(dataRoot, 'data', 'control-center', 'runs');
   let names: string[];
   try {
     names = fs.readdirSync(runs);
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
   }
-  const marked: { file: string; meta: Record<string, unknown> }[] = [];
+  const marked: MarkedRun[] = [];
   for (const name of names) {
     const dir = path.join(runs, name);
     if (fs.existsSync(path.join(dir, 'starting'))) continue;
@@ -545,18 +566,12 @@ export function markQueuedRunsLost(dataRoot: string, sessionId: string): boolean
     try {
       replaceFile(file, JSON.stringify(lost, null, 2));
     } catch {
-      for (const m of marked) {
-        try {
-          replaceFile(m.file, JSON.stringify(m.meta, null, 2));
-        } catch {
-          /* A run left lost is only not run again: with the revert refused, that loses its turn but harms no file. */
-        }
-      }
-      return false;
+      restoreMarkedRuns(marked);
+      return null;
     }
     marked.push({ file, meta });
   }
-  return true;
+  return marked;
 }
 
 /** Writes turn `n`'s post-turn record from the hook's hashes, as the server's finalize would, unless it has one. */
@@ -608,10 +623,18 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     }
     // A queued run is over only because no server will start it: once the revert is sure to go ahead, mark it lost so
     // the next server does not re-run it over the revert. A refused revert leaves it queued for that server to run.
-    if (markLost && !markQueuedRunsLost(opts.ctx.dataRoot, meta.id)) {
+    const marked = markLost ? markQueuedRunsLostTracked(opts.ctx.dataRoot, meta.id) : [];
+    if (marked === null) {
       return { status: 500, text: 'revert refused: a queued run of this session could not be marked lost, so the next server would run it over the revert; try again' };
     }
-    const results = applyReverts(plans);
+    let results: Array<{ abs: string; result: RevertResult }>;
+    try {
+      results = applyReverts(plans);
+    } catch (err) {
+      // A write that failed before any file was reverted leaves the turn as it was, so the next server may still run it.
+      if (err instanceof Error && nothingReverted.has(err)) restoreMarkedRuns(marked);
+      throw err;
+    }
     return { status: 200, text: resultLines(results) || 'nothing to revert' };
   } catch (err) {
     if (err instanceof RevertRefused) return { status: err.status, text: err.message };
