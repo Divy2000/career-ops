@@ -211,3 +211,62 @@ describe('the batch-start refusal names a batch only while one runs (R33-claude-
     }
   });
 });
+
+describe('a tailored CV session holds its row number for the application it pinned (R33-feat-a-L2-01)', () => {
+  const GLOBEX = { company: 'Globex Payments', role: 'Staff Software Engineer', report: 3 };
+  const ACME = { company: 'Acme Robotics', role: 'Senior Backend Engineer', report: 99 };
+  const startPdf = (app: TestApp) =>
+    app.app.inject({ method: 'POST', url: '/api/sessions', headers: app.authedWrite, payload: { mode: 'pdf', target: { type: 'app', value: '3' }, prompt: 'Generate the tailored CV PDF for tracker row #3.' } });
+
+  async function withApp(fn: (app: TestApp) => Promise<void>): Promise<void> {
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-r33-cv-guard-') });
+    try {
+      await fn(app);
+    } finally {
+      await quiet(app);
+      await app.close();
+      await runsEnded(dataRoot);
+    }
+  }
+
+  // Row 3 of the fixture tracker is Globex Payments.
+  const cases: { name: string; pinned: SessionMeta['target']['row'] | undefined; status: number }[] = [
+    { name: 'pinned to the application now under the number', pinned: GLOBEX, status: 409 },
+    { name: 'pinned to an earlier application a reindex moved off the number', pinned: ACME, status: 202 },
+    { name: 'started before rows were pinned (no pin)', pinned: undefined, status: 409 },
+    { name: 'pinned to the same company under another report', pinned: { ...GLOBEX, report: 4 }, status: 202 },
+  ];
+  for (const c of cases) {
+    it(`given a running pdf session on #3 ${c.name}, when a tailored CV starts for #3, then it answers ${c.status}`, async () => {
+      await withApp(async (app) => {
+        const live = app.sessions.store.create({ mode: 'pdf', policyClass: app.sessions.effectivePolicy('pdf')!.policyClass, target: { type: 'app', value: '3', ...(c.pinned ? { row: c.pinned } : {}) }, model: null });
+        app.sessions.store.setStatus(live.id, 'running');
+        const res = await startPdf(app);
+        expect(res.statusCode, res.body).toBe(c.status);
+        if (c.status === 409) expect(res.json().error).toContain(live.id);
+      });
+    });
+  }
+
+  for (const c of [{ name: 'pinned to an earlier application', pinned: ACME as SessionMeta['target']['row'], status: 202 }, { name: 'with no pin', pinned: undefined, status: 409 }]) {
+    it(`given a finished pdf session for Globex on #3 and a running one ${c.name}, when the finished one gets a reply, then it answers ${c.status}`, async () => {
+      await withApp(async (app) => {
+        const policyClass = app.sessions.effectivePolicy('pdf')!.policyClass;
+        const own = app.sessions.store.create({ mode: 'pdf', policyClass, target: { type: 'app', value: '3', row: GLOBEX }, model: null });
+        app.sessions.store.setStatus(own.id, 'done');
+        const live = app.sessions.store.create({ mode: 'pdf', policyClass, target: { type: 'app', value: '3', ...(c.pinned ? { row: c.pinned } : {}) }, model: null });
+        app.sessions.store.setStatus(live.id, 'running');
+        const res = await app.app.inject({ method: 'POST', url: `/api/sessions/${own.id}/turns`, headers: app.authedWrite, payload: { prompt: 'Again, shorter.' } });
+        expect(res.statusCode, res.body).toBe(c.status);
+      });
+    });
+  }
+
+  it('given two tailored CV starts for one row at once, then one starts and the other is refused', async () => {
+    await withApp(async (app) => {
+      const res = await Promise.all([startPdf(app), startPdf(app)]);
+      expect(res.map((r) => r.statusCode).sort()).toEqual([202, 409]);
+    });
+  });
+});

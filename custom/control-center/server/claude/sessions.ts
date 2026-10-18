@@ -14,6 +14,11 @@ export type SessionStatus = 'queued' | 'running' | 'awaiting_user' | 'done' | 'e
 export type TargetType = 'app' | 'url' | 'company' | 'text' | 'none';
 export type AppRowIdentity = { company: string; role: string; report: number | null };
 
+/** Whether two pinned rows are one application: the comparison the Apply page's sameRow makes too. */
+export function sameApplication(a: AppRowIdentity, b: AppRowIdentity): boolean {
+  return a.company === b.company && a.role === b.role && a.report === b.report;
+}
+
 export interface SessionTurn {
   n: number;
   runId: string;
