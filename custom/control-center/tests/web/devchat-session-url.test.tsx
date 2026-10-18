@@ -28,8 +28,9 @@ let root: Root;
 let router: AnyRouter;
 let changesFetched: string[];
 const meta = { id: 's-7', mode: 'devchat', status: 'done', turns: [{ n: 1 }], target: { type: 'none', value: null } };
-/** What POST /api/sessions answers; a test can make the start fail. */
+/** What POST /api/sessions answers; a test can make the start fail, or make the server refuse it with START_REFUSED. */
 let startReply: Record<string, unknown>;
+const START_REFUSED = { refused: true };
 /** While set, POST /api/sessions waits for it, so a test can act while the start is in flight. */
 let startGate: Promise<void> | null;
 /** While set, a reply to s-7 (POST /api/sessions/s-7/turns) waits for it; `turnRefused` makes the server refuse it. */
@@ -59,8 +60,11 @@ async function open(entry: string) {
     'fetch',
     vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST' && url === '/api/sessions') {
-        if (startGate) await startGate;
-        return json(startReply, 202);
+        // Read as the start is sent, so a test can give a later start another gate and reply.
+        const gate = startGate;
+        const reply = startReply;
+        if (gate) await gate;
+        return reply === START_REFUSED ? json({ error: 'internal error' }, 500) : json(reply, 202);
       }
       if (init?.method === 'POST' && url === '/api/sessions/s-7/turns') {
         if (turnGate) await turnGate;
@@ -201,6 +205,53 @@ describe('Dev Chat session in the URL', () => {
     await act(async () => release());
     await until(() => router.state.location.search.session === 's-7' && host.querySelector('[aria-label="Reply to the session"]'), 'the started session attached');
     expect(posts()).toBe(1);
+  });
+
+  it.each([
+    ['with its session', meta],
+    ['with a session that failed to start', { ...meta, id: 's-9', status: 'error', error: 'claude is not logged in' }],
+    ['with a refusal', START_REFUSED],
+  ])('given a start that outlived the report window, when a newer start is sent and the old one answers late %s, then the newer start keeps its mark and the page stays off the old session', async (_what, lateReply) => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let releaseA!: () => void;
+      startGate = new Promise((r) => (releaseA = r));
+      startReply = lateReply;
+      await open('/dev');
+      const send = async (text: string) => {
+        const prompt = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt for devchat"]')!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(prompt, text);
+          prompt.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
+      };
+      await send('Add a house rule');
+      await act(async () => router.navigate({ to: '/runs' }));
+      await until(() => host.textContent?.includes('Runs page'), 'the Runs page');
+      await act(async () => router.navigate({ to: '/dev' }));
+      await until(() => host.textContent?.includes('Starting the conversation'), 'the wait for the first start');
+      await act(async () => vi.advanceTimersByTime(START_REPORT_WINDOW_MS + 1));
+      await until(() => host.querySelector('textarea[aria-label="Prompt for devchat"]'), 'the form once the mark expired');
+      let releaseB!: () => void;
+      startGate = new Promise((r) => (releaseB = r));
+      startReply = { ...meta, id: 's-8' };
+      await send('Add another rule');
+      const posts = () => (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/sessions' && i?.method === 'POST').length;
+      await until(() => posts() === 2, 'the second start sent');
+      await act(async () => releaseA());
+      await settle();
+      expect(router.state.location.search.session).toBeUndefined();
+      expect(lastSession('cc.devchat.session').starting()).toBe(true);
+      await act(async () => releaseB());
+      await until(() => router.state.location.search.session === 's-8', 'the newer start attached');
+      await settle();
+      expect(router.state.location.search.session).toBe('s-8');
+      expect(lastSession('cc.devchat.session').read()).toBe('s-8');
+      expect(lastSession('cc.devchat.session').starting()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('given a started session, when the nav link opens /dev with no session, then the same session comes back with its Changes and New conversation', async () => {
