@@ -187,4 +187,26 @@ describe('a run whose record cannot be read for a moment', () => {
     expect(failed).toBe(3);
     expect(armed).toHaveBeenCalledTimes(1);
   });
+
+  it('Given a run started here whose running record cannot be written, When the user cancels it, Then its command is stopped and it ends cancelled', async () => {
+    const root = tempDir('cc-runner-tick-');
+    const { runner } = watchedRunner(root);
+    const write = runner.store.write.bind(runner.store);
+    let failed = 0;
+    vi.spyOn(runner.store, 'write').mockImplementation((meta) => {
+      if (meta.status === 'running') {
+        failed++;
+        throw Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' });
+      }
+      return write(meta);
+    });
+    const run = runner.start(noisy(['0', '30000']));
+    await until(() => failed >= 2 && runner.store.readWrapper(run.id) !== null);
+    expect(runner.store.read(run.id)!.status).toBe('queued');
+
+    expect(runner.cancel(run.id)?.status).toBe('cancelled');
+    await until(() => runner.store.read(run.id)?.endedAt != null);
+    await runsEnded(root, 10_000);
+    expect(runner.store.read(run.id)!.status).toBe('cancelled');
+  });
 });

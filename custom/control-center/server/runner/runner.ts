@@ -374,7 +374,8 @@ export class Runner {
    * One run another process left on disk, settled as at server start: adopted if queued; tracked, finalized or lost if
    * running, or if cancelled before it exited (marked so at once, it ends only when its command does).
    */
-  private reconcileRun(meta: RunMeta): void {
+  private reconcileRun(read: RunMeta): void {
+    const meta = this.asStarted(read);
     if (meta.status === 'queued') {
       this.adopt(meta);
       return;
@@ -682,13 +683,14 @@ export class Runner {
    */
   private track(meta: RunMeta, failing = false, killArmed?: boolean): void {
     const timer = setInterval(() => {
-      const armed = this.active.get(meta.id)?.killArmed;
+      // Read after the look, which may arm it before it throws.
+      const entry = this.active.get(meta.id);
       const ok = this.guarded(`tracking run ${meta.id}`, () => this.tick(meta, timer), !failing);
       failing = !ok;
       // Settling it threw once it was no longer tracked: tracked again, so a later look settles it.
       if (!ok && !this.active.has(meta.id)) {
         clearInterval(timer);
-        this.track(meta, true, armed);
+        this.track(meta, true, entry?.killArmed);
       }
     }, this.opts.pollMs ?? 250);
     timer.unref();
@@ -698,12 +700,10 @@ export class Runner {
 
   /** One look at a tracked run: records its command, and settles it once it has exited or its wrapper is gone. */
   private tick(meta: RunMeta, timer: NodeJS.Timeout): void {
-    let current = this.store.read(meta.id) ?? meta;
-    // Started here, but recording it running failed: written now, so every process reads it as running.
-    if (current.status === 'queued' && meta.status === 'running') {
-      current = { ...current, status: 'running', startedAt: meta.startedAt, wrapperPid: meta.wrapperPid, wrapperStartedAt: meta.wrapperStartedAt };
-      this.store.write(current);
-    }
+    const read = this.store.read(meta.id) ?? meta;
+    let current = this.asStarted(read);
+    // Written now, so every process reads it as running.
+    if (current !== read) this.store.write(current);
     // Cancelled by another process, whose SIGKILL dies with it if it stops within the grace.
     const entry = this.active.get(meta.id);
     if (entry && current.status === 'cancelled' && !entry.killArmed) {
@@ -739,6 +739,13 @@ export class Runner {
       // Settled: a failure to start the next run must not settle this one again.
       this.pumpFromTimer();
     }
+  }
+
+  /** A run queued on disk that this process started, though recording it running failed: as the running run it is. */
+  private asStarted(meta: RunMeta): RunMeta {
+    const tracked = this.active.get(meta.id)?.meta;
+    if (meta.status !== 'queued' || tracked?.status !== 'running') return meta;
+    return { ...meta, status: 'running', startedAt: tracked.startedAt, wrapperPid: tracked.wrapperPid, wrapperStartedAt: tracked.wrapperStartedAt };
   }
 
   /**
@@ -797,8 +804,9 @@ export class Runner {
   cancel(id: string): RunMeta | null {
     const queued = this.queue.find((q) => q.meta.id === id);
     if (queued) this.queue = this.queue.filter((q) => q !== queued);
-    let meta = this.store.read(id);
-    if (!meta) return null;
+    const read = this.store.read(id);
+    if (!read) return null;
+    let meta: RunMeta | null = this.asStarted(read);
     if (meta.status === 'queued') {
       const claim = this.claim(id);
       // Claimed elsewhere a moment ago, it is starting (or was settled): act on what is on disk now.
