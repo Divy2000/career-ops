@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { findCvEntry, findCvBlock, wordDiff, validateLibrary, parseLibrary } from '../lib.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -20,7 +21,7 @@ const dataRoot = ({ library = null, cv = read('cv-sample.md') } = {}) => {
   return d;
 };
 const run = (root, args) => {
-  return spawnSync(process.execPath, [IMPORT, ...args], { cwd: root, env: rootEnv(root), encoding: 'utf8', timeout: 20000 });
+  return spawnCpuLimited(process.execPath, [IMPORT, ...args], { cwd: root, env: rootEnv(root), encoding: 'utf8' });
 };
 const target = (root) => path.join(root, 'article-digest.md');
 const input = (root, name, data) => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
@@ -11,6 +11,7 @@ import { formatRankSegment } from '../../../rank-pipeline.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
 import { localToday } from '../../../lib/local-today.mjs';
 import { cacheKey } from '../../../plugins/h1b-sponsor/lib/cache.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SHORTLIST = path.join(REPO, 'custom', 'pipeline', 'shortlist.mjs');
@@ -24,7 +25,7 @@ test('the shortlist is dated by the local day, also when the UTC date is already
   // Ranked below the cut, so no sponsorship lookup runs.
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { TZ: zone }), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { TZ: zone }), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8').split('\n')[0], `# Shortlist - ${localToday}`);
 });
@@ -34,7 +35,7 @@ test('the shortlist is written on a root with no data/immigration folder (the da
   fs.mkdirSync(path.join(root, 'data'));
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n/);
 });
@@ -43,7 +44,7 @@ test('the shortlist is written, empty, on a root with no data/pipeline.md yet (a
   const root = tempDir('shortlist-');
   fs.mkdirSync(path.join(root, 'data'));
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /shortlist: 0 kept, 0 excluded/);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^Ranked rows with rank >= 3: 0\./m);
@@ -56,7 +57,7 @@ test('URL-only pipeline rows each get a shortlist row whose link reads as the UR
   const urls = ['https://jobs.example.com/1', 'https://jobs.example.com/2', 'https://jobs.example.com/3'];
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${urls.map((u) => `- [ ] ${u} | rank: 4.0/5 — fit`).join('\n')}\n`);
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
   for (const u of urls) assert.ok(md.includes(`[${u}](${u})`), `${u} in\n${md}`);
@@ -78,7 +79,7 @@ test('a paused sponsor is excluded whatever slug the alert row carries, keyed by
     path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
     `date\tcompany\tslug\tstatus\theadline\turl\n${companies.map((c, i) => `2026-09-29\t${c}\t${slugs[i]}\tpaused\t${c} pauses sponsorship\thttps://news.example/${i}`).join('\n')}\n`,
   );
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /shortlist: 0 kept, 5 excluded/);
 });
@@ -95,7 +96,7 @@ function alertWorld(companies, alertRows) {
     path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
     `date\tcompany\tslug\tstatus\theadline\turl\n${alertRows.map(([date, company, slug, status]) => `${date}\t${company}\t${slug}\t${status}\t${company} ${status} sponsorship\thttps://news.example/${slug}`).join('\n')}\n`,
   );
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   return { stdout: r.stdout, md: fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8') };
 }
@@ -140,7 +141,7 @@ for (const [what, write] of [
     fs.mkdirSync(path.join(root, 'data'));
     fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
     write(root);
-    const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+    const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
     assert.equal(r.status, 0, r.stderr);
     assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /^# Shortlist - \d{4}-\d{2}-\d{2}\n/);
   });
@@ -151,7 +152,7 @@ test('--help prints the usage and touches nothing: no lookups, no shortlist, no 
   fs.mkdirSync(path.join(root, 'data'));
   const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | Acme | Data Analyst | Remote\n';
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
-  const r = spawnSync(process.execPath, [SHORTLIST, '--help'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST, '--help'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Usage: node custom\/pipeline\/shortlist\.mjs \[--min-rank 3\] \[--top 40\]/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
@@ -164,7 +165,7 @@ test('the low-ranked fixture row reads as ranked, so the tests above cover the -
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
   // A fresh tier cache entry, so the run looks nothing up.
   fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Low Co': { tier: 'strong', matched: 'Low Co', checked: localToday() } }));
-  const r = spawnSync(process.execPath, [SHORTLIST, '--min-rank', '1'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST, '--min-rank', '1'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /Ranked rows with rank >= 1: 1\./);
 });
@@ -175,14 +176,14 @@ test('the shortlist reads --min-rank in the --min-rank=N form too (SW6-libs-02)'
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${LOW_RANKED}\n`);
   fs.writeFileSync(path.join(root, 'portals.yml'), 'title_filter:\n  positive: []\n  negative: []\n');
   fs.writeFileSync(path.join(root, 'data', 'immigration', 'sponsor-tiers.json'), JSON.stringify({ 'Low Co': { tier: 'strong', matched: 'Low Co', checked: localToday() } }));
-  const r = spawnSync(process.execPath, [SHORTLIST, '--min-rank=1'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST, '--min-rank=1'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8'), /Ranked rows with rank >= 1: 1\./);
 });
 
 test('the shortlist refuses an unknown flag such as --dry-run before any lookup or write (SW6-libs-02)', () => {
   const root = rankedRoot();
-  const r = spawnSync(process.execPath, [SHORTLIST, '--dry-run'], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST, '--dry-run'], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /unrecognized flag\(s\): --dry-run/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
@@ -191,7 +192,7 @@ test('the shortlist refuses an unknown flag such as --dry-run before any lookup 
 test('the shortlist refuses an empty --min-rank= or --top= instead of reading it as 0 (SW6-libs-02)', () => {
   for (const flag of ['--min-rank=', '--top=']) {
     const root = rankedRoot();
-    const r = spawnSync(process.execPath, [SHORTLIST, flag], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+    const r = spawnCpuLimited(process.execPath, [SHORTLIST, flag], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
     assert.equal(r.status, 1, flag);
     assert.match(r.stderr, new RegExp(`${flag.slice(0, -1)} needs a number`));
     assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
@@ -201,7 +202,7 @@ test('the shortlist refuses an empty --min-rank= or --top= instead of reading it
 test('the shortlist refuses a stray operand, such as a rank given without --min-rank, before any lookup or write (SW7-libs-02)', () => {
   for (const args of [['4'], ['--top', '10', 'extra']]) {
     const root = rankedRoot();
-    const r = spawnSync(process.execPath, [SHORTLIST, ...args], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+    const r = spawnCpuLimited(process.execPath, [SHORTLIST, ...args], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
     assert.equal(r.status, 1, args.join(' '));
     assert.match(r.stderr, new RegExp(`unexpected argument\\(s\\): ${args[args.length - 1]}`));
     assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
@@ -211,7 +212,7 @@ test('the shortlist refuses a stray operand, such as a rank given without --min-
 test('the shortlist refuses a --top that is not a positive whole number and a --min-rank outside 0 to 5, before any lookup or write (SW7-libs-02)', () => {
   for (const args of [['--top', '-5'], ['--top=0'], ['--top=2.5'], ['--min-rank', '-1'], ['--min-rank=6']]) {
     const root = rankedRoot();
-    const r = spawnSync(process.execPath, [SHORTLIST, ...args], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 60_000 });
+    const r = spawnCpuLimited(process.execPath, [SHORTLIST, ...args], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
     assert.equal(r.status, 1, args.join(' '));
     assert.match(r.stderr, args[0].startsWith('--top') ? /--top needs a positive whole number/ : /--min-rank needs a number from 0 to 5/, args.join(' '));
     assert.deepEqual(fs.readdirSync(path.join(root, 'data')), ['pipeline.md']);
@@ -232,7 +233,7 @@ test('with no H-1B index and no H1B_API_BASE, one warning says how to install it
   const root = rankedRoot();
   const env = rootEnv(root, { H1B_INDEX_PATH: path.join(root, 'no-index.db') });
   delete env.H1B_API_BASE;
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stderr.trim().split('\n').length, 1, r.stderr);
   assert.match(r.stderr, /no local H-1B index.*node plugins\/h1b-sponsor\/install-h1b-index\.mjs/);
@@ -244,12 +245,12 @@ test('with no H-1B index and no H1B_API_BASE, one warning says how to install it
 
 test('a lookup that fails names check.mjs\'s reason and marks the row lookup failed, not the DOL tier unknown (SW2-libs-02)', () => {
   const root = rankedRoot();
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /^tier lookup failed for Acme: fetch failed$/m);
   assert.match(r.stderr, /^tier lookup failed for Globex: fetch failed$/m);
   assert.deepEqual(sponsorCells(root), [['4', '4', 'lookup failed'], ['3.5', '3.5', 'lookup failed']]);
-  const again = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  const again = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
   assert.match(again.stdout, /\(2 tier lookups\)/, 'a failed lookup is retried on the next run, never cached as an answer');
 });
 
@@ -268,7 +269,7 @@ function namelessRoot() {
 
 test('a row with no usable company name is labelled as such and left unadjusted, with a lookup backend present', () => {
   const root = namelessRoot();
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stderr, '', 'nothing was looked up');
   assert.match(r.stdout, /\(0 tier lookups\)/);
@@ -279,7 +280,7 @@ test('a row with no usable company name reads the same without a backend, and tr
   const root = namelessRoot();
   const env = rootEnv(root, { H1B_INDEX_PATH: path.join(root, 'no-index.db') });
   delete env.H1B_API_BASE;
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stderr, '');
   assert.deepEqual(sponsorCells(root), [['4', '4', 'no company name'], ['3.5', '3.5', 'no company name']]);
@@ -482,7 +483,7 @@ test('an alert headline with a markdown link is written so the excluded bullet s
     path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
     `date\tcompany\tslug\tstatus\theadline\turl\n2026-10-01\tAcme\tacme\tpaused\tSee [the announcement](https://news.example/a) - more details\thttps://news.example/a\n`,
   );
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
   const line = md.split('\n').find((l) => l.startsWith('- Acme - '));
@@ -505,7 +506,7 @@ test('an alert headline keeps its pipe and a nested link still parses (R17-scrip
     path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
     `date\tcompany\tslug\tstatus\theadline\turl\n2026-10-01\tAcme\tacme\tpaused\tH-1B | OPT [[update]](https://news.example/b)\thttps://news.example/b\n`,
   );
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const md = fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8');
   const line = md.split('\n').find((l) => l.startsWith('- Acme - '));
@@ -586,7 +587,7 @@ fs.promises.rename = async (from, to) => {
 };
 syncBuiltinESMExports();
 `);
-  const r = spawnSync(process.execPath, ['--import', preload, SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', preload, SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.startsWith('shortlist.md')), []);
@@ -604,7 +605,7 @@ fs.promises.rename = async (from, to) => {
 };
 syncBuiltinESMExports();
 `);
-  const r = spawnSync(process.execPath, ['--import', preload, SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8', timeout: 120_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', preload, SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: 'http://127.0.0.1:9' }), encoding: 'utf8' });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data', 'immigration')).filter((f) => f.includes('.tmp-')), []);

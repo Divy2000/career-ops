@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WATCH = path.join(REPO, 'custom', 'immigration', 'watch.mjs');
@@ -24,7 +25,7 @@ function runWatch(root, { stale }) {
     preload,
     `import fs from 'node:fs';\nimport { syncBuiltinESMExports } from 'node:module';\n${lie}globalThis.fetch = async (url) => (String(url).includes('federalregister') ? new Response(JSON.stringify({ results: [] }), { status: 200 }) : new Response('<rss><channel></channel></rss>', { status: 200 }));\n`,
   );
-  const r = spawnSync(process.execPath, ['--import', preload, WATCH], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', preload, WATCH], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
 }
 

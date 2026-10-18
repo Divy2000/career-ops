@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { dayIn } from '../../test-support/local-day.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WATCH = path.join(REPO, 'custom', 'immigration', 'watch.mjs');
@@ -28,20 +29,50 @@ function noonIn(zone, ms) {
 /**
  * A data root and a fetch preload that answers both official sources offline from feeds.json, which a test rewrites
  * between runs. The Federal Register answers every search term with the same documents, as it does for a rule that
- * matches several of them. Items are dated the world's now, never a fixed day: watch.mjs only reads the last 14 days,
- * so a fixed date would age out of the window. watch.mjs's clock starts at `at`, or else at noon of today in `zone`
+ * matches several of them, but only those published inside the window asked for. Items are dated the world's now
+ * unless a test gives a day relative to it, never a fixed day: watch.mjs only reads the last 14 days, so a fixed date
+ * would age out of the window. watch.mjs's clock starts at `at`, or else at noon of today in `zone`
  * moved `daysAhead` days on, and runs from there: never from the real clock, so local midnight cannot pass between
  * computing the expected day here and watch.mjs dating its run. `root` reuses another world's data root, a later day.
  */
 function watchWorld({ daysAhead = 0, zone = ZONE, at = null, root = tempDir('imm-watch-') } = {}) {
   const feeds = path.join(root, 'feeds.json');
   const preload = path.join(root, 'feeds.mjs');
+  const frSince = path.join(root, 'fr-since.json');
   const start = at ? Date.parse(at) : noonIn(zone, Date.now()) + daysAhead * DAY_MS;
   const now = new Date(start);
   const clock = `const RealDate = Date;\nconst t0 = RealDate.now();\nglobalThis.Date = class extends RealDate {\n  constructor(...a) { super(...(a.length ? a : [${start} + RealDate.now() - t0])); }\n  static now() { return ${start} + RealDate.now() - t0; }\n};\n`;
-  fs.writeFileSync(preload, `import fs from 'node:fs';\n${clock}globalThis.fetch = async (url) => {\n  const f = JSON.parse(fs.readFileSync(${JSON.stringify(feeds)}, 'utf8'));\n  const u = String(url);\n  if (u.includes('federalregister')) {\n    if (f.frStatus) return new Response('unavailable', { status: f.frStatus });\n    if (f.frPages) {\n      const page = Number(new URL(u).searchParams.get('page') ?? 0);\n      const next = f.frRepeat ? u : page + 1 < f.frPages.length ? \`https://www.federalregister.gov/api/v1/documents.json?page=\${page + 1}\` : null;\n      return new Response(JSON.stringify({ results: f.frPages[page], next_page_url: next }), { status: 200 });\n    }\n    return new Response(JSON.stringify({ results: f.fr }), { status: 200 });\n  }\n  if (f.rssStatus) return new Response('unavailable', { status: f.rssStatus });\n  return new Response(\`<rss><channel>\${f.rss.join('')}</channel></rss>\`, { status: 200 });\n};\n`);
+  // Like the real API, the Federal Register returns only documents published on or after the window's first day
+  // (conditions[publication_date][gte]), so a run that asks for the wrong window misses the documents before it. Every
+  // run records the windows it asked for in fr-since.json.
+  fs.writeFileSync(preload, `import fs from 'node:fs';
+${clock}const asked = [];
+globalThis.fetch = async (url) => {
+  const f = JSON.parse(fs.readFileSync(${JSON.stringify(feeds)}, 'utf8'));
+  const u = String(url);
+  if (u.includes('federalregister')) {
+    const params = new URL(u).searchParams;
+    const since = params.get('conditions[publication_date][gte]');
+    asked.push(since);
+    fs.writeFileSync(${JSON.stringify(frSince)}, JSON.stringify(asked));
+    if (f.frStatus) return new Response('unavailable', { status: f.frStatus });
+    const inWindow = (docs) => docs.filter((d) => since !== null && d.publication_date >= since);
+    if (f.frPages) {
+      const page = Number(params.get('page') ?? 0);
+      const next = f.frRepeat ? u : page + 1 < f.frPages.length ? \`https://www.federalregister.gov/api/v1/documents.json?conditions%5Bpublication_date%5D%5Bgte%5D=\${since}&page=\${page + 1}\` : null;
+      return new Response(JSON.stringify({ results: inWindow(f.frPages[page]), next_page_url: next }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ results: inWindow(f.fr) }), { status: 200 });
+  }
+  if (f.rssStatus) return new Response('unavailable', { status: f.rssStatus });
+  return new Response(\`<rss><channel>\${f.rss.join('')}</channel></rss>\`, { status: 200 });
+};
+`);
   const imm = path.join(root, 'data', 'immigration');
-  const runRaw = (...args) => spawnSync(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1', TZ: zone }, encoding: 'utf8', timeout: 60_000 });
+  const runRaw = (...args) => {
+    fs.rmSync(frSince, { force: true });
+    return spawnCpuLimited(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1', TZ: zone }, encoding: 'utf8' });
+  };
   const run = (...args) => {
     const r = runRaw(...args);
     assert.equal(r.status, 0, r.stderr);
@@ -50,11 +81,14 @@ function watchWorld({ daysAhead = 0, zone = ZONE, at = null, root = tempDir('imm
   return {
     root,
     imm,
-    doc: (n, title) => ({ document_number: n, title, publication_date: now.toISOString().slice(0, 10), html_url: `https://www.federalregister.gov/d/${n}`, type: 'Rule', agencies: [{ name: 'USCIS' }] }),
-    rssItem: (slug, title) => `<item><title>${title}</title><link>https://www.uscis.gov/news/${slug}</link><pubDate>${now.toUTCString()}</pubDate></item>`,
+    // A document or news item published `day` (YYYY-MM-DD), or else on the world's now.
+    doc: (n, title, day = now.toISOString().slice(0, 10)) => ({ document_number: n, title, publication_date: day, html_url: `https://www.federalregister.gov/d/${n}`, type: 'Rule', agencies: [{ name: 'USCIS' }] }),
+    rssItem: (slug, title, day = null) => `<item><title>${title}</title><link>https://www.uscis.gov/news/${slug}</link><pubDate>${(day ? new Date(`${day}T12:00:00Z`) : now).toUTCString()}</pubDate></item>`,
     setFeeds: ({ fr = [], rss = [], ...failures }) => fs.writeFileSync(feeds, JSON.stringify({ fr, rss, ...failures })),
     watch: (...args) => JSON.parse(run(...args)),
     watchRaw: (...args) => runRaw(...args),
+    // The distinct publication_date windows the last run asked the Federal Register for.
+    frSince: () => [...new Set(fs.existsSync(frSince) ? JSON.parse(fs.readFileSync(frSince, 'utf8')) : [])],
     now,
     // The local day watch.mjs dates its run by (localToday() in its zone).
     today: dayIn(zone, now),
@@ -146,6 +180,24 @@ test('when one source fails, only the healthy source\'s cursor moves, and its it
   const { last_success: cursors } = w.seen();
   assert.equal(cursors['federal-register'], old, 'the failed source resumes from its last success next time');
   assert.notEqual(cursors.uscis, old);
+  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
+  w.watch();
+  assert.deepEqual(w.frSince(), [old], 'the next run asks the failed source for everything since its last success');
+});
+
+test('after an outage longer than the 14-day lookback, each source is read from its own last success, so items published during the outage are still queued (R35-tests-custom-L2-01)', () => {
+  const w = watchWorld();
+  const frCursor = dayBefore(w.now, 20);
+  const uscisCursor = dayBefore(w.now, 25);
+  fs.mkdirSync(w.imm, { recursive: true });
+  fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_run: frCursor, last_success: { 'federal-register': frCursor, uscis: uscisCursor } }));
+  w.setFeeds({
+    fr: [w.doc('2026-1', H1B, dayBefore(w.now, 18)), w.doc('2026-2', 'Labor Certification for Permanent Employment', dayBefore(w.now, 22))],
+    rss: [w.rssItem('opt', OPT, dayBefore(w.now, 23)), w.rssItem('h1b-cap', 'USCIS announces H-1B cap season', dayBefore(w.now, 27))],
+  });
+  const out = w.watch();
+  assert.deepEqual(w.frSince(), [frCursor], 'the Federal Register is asked for everything since its own last success');
+  assert.deepEqual(out.new_items.map((i) => i.id), ['fr:2026-1', 'uscis:https://www.uscis.gov/news/opt'], 'outage items past the lookback are queued, items before each cursor are not');
 });
 
 test('when every source fails, the run exits 1 and changes nothing', () => {
@@ -179,8 +231,10 @@ test('a --since run fetches the explicit window but leaves the per-source cursor
   const old = dayBefore(w.now, 20);
   fs.mkdirSync(w.imm, { recursive: true });
   fs.writeFileSync(path.join(w.imm, 'seen.json'), JSON.stringify({ ids: [], last_run: old, last_success: { 'federal-register': old, uscis: old } }));
-  w.setFeeds({ fr: [w.doc('2026-1', H1B)] });
-  w.watch('--since', dayBefore(w.now, 5));
+  w.setFeeds({ fr: [w.doc('2026-1', H1B, dayBefore(w.now, 3)), w.doc('2026-2', 'Labor Certification for Permanent Employment', dayBefore(w.now, 8))], rss: [w.rssItem('opt', OPT, dayBefore(w.now, 3)), w.rssItem('h1b-cap', 'USCIS announces H-1B cap season', dayBefore(w.now, 8))] });
+  const out = w.watch('--since', dayBefore(w.now, 5));
+  assert.deepEqual(w.frSince(), [dayBefore(w.now, 5)], 'a --since run asks for exactly the window it was given');
+  assert.deepEqual(out.new_items.map((i) => i.id), ['fr:2026-1', 'uscis:https://www.uscis.gov/news/opt']);
   const { last_success } = w.seen();
   assert.equal(last_success['federal-register'], old, 'a --since run must not advance the cursor');
   assert.equal(last_success.uscis, old);
@@ -282,7 +336,7 @@ fs.promises.rename = async (from, to) => {
 };
 syncBuiltinESMExports();
 `);
-  const r = spawnSync(process.execPath, ['--import', path.join(w.root, 'feeds.mjs'), '--import', preload, WATCH], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', path.join(w.root, 'feeds.mjs'), '--import', preload, WATCH], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8' });
   assert.notEqual(r.status, 0, r.stdout);
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(w.imm).filter((f) => f.includes('.tmp-')), []);
@@ -309,7 +363,7 @@ fs.promises.rm = async (target, opts) => {
 };
 syncBuiltinESMExports();
 `);
-  const r = spawnSync(process.execPath, ['--import', failing, WATCH, '--ack', file], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', failing, WATCH, '--ack', file], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8' });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /immigration-watch failed: i\/o error/);
   assert.doesNotMatch(r.stderr, /immigration-watch failed: permission denied/);

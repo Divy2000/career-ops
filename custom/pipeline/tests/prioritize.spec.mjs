@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
 import { formatPipelineOffer, formatScanHistoryRow } from '../../../scan.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const PRIORITIZE = path.join(REPO, 'custom', 'pipeline', 'prioritize.mjs');
@@ -21,7 +22,7 @@ test('prioritize puts the rows the scanner first saw on the local today first, a
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${backlog}\n${fresh}\n`);
   // scan.mjs stamps first-seen with the local date.
   fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), `url\tfirst_seen\tportal\ttitle\tcompany\tstatus\nhttps://jobs.example.com/backlog\t2001-01-01\tx\tData Analyst\tBacklog Co\tadded\nhttps://jobs.example.com/fresh\t${localToday}\tx\tData Analyst\tFresh Co\tadded\n`);
-  const r = spawnSync(process.execPath, [PRIORITIZE], { cwd: REPO, env: rootEnv(root, { TZ: zone }), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE], { cwd: REPO, env: rootEnv(root, { TZ: zone }), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, new RegExp(`\\(1 first seen ${localToday}\\)`));
   const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
@@ -33,7 +34,7 @@ test('prioritize runs on a root with no scan history yet (URLs added by hand), w
   fs.mkdirSync(path.join(root, 'data'));
   const rows = ['- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote', '- [ ] https://jobs.example.com/b | B Co | Backend Engineer | Remote'];
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${rows.join('\n')}\n`);
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /prioritized 2 pending rows \(0 first seen 2026-10-05\)/);
   const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
@@ -48,7 +49,7 @@ test('prioritize reads --today in the --today=YYYY-MM-DD form too (SW6-libs-02)'
   const fresh = '- [ ] https://jobs.example.com/fresh | Fresh Co | Data Analyst | Remote';
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n${backlog}\n${fresh}\n`);
   fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\nhttps://jobs.example.com/backlog\t2001-01-01\tx\tData Analyst\tBacklog Co\tadded\nhttps://jobs.example.com/fresh\t2026-10-01\tx\tData Analyst\tFresh Co\tadded\n');
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--today=2026-10-01'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--today=2026-10-01'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /\(1 first seen 2026-10-01\)/);
 });
@@ -58,7 +59,7 @@ test('prioritize refuses an unknown flag such as --dry-run before it rewrites an
   fs.mkdirSync(path.join(root, 'data'));
   const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote\n- [ ] https://jobs.example.com/b | B Co | Backend Engineer | Remote\n';
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--dry-run'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--dry-run'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /unrecognized flag\(s\): --dry-run/);
   assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), text);
@@ -71,7 +72,7 @@ test('prioritize refuses a stray operand, such as a date given without --today, 
     fs.mkdirSync(path.join(root, 'data'));
     const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote\n- [ ] https://jobs.example.com/b | B Co | Backend Engineer | Remote\n';
     fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
-    const r = spawnSync(process.execPath, [PRIORITIZE, ...args], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+    const r = spawnCpuLimited(process.execPath, [PRIORITIZE, ...args], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
     assert.equal(r.status, 1, args.join(' '));
     assert.match(r.stderr, new RegExp(`unexpected argument\\(s\\): ${args[args.length - 1]}`));
     assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), text);
@@ -82,7 +83,7 @@ test('prioritize refuses a stray operand, such as a date given without --today, 
 test('prioritize treats a root with no data/pipeline.md yet (a first scan that added nothing) as an empty pipeline', () => {
   const root = tempDir('prioritize-');
   fs.mkdirSync(path.join(root, 'data'));
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /prioritized 0 pending rows/);
   assert.doesNotMatch(r.stdout, /backup/);
@@ -107,7 +108,7 @@ test('a job the scanner skipped or cooled down first and added today counts as f
     'https://jobs.example.com/cooled\t2026-10-05\tx\tData Analyst\tCooled Co\tadded',
   ];
   fs.writeFileSync(path.join(root, 'data', 'scan-history.tsv'), `${history.join('\n')}\n`);
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /\(2 first seen 2026-10-05\)/);
   const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
@@ -119,7 +120,7 @@ test('--help prints the usage and touches nothing (SW-libs-05)', () => {
   fs.mkdirSync(path.join(root, 'data'));
   const text = '# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/a | A Co | Data Analyst | Remote\n';
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--help'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--help'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Usage: node custom\/pipeline\/prioritize\.mjs \[--today YYYY-MM-DD\]/);
   assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), text);
@@ -143,7 +144,7 @@ test('a job whose URL has brackets (escaped in the pipeline, raw in the scan his
   const backlog = { url: 'https://jobs.example.com/backlog', company: 'Backlog Co', title: 'Data Analyst', source: 'x', seen: '2026-09-01' };
   const bracketed = { url: 'https://jobs.example.com/apply?ids[]=7&team=a|b', company: 'Fresh Co', title: 'Data Analyst', source: 'x', seen: '2026-10-05' };
   const { root } = scannedRoot([backlog, bracketed]);
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /\(1 first seen 2026-10-05\)/);
   const pending = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n').filter((l) => l.startsWith('- [ ] '));
@@ -156,7 +157,7 @@ test('only pending rows move: every other line keeps its place, and the file as 
     { url: 'https://jobs.example.com/new', company: 'New Co', title: 'Data Analyst', source: 'x', seen: '2026-10-05' },
   ];
   const { root, pipeline } = scannedRoot(offers, ['- [x] https://jobs.example.com/done | Done Co | Engineer', 'A note the user wrote.']);
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const before = pipeline.split('\n');
   const after = fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8').split('\n');
@@ -179,7 +180,7 @@ fs.promises.rename = async (from, to) => {
 };
 syncBuiltinESMExports();
 `);
-  const r = spawnSync(process.execPath, ['--import', preload, PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', preload, PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.includes('.tmp-')), []);
@@ -197,7 +198,7 @@ test('given pending-looking rows in other sections, when prioritizing, then no r
     '# Backlog', '', stale('b'), fresh('b2'), '',
   ].join('\n');
   fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
-  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /prioritized 6 pending rows/);
   const expected = text

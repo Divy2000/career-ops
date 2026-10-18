@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { normalizePayload, checkPayload, recentAchievements } from '../lib.mjs';
 import { HERE, REPO, loadFixture, cvMarkdownFor, dataRoot, envFor } from './helpers.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const BUILD = path.join(HERE, '..', 'build-html.mjs');
 const PAPER_CV = [
@@ -25,7 +26,7 @@ const build = (root, payload) => {
   const input = path.join(root, 'payload.json');
   const output = path.join(root, 'output', 'cv.html');
   fs.writeFileSync(input, JSON.stringify(payload));
-  const r = spawnSync(process.execPath, [BUILD, input, output], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 30000 });
+  const r = spawnCpuLimited(process.execPath, [BUILD, input, output], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
   return { ...r, output, html: fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : null };
 };
 

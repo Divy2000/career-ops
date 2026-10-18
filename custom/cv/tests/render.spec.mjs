@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fitToPages, setDensity, countPdfPages, DENSITIES } from '../lib.mjs';
 import { HERE, REPO, loadFixture, cvMarkdownFor, dataRoot, envFor } from './helpers.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const BUILD = path.join(HERE, '..', 'build-html.mjs');
 const RENDER = path.join(HERE, '..', 'render-pdf.mjs');
@@ -98,12 +99,12 @@ const buildInto = (root, payload) => {
   const input = path.join(root, 'payload.json');
   const html = path.join(root, 'output', 'cv-test.html');
   fs.writeFileSync(input, JSON.stringify(payload));
-  const r = spawnSync(process.execPath, [BUILD, input, html], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 60000 });
+  const r = spawnCpuLimited(process.execPath, [BUILD, input, html], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   return html;
 };
-const render = (root, html, args) => spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], {
-  cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000,
+const render = (root, html, args) => spawnCpuLimited(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', ...args], {
+  cwd: REPO, env: envFor(root), encoding: 'utf8',
 });
 
 test('integration: given the made-up 6-role CV, when rendered with a 1-page budget, then the PDF has 1 page and the HTML keeps the chosen density', { timeout: 240000 }, () => {
@@ -191,7 +192,7 @@ test('given an output folder that does not exist yet, when rendered, then it is 
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
   const pdf = path.join(root, 'output', '2026', 'cv-test.pdf');
-  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000 });
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(countPdfPages(fs.readFileSync(pdf)), 1);
   assert.deepEqual(fs.readdirSync(path.dirname(pdf)), ['cv-test.pdf'], 'no scratch folder is left behind');
@@ -203,7 +204,7 @@ test('given an output in a new folder outside the workspace, when rendered, then
   const before = fs.readFileSync(html, 'utf8');
   const outside = dataRoot();
   const pdf = path.join(outside, 'new-dir', 'cv-test.pdf');
-  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000 });
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
   assert.notEqual(r.status, 0);
   assert.match(r.stdout + r.stderr, /outside the tracker workspace/);
   assert.equal(fs.existsSync(path.dirname(pdf)), false, 'the new folder is not created');
@@ -219,7 +220,7 @@ test('given an output under a folder linked outside the workspace, when rendered
   // Read-only, so even a scratch folder created there for a moment fails the run.
   fs.chmodSync(foreign, 0o555);
   try {
-    const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'link', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000 });
+    const r = spawnCpuLimited(process.execPath, [RENDER, html, path.join(root, 'output', 'link', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], { cwd: REPO, env: envFor(root), encoding: 'utf8' });
     assert.notEqual(r.status, 0);
     assert.match(r.stdout + r.stderr, /outside the tracker workspace/);
     assert.deepEqual(fs.readdirSync(foreign), []);
@@ -445,8 +446,8 @@ test('given a final render that publishes the PDF and then exits non-zero, when 
   // to exit 1 after it finished, as a cancel that lands after the PDF and its index row were written does.
   const preload = path.join(root, 'fail-after-publish.mjs');
   fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isFinal) process.on('exit', () => { process.exitCode = 1; });\n`);
-  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1', '--report=12'], {
-    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1', '--report=12'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8',
   });
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   const pdf = path.join(root, 'output', 'cv-test.pdf');
@@ -476,8 +477,8 @@ if (isFinal) {
   syncBuiltinESMExports();
 }
 `);
-  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
-    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8',
   });
   assert.equal(r.status, 130, r.stdout + r.stderr);
   assert.deepEqual(fs.readdirSync(path.join(root, 'output')), ['cv-test.html'], 'no temp HTML is left beside the input');
@@ -491,8 +492,8 @@ test('given a generate-pdf.mjs that prints more than 16 MiB, when run, then the 
   const tmp = fs.realpathSync(tempDir('render-tmp-'));
   const preload = path.join(root, 'flood.mjs');
   fs.writeFileSync(preload, `${PRELOAD_ARGS}if (isGenerate) process.stdout.write('x'.repeat(17 * 1024 * 1024));\n`);
-  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
-    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}`, TMPDIR: tmp }, encoding: 'utf8', timeout: 240000, maxBuffer: 64 * 1024 * 1024,
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}`, TMPDIR: tmp }, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   });
   assert.equal(r.status, 1, r.stderr.slice(0, 2000));
   assert.match(r.stderr, /render-pdf failed: generate-pdf\.mjs printed more than 16 MiB/);
@@ -521,8 +522,8 @@ test('given a final render that overflows the budget under --strict-pages, when 
   fs.mkdirSync(path.dirname(index), { recursive: true });
   const indexed = '# report\tpdf\thtml\tformat\tdate\tkind - written by generate-pdf.mjs, do not edit\n12\toutput/cv-test.pdf\toutput/cv-test.html\tletter\t2026-10-01\tcv\n';
   fs.writeFileSync(index, indexed);
-  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1', '--strict-pages', '--report=12'], {
-    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1', '--strict-pages', '--report=12'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8',
   });
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stderr, /--strict-pages requested/);
@@ -542,8 +543,8 @@ test('given a final render stopped while it writes the PDF, leaving a truncated 
   // Only the final generate-pdf.mjs: its PDF is cut short and it exits 1, as a stop in the middle of the write leaves it.
   const preload = path.join(root, 'truncate-final.mjs');
   fs.writeFileSync(preload, `import fs from 'node:fs';\n${PRELOAD_ARGS}const pdf = args.find((a) => a.endsWith('.pdf'));\nif (isFinal) process.on('exit', () => { fs.writeFileSync(pdf, fs.readFileSync(pdf).subarray(0, 200)); process.exitCode = 1; });\n`);
-  const r = spawnSync(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], {
-    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8', timeout: 240000,
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, pdf, '--format=letter', '--max-pages=1'], {
+    cwd: REPO, env: { ...envFor(root), NODE_OPTIONS: `--import=${preload}` }, encoding: 'utf8',
   });
   assert.notEqual(r.status, 0, r.stdout + r.stderr);
   assert.equal(fs.readFileSync(html, 'utf8'), before, 'the input keeps its layout');
@@ -554,8 +555,8 @@ test('given a final render stopped while it writes the PDF, leaving a truncated 
 test('given space-separated flag values, when run, then they are honored like the = form', { timeout: 240000 }, () => {
   const root = dataRoot({ cv: cvMarkdownFor(fixture) });
   const html = buildInto(root, fixture);
-  const r = spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format', 'letter', '--max-pages', '1'], {
-    cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000,
+  const r = spawnCpuLimited(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format', 'letter', '--max-pages', '1'], {
+    cwd: REPO, env: envFor(root), encoding: 'utf8',
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /Format: LETTER/);

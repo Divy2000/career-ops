@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { parseLibrary, rankProjects } from '../lib.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(HERE, 'fixtures');
@@ -28,7 +29,7 @@ const dataRoot = ({ library = LIBRARY, cv = CV } = {}) => {
   return d;
 };
 const run = (root, args, cwd = root) => {
-  return spawnSync(process.execPath, [RANK, ...args], { cwd, env: rootEnv(root), encoding: 'utf8', timeout: 20000 });
+  return spawnCpuLimited(process.execPath, [RANK, ...args], { cwd, env: rootEnv(root), encoding: 'utf8' });
 };
 
 test('given a JD asking for RAG and LangChain, when ranked, then the RAG project is first with both skills matched', () => {
