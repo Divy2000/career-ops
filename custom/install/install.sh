@@ -5,6 +5,16 @@
 # Written for the bash 3.2 that macOS ships.
 set -eEuo pipefail
 trap 'echo "install.sh: unexpected failure at line $LINENO (see the install log)" >&2' ERR
+# The temp files and folder in use right now, each cleared once removed. A run stopped part-way (Ctrl-C at the Keychain
+# read, the daily-lock wait or the validator clone; a closed terminal) exits through the EXIT trap, which removes them.
+KEYCHAIN_ERR_FILE="" LOCK_READY="" LOCK_ERRS="" PROJECTS_SCRATCH=""
+remove_temp_paths() {
+  rm -rf -- ${KEYCHAIN_ERR_FILE:+"$KEYCHAIN_ERR_FILE"} ${LOCK_READY:+"$LOCK_READY"} ${LOCK_ERRS:+"$LOCK_ERRS"} ${PROJECTS_SCRATCH:+"$PROJECTS_SCRATCH"} 2>/dev/null || true
+}
+trap remove_temp_paths EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -359,13 +369,14 @@ find_claude() {
 # keychain_check: looks the item up without reading the secret, bounded as every Keychain read is, and sets
 # KEYCHAIN_RC (0 present, 44 missing, anything else unreadable) and KEYCHAIN_WHY (the tail of security's stderr).
 keychain_check() {
-  local err rc=0
+  local rc=0
   KEYCHAIN_WHY=""
-  err="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || err=""
-  bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>"${err:-/dev/null}" || rc=$?
-  if [ -n "$err" ]; then
-    KEYCHAIN_WHY="$(tail -c 200 "$err" | tr '\n' ' ' | sed 's/ *$//')"
-    rm -f "$err"
+  KEYCHAIN_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || KEYCHAIN_ERR_FILE=""
+  bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>"${KEYCHAIN_ERR_FILE:-/dev/null}" || rc=$?
+  if [ -n "$KEYCHAIN_ERR_FILE" ]; then
+    KEYCHAIN_WHY="$(tail -c 200 "$KEYCHAIN_ERR_FILE" | tr '\n' ' ' | sed 's/ *$//')"
+    rm -f "$KEYCHAIN_ERR_FILE"
+    KEYCHAIN_ERR_FILE=""
   fi
   KEYCHAIN_RC=$rc
 }
@@ -403,15 +414,16 @@ bounded() {
 # keychain_read_token: reads the secret as the Control Center, the daily job and the weekly sync read it (bounded,
 # trimmed) and sets KEYCHAIN_TOKEN, KEYCHAIN_RC (an empty token counts as 44, missing) and KEYCHAIN_WHY.
 keychain_read_token() {
-  local err rc=0
+  local rc=0
   KEYCHAIN_WHY=""
-  err="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || err=""
+  KEYCHAIN_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || KEYCHAIN_ERR_FILE=""
   # The || stays inside $(...) too, where the ERR trap would otherwise report the failed read as a crash.
-  KEYCHAIN_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${err:-/dev/null}" || exit "$?")" || rc=$?
+  KEYCHAIN_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${KEYCHAIN_ERR_FILE:-/dev/null}" || exit "$?")" || rc=$?
   KEYCHAIN_TOKEN="$(trim "$KEYCHAIN_TOKEN")"
-  if [ -n "$err" ]; then
-    KEYCHAIN_WHY="$(tail -c 200 "$err" | tr '\n' ' ' | sed 's/ *$//')"
-    rm -f "$err"
+  if [ -n "$KEYCHAIN_ERR_FILE" ]; then
+    KEYCHAIN_WHY="$(tail -c 200 "$KEYCHAIN_ERR_FILE" | tr '\n' ' ' | sed 's/ *$//')"
+    rm -f "$KEYCHAIN_ERR_FILE"
+    KEYCHAIN_ERR_FILE=""
   fi
   if [ "$rc" = 0 ] && [ -z "$KEYCHAIN_TOKEN" ]; then rc=44; fi
   if [ "$rc" != 0 ]; then KEYCHAIN_TOKEN=""; fi
@@ -578,31 +590,33 @@ daily_lock_take() {
 }
 
 daily_lock_take_one() {
-  local lock="$1" ready errs lockf_pid rc=0 polls=0 line
-  ready="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
-  errs="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
+  local lock="$1" lockf_pid rc=0 polls=0 line
+  LOCK_READY="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
+  LOCK_ERRS="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
   # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
   /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'trap "rm -f \"\$1\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2; done' \
-    daily-lock "${lock%/*}/.live-update.pid" "$ready" "$$" </dev/null >/dev/null 2>"$errs" 3<&- 4>&- &
+    daily-lock "${lock%/*}/.live-update.pid" "$LOCK_READY" "$$" </dev/null >/dev/null 2>"$LOCK_ERRS" 3<&- 4>&- &
   lockf_pid=$!
-  until [ -s "$ready" ]; do
+  until [ -s "$LOCK_READY" ]; do
     if ! kill -0 "$lockf_pid" 2>/dev/null; then
       wait "$lockf_pid" || rc=$?
       if [ "$rc" = 0 ]; then rc=1; fi
       # A timeout is the caller's to explain; any other failure shows lockf's own reason (an unreadable lock file).
       if [ "$rc" != 75 ]; then
-        while IFS= read -r line || [ -n "$line" ]; do warn "$line"; done < "$errs"
+        while IFS= read -r line || [ -n "$line" ]; do warn "$line"; done < "$LOCK_ERRS"
       fi
-      rm -f "$ready" "$errs"
+      rm -f "$LOCK_READY" "$LOCK_ERRS"
+      LOCK_READY="" LOCK_ERRS=""
       return "$rc"
     fi
     polls=$((polls + 1))
     if [ "$polls" = 10 ]; then say "  The daily job is running; waiting up to ${DAILY_WAIT}s for it to finish."; fi
     sleep 0.1
   done
-  DAILY_HOLDERS+=("$(cat "$ready")")
+  DAILY_HOLDERS+=("$(cat "$LOCK_READY")")
   DAILY_LOCKFS+=("$lockf_pid")
-  rm -f "$ready" "$errs"
+  rm -f "$LOCK_READY" "$LOCK_ERRS"
+  LOCK_READY="" LOCK_ERRS=""
 }
 
 daily_lock_release() {
@@ -693,7 +707,7 @@ PROJECTS_NO_CHANGE="No changes were made to the checkout or the user layer."
 # disk; `fetch` (once git is known to be there, after "Proceed?") may shallow-clone the fork into a
 # throwaway temp dir for its parser, and stops the install if that fails.
 check_projects() {
-  local mode="$1" lib="" rc=0 scratch=""
+  local mode="$1" lib="" rc=0
   [ -n "$PROJECTS" ] || return 0
   [ "$PROJECTS_CHECKED" = 1 ] && return 0
   have node || return 0 # checked again once the prerequisites are in place
@@ -704,17 +718,18 @@ check_projects() {
   lib="$(projects_lib)"
   if [ -z "$lib" ]; then
     if [ "$mode" != fetch ] || ! have git; then return 0; fi
-    scratch="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-validator.XXXXXX")"
-    if git clone --quiet --depth 1 ${REF:+--branch "$REF"} "$FORK_URL" "$scratch/repo" >/dev/null 2>&1 && [ -f "$scratch/repo/custom/projects/lib.mjs" ]; then
-      lib="$scratch/repo/custom/projects/lib.mjs"
+    PROJECTS_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-validator.XXXXXX")"
+    if git clone --quiet --depth 1 ${REF:+--branch "$REF"} "$FORK_URL" "$PROJECTS_SCRATCH/repo" >/dev/null 2>&1 && [ -f "$PROJECTS_SCRATCH/repo/custom/projects/lib.mjs" ]; then
+      lib="$PROJECTS_SCRATCH/repo/custom/projects/lib.mjs"
     else
-      rm -rf "$scratch"
+      rm -rf "$PROJECTS_SCRATCH"
+      PROJECTS_SCRATCH=""
       printf 'error: could not fetch the projects validator (custom/projects/lib.mjs from %s) to check --projects.\n%s Retry, or run without --projects and import the file later in the Control Center (Profile > Projects).\n' "$FORK_URL" "$PROJECTS_NO_CHANGE" >&2
       exit 1
     fi
   fi
   node "$SCRIPT_DIR/seed.mjs" projects-check --lib "$lib" --file "$PROJECTS" >/dev/null || rc=$?
-  if [ -n "$scratch" ]; then rm -rf "$scratch"; fi
+  if [ -n "$PROJECTS_SCRATCH" ]; then rm -rf "$PROJECTS_SCRATCH"; PROJECTS_SCRATCH=""; fi
   if [ "$rc" -ne 0 ]; then
     printf '%s Fix the projects file above: one "## Title -- link" block per project with "- " bullets, or a projects JSON.\n' "$PROJECTS_NO_CHANGE" >&2
     exit 2
