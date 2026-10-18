@@ -5,10 +5,10 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import type { EventBus } from '../watch/bus.js';
-import { cliScriptPath } from '../core/adapter.js';
+import { cliScriptPath, importCore } from '../core/adapter.js';
 import { execNoShell, type Exec } from './system.js';
 import { etagMatches } from './config.js';
-import { BLACKLIST_DATE, blacklistOverCap, blacklistRowSchema, readBlacklist, writeBlacklist } from '../domains/blacklist.js';
+import { BLACKLIST_DATE, blacklistOverCap, blacklistRowSchema, blacklistUnreadRow, readBlacklist, writeBlacklist, type NormalizeTextKey } from '../domains/blacklist.js';
 import { listPlugins } from '../domains/plugins.js';
 import { LOG_JOBS, type ScheduleJob, type ScheduleService } from '../system/schedule.js';
 import type { DailyJobWatch } from '../system/daily.js';
@@ -47,6 +47,8 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     }
     const body = z.object({ confirm: z.literal(true), rows: z.array(blacklistRowSchema).max(2000) }).safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid rows: company, since (YYYY-MM-DD), scope (company|domain) and reason without pipes', issues: body.error.issues });
+    // Loaded before the read: no await may sit between the ETag check and the write.
+    const { normalizeTextKey } = await importCore<{ normalizeTextKey: NormalizeTextKey }>(cfg.codeRoot, 'tracker-parse.mjs');
     const current = readBlacklist(cfg.dataRoot);
     if (!etagMatches(current.etag, req.headers['if-match'])) return reply.code(409).send({ error: 'data/blacklist.md changed since you loaded it', current });
     // Rewriting the file into one table would drop these cells: they are moved by hand first.
@@ -64,6 +66,9 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     // Extra cells fill the file's own extra columns (names come from the file, never the request).
     const overfull = body.data.rows.find((r) => (r.extra?.length ?? 0) > current.extraColumns.length);
     if (overfull) return reply.code(400).send({ error: `${overfull.company} has more cells than data/blacklist.md has columns (${current.extraColumns.length} extra)` });
+    // A row the scanner keys to nothing or to a key listed above it is never read: saving it would show a dead entry.
+    const unread = blacklistUnreadRow(body.data.rows, current.rows, normalizeTextKey);
+    if (unread) return reply.code(400).send({ error: unread });
     const written = writeBlacklist(cfg.dataRoot, body.data.rows, current.preamble, current.postamble, current.extraColumns);
     bus.publish('data.changed', { domain: 'config' });
     return { ok: true, etag: written.etag, rows: written.rows, path: written.path };
