@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const README_REL = '.github/README.md';
@@ -13,6 +14,30 @@ const INSTALL_SH = path.join(ROOT, 'custom/install/install.sh');
 const EM_DASH = String.fromCharCode(0x2014);
 
 const readme = readFileSync(path.join(ROOT, README_REL), 'utf8');
+const installerHelp = (script = INSTALL_SH, limits = {}) => spawnCpuLimited('bash', [script, '--help'], { stdio: ['ignore', 'pipe', 'pipe'], ...limits });
+const fakeInstaller = (body) => {
+  const file = path.join(tempDir('readme-fake-installer-'), 'install.sh');
+  writeFileSync(file, body);
+  return file;
+};
+
+test('Given a loaded machine, an installer --help run is bounded by CPU time, not by a tight wall-clock timeout (R34-flake-walltime)', () => {
+  const r = installerHelp(fakeInstaller('ulimit -t\n'));
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '30\n');
+});
+
+test('Given an installer that spins in a loop, its --help run is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = installerHelp(fakeInstaller('while :; do :; done\n'), { cpuSeconds: 1 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the spinning installer was not killed');
+});
+
+test('Given an installer that blocks on a child that never ends, its --help run is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = installerHelp(fakeInstaller('exec sleep 60\n'), { hangMs: 1000 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the blocked installer was not killed');
+});
 const onboarding = readFileSync(path.join(ROOT, ONBOARDING_REL), 'utf8');
 
 // The frozen installer flag contract (plan addendum). The README may only use these.
@@ -194,7 +219,7 @@ test('the README uses only flags from the frozen installer contract on install.s
 
 test('every flag the README mentions exists in install.sh --help', () => {
   assert.ok(existsSync(INSTALL_SH), 'custom/install/install.sh must exist');
-  const help = spawnSync('bash', [INSTALL_SH, '--help'], { encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  const help = installerHelp();
   assert.equal(help.status, 0, help.stderr);
   const text = help.stdout + help.stderr;
   const used = new Set();

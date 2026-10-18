@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 import { makeWorld, BOOTSTRAP_SH, FORK_URL } from './harness.mjs';
 
 function world() {
@@ -13,6 +13,26 @@ function world() {
   return w;
 }
 const source = fs.readFileSync(BOOTSTRAP_SH, 'utf8');
+// Feeds a (possibly truncated) download to bash on stdin, the way `curl | bash` runs it.
+const runBash = (input, env, limits = {}) => spawnCpuLimited('bash', [], { input, env, detached: true, ...limits });
+
+test('Given a loaded machine, a piped download run is bounded by CPU time, not by a tight wall-clock timeout (R34-flake-walltime)', () => {
+  const r = runBash('ulimit -t\n', world().env());
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '30\n');
+});
+
+test('Given a piped download that spins in a loop, the run is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = runBash('while :; do :; done\n', world().env(), { cpuSeconds: 1 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the spinning run was not killed');
+});
+
+test('Given a piped download that blocks on a child that never ends, the run is still killed instead of hanging the suite (R34-flake-walltime)', () => {
+  const r = runBash('exec sleep 60\n', world().env(), { hangMs: 1000 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the blocked run was not killed');
+});
 
 test('the whole body is one function called on the last line', () => {
   const lines = source.trimEnd().split('\n');
@@ -23,7 +43,7 @@ test('the whole body is one function called on the last line', () => {
 test('a download truncated inside main() executes nothing', () => {
   const w = world();
   const cut = source.slice(0, source.indexOf('git clone --branch') + 12);
-  const r = spawnSync('bash', [], { input: cut, env: w.env(), encoding: 'utf8', timeout: 30000, detached: true });
+  const r = runBash(cut, w.env());
   assert.notEqual(r.status, 0);
   assert.equal(w.log().length, 0);
   assert.equal(fs.existsSync(path.join(w.home, 'career-ops')), false);
@@ -33,7 +53,7 @@ test('a download truncated before the final call defines main and runs nothing',
   const w = world();
   const lines = source.trimEnd().split('\n');
   const cut = `${lines.slice(0, -1).join('\n')}\n`;
-  const r = spawnSync('bash', [], { input: cut, env: w.env(), encoding: 'utf8', timeout: 30000, detached: true });
+  const r = runBash(cut, w.env());
   assert.equal(r.status, 0);
   assert.equal(w.log().length, 0);
 });
