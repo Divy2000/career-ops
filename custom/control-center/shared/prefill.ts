@@ -11,11 +11,27 @@ export function prefillUrlProblem(raw: string): string | null {
     return 'Enter the full apply link, starting with https://.';
   }
   if (url.protocol !== 'https:') return 'Zero-token prefill needs an https:// apply link.';
+  // The link goes to prepare-application.mjs as a command-line argument (readable in ps) and into its log.
+  if (url.username || url.password) return 'This link carries a user name or password. Remove the part before the @ and paste the plain posting link.';
+  const secret = secretParam(url);
+  if (secret !== null) return `This link carries a ${secret} parameter, which looks like a secret. Remove it and paste the plain posting link.`;
   if (!(PREFILL_ATS_HOSTS as readonly string[]).includes(url.hostname)) {
     return `Zero-token prefill reads Greenhouse, Ashby and Lever apply links only, and ${url.hostname} is not one. Open the posting, follow its Apply button to the employer's application page and paste that link here.`;
   }
   const ats = ATS_SHAPES.find((a) => a.hosts.includes(url.hostname))!;
   return ats.accepts(url.pathname) ? null : `This ${ats.name} link does not point at one job. Use the posting link shaped like ${ats.example}.`;
+}
+
+// Query or fragment parameter names that carry credentials (token, access_token, api_key, X-Amz-Signature, sessionid...),
+// never the tracking ones boards add (gh_src, gh_jid, lever-source). The script reads only the host and path.
+const SECRET_PARAM = /token|secret|passw|pwd|api[_-]?key|access[_-]?key|auth|signature|credential|session|^(key|sig|code)$/i;
+
+function secretParam(url: URL): string | null {
+  const fragment = url.hash.slice(1);
+  for (const params of [url.searchParams, ...(fragment.includes('=') ? [new URLSearchParams(fragment)] : [])]) {
+    for (const name of params.keys()) if (SECRET_PARAM.test(name)) return name;
+  }
+  return null;
 }
 
 // The path shapes detectAts() in prepare-application.mjs accepts; tests/unit/prefill.test.ts runs the script against both.

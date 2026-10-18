@@ -34,6 +34,34 @@ describe('prefillUrlProblem', () => {
     expect(prefillUrlProblem('https://jobs.lever.co/acme')).toBe('This Lever link does not point at one job. Use the posting link shaped like jobs.lever.co/<company>/<posting id>.');
   });
 
+  it.each([
+    'https://user:secret@boards.greenhouse.io/acme/jobs/123',
+    'https://user@jobs.ashbyhq.com/acme/abc-123',
+    'https://:secret@jobs.lever.co/acme/abc-123',
+  ])('refuses %s, whose sign-in details would reach the command line', (url) => {
+    expect(prefillUrlProblem(url)).toBe('This link carries a user name or password. Remove the part before the @ and paste the plain posting link.');
+  });
+
+  it.each([
+    ['https://boards.greenhouse.io/acme/jobs/123?token=abc', 'token'],
+    ['https://jobs.ashbyhq.com/acme/abc-123?access_token=abc', 'access_token'],
+    ['https://jobs.lever.co/acme/abc-123?api_key=abc', 'api_key'],
+    ['https://jobs.lever.co/acme/abc-123?lever-source=x&X-Amz-Signature=abc', 'X-Amz-Signature'],
+    ['https://jobs.lever.co/acme/abc-123?sig=abc', 'sig'],
+    ['https://jobs.lever.co/acme/abc-123?Password=abc', 'Password'],
+    ['https://jobs.lever.co/acme/abc-123?sessionid=abc', 'sessionid'],
+    ['https://jobs.lever.co/acme/abc-123#access_token=abc', 'access_token'],
+  ])('refuses %s, whose %s query parameter looks like a secret', (url, name) => {
+    expect(prefillUrlProblem(url)).toBe(`This link carries a ${name} parameter, which looks like a secret. Remove it and paste the plain posting link.`);
+  });
+
+  it.each(['https://greenhouse.io/acme/jobs/123?gh_src=abc', 'https://boards.greenhouse.io/acme/jobs/123?gh_jid=123&for=acme', 'https://jobs.lever.co/acme/abc-123?lever-source=LinkedIn&lever-origin=applied'])(
+    'keeps accepting the tracking parameters boards add, as in %s',
+    (url) => {
+      expect(prefillUrlProblem(url)).toBeNull();
+    },
+  );
+
   // Each link goes through the real script: whatever it accepts must pass here and whatever it rejects must not.
   const root = copyFixtureRoot();
   it.each([
