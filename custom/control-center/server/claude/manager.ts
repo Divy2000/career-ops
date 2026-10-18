@@ -942,22 +942,40 @@ export class SessionManager {
     if (!turn || !recorded) {
       // Already settled (a status other than running or queued) with no run to follow: nothing more to record.
       if (!live) return;
-      // Another server process (blue/green) is preparing its turn under the claim, or follows it: that process settles it.
-      if (this.turnClaimHeld(meta.id) || this.trackClaimHeld(meta.id)) return;
-      const reason = 'run record missing after a restart';
-      this.store.setStatus(meta.id, 'error', reason);
-      // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
-      if (meta.reportNum !== null) {
-        const since = this.ownedSince(meta, meta.reportNum);
-        this.store.setReportNum(meta.id, null);
-        void this.releaseReportNum(meta.reportNum, false, since);
-      }
-      this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
+      this.settleUnrecorded(meta.id, turn?.runId ?? null);
       return;
     }
     const policy = this.effectivePolicy(meta.mode) ?? policyForClass(meta.policyClass);
     const state = this.readTurnState(meta.id, turn.n);
     this.track(meta.id, turn.n, turn.runId, policy, state, '', { spawned: false });
+  }
+
+  /**
+   * Ends in error a running session whose last turn (`runId`, null for none) has no run record, under its turn claim
+   * with no await inside: another server process (blue/green) preparing its turn holds that claim, one following it holds
+   * the track claim, and either settles it. The record is read again under the claim, so a session a peer started again
+   * or settled since it was listed is left as that peer recorded it.
+   */
+  private settleUnrecorded(id: string, runId: string | null): void {
+    const unclaimTurn = this.takeSessionClaim(id, TURN_CLAIM_FILE);
+    if (!unclaimTurn) return;
+    try {
+      if (this.trackClaimHeld(id)) return;
+      const meta = this.store.read(id);
+      const turn = meta?.turns.at(-1);
+      if (!meta || !(meta.status === 'running' || meta.status === 'queued') || (turn?.runId ?? null) !== runId) return;
+      const reason = 'run record missing after a restart';
+      this.store.setStatus(id, 'error', reason);
+      // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
+      if (meta.reportNum !== null) {
+        const since = this.ownedSince(meta, meta.reportNum);
+        this.store.setReportNum(id, null);
+        void this.releaseReportNum(meta.reportNum, false, since);
+      }
+      this.emit(id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
+    } finally {
+      unclaimTurn();
+    }
   }
 
   close(): void {

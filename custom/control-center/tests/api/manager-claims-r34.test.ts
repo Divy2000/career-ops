@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { copyFixtureRoot, makeTestApp } from '../helpers/app.js';
 import { runsEnded } from '../helpers/runs.js';
 import { tempDir } from '../helpers/tmp.js';
+import { takeProcessClaim } from '../../server/claude/process-claim.js';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, what: string, timeoutMs = 15_000): Promise<void> {
@@ -108,4 +109,65 @@ describe('a Dev Chat revert beside a peer that starts tracking the turn (R34-cla
       await runsEnded(dataRoot);
     }
   }, 40_000);
+});
+
+describe('a reconcile settling a session whose run record is missing (R34-mgr-FC-01)', () => {
+  /** A running session whose turn's run record is gone, reconciled while `peer` acts when the reconcile reads `hookFile`. */
+  async function reconcileBeside(hook: (app: Awaited<ReturnType<typeof makeTestApp>>, id: string, file: string) => boolean, peer: (app: Awaited<ReturnType<typeof makeTestApp>>, id: string) => void) {
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot });
+    const readFileSync = fs.readFileSync.bind(fs);
+    const spy = vi.spyOn(fs, 'readFileSync');
+    try {
+      const meta = app.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null, reportNum: 7 });
+      app.sessions.store.beginTurn(meta.id, { runId: 'r-gone-after-restart', userText: 'What is overdue?' });
+      app.sessions.store.setStatus(meta.id, 'running');
+      let acted = false;
+      spy.mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+        if (!acted && typeof file === 'string' && hook(app, meta.id, file)) {
+          acted = true;
+          peer(app, meta.id);
+        }
+        return (readFileSync as (...args: unknown[]) => unknown)(file, ...rest);
+      }) as typeof fs.readFileSync);
+      app.sessions.reconcile();
+      spy.mockRestore();
+      expect(acted).toBe(true);
+      return app.sessions.read(meta.id)!;
+    } finally {
+      spy.mockRestore();
+      await app.close();
+      await runsEnded(dataRoot);
+    }
+  }
+
+  it('given a peer starting a turn between the reconcile\'s claim check and its act, when it reconciles, then the peer is refused and only the missing turn is ended in error', async () => {
+    let peerRelease: (() => void) | null = null;
+    try {
+      const seen = await reconcileBeside(
+        (app, id, file) => file === path.join(app.sessions.store.guardDirOf(id), 'track.claim'),
+        (app, id) => {
+          // What a peer's start does under its turn claim: the next turn begins and the session runs again.
+          peerRelease = takeProcessClaim(path.join(app.sessions.store.guardDirOf(id), 'turn.claim'));
+          if (!peerRelease) return;
+          app.sessions.store.beginTurn(id, { runId: 'r-peer-turn-2', userText: 'Again?' });
+          app.sessions.store.setStatus(id, 'running');
+        },
+      );
+      expect(peerRelease).toBeNull();
+      expect(seen).toMatchObject({ status: 'error', error: 'run record missing after a restart', reportNum: null });
+    } finally {
+      (peerRelease as (() => void) | null)?.();
+    }
+  });
+
+  it('given a peer settling the session after the reconcile listed it, when it reconciles, then the settled session is left as the peer recorded it', async () => {
+    const seen = await reconcileBeside(
+      (app, id, file) => file === path.join(app.sessions.store.guardDirOf(id), 'turn.claim') || file === path.join(app.sessions.store.guardDirOf(id), 'track.claim'),
+      (app, id) => {
+        app.sessions.store.endTurn(id, 1, { costUsd: 0, tokens: 0, permissionDenials: 0, status: 'done' });
+      },
+    );
+    expect(seen).toMatchObject({ status: 'done', reportNum: 7 });
+  });
 });

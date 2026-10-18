@@ -24,7 +24,9 @@ delete, `whileIdle`) holds the turn claim while it trusts that no track claim is
 the turn claim: a turn this process just spawned is tracked under the turn claim its start still holds, and any other
 tracker (a reconcile, a standby taking over) takes the turn claim first, takes the track claim, then lets the turn claim
 go. While another process holds the turn claim, such a tracker stands by and asks again. So no tracker can start
-between an idle check and its act.
+between an idle check and its act. A reconcile that ends a running session in error because its run record is missing
+does so under the turn claim too, after checking the track claim and reading the record again under it; it leaves the
+session alone while another process holds either claim.
 
 A track claim that cannot be written (a full disk, a read-only guard folder) is never read as held: a reconcile or a
 standby stands by and asks again, and only a turn this process just spawned is followed without one, unless a live
