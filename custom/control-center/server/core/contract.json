@@ -933,7 +933,7 @@
           "Workflow",
           "Write"
         ],
-        "tildeHookPath": "/Users/divypatel/.cc-probe-1280d47c/h1.txt",
+        "tildeHookPath": "$HOME/.cc-probe-1280d47c/h1.txt",
         "claudeMdLoaded": false,
         "c9ControlLeaked": true,
         "mentionRawLeakedOutside": false,
@@ -1025,7 +1025,7 @@
           ]
         },
         "searchLeaksDeniedContent": false,
-        "tildeResult": "PreToolUse:Read hook error: ['/opt/homebrew/Cellar/node/26.4.0/bin/node' '/Users/divypatel/.cc-auth/custom/control-center/server/claude/guard-hook.mjs' || exit 2]: Read: /Users/divypatel/.cc-probe-1280d47c/h1.txt is outside the repo and data roots; sessions read only inside them\n"
+        "tildeResult": "PreToolUse:Read hook error: ['$NODE' '$PACKAGE_ROOT/server/claude/guard-hook.mjs' || exit 2]: Read: $HOME/.cc-probe-1280d47c/h1.txt is outside the repo and data roots; sessions read only inside them\n"
       },
       "history": [
         {
