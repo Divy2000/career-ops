@@ -56,7 +56,7 @@ function listJsonl(dir: string, since: number, out: Listed[]): void {
 interface UsageLine {
   timestamp?: string;
   requestId?: string;
-  message?: { usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number } };
+  message?: { id?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number } };
 }
 
 /** One usage line of a transcript: what the meter sums. */
@@ -84,7 +84,11 @@ const scanned = new Map<string, Map<string, FileState>>();
 
 const CHUNK = 4 * 1024 * 1024;
 
-function recordOf(line: string, file: string): UsageRecord | null {
+/**
+ * The dedup key: the request, else the API message (both shared by the one-line-per-content-block lines of a message,
+ * which repeat its usage), else the line's own byte offset, so two distinct id-less lines never collapse into one.
+ */
+function recordOf(line: string, file: string, offset: number): UsageRecord | null {
   if (!line.includes('"usage"')) return null;
   let o: UsageLine;
   try {
@@ -95,7 +99,8 @@ function recordOf(line: string, file: string): UsageRecord | null {
   const u = o.message?.usage;
   const ts = o.timestamp ? Date.parse(o.timestamp) : NaN;
   if (!u || Number.isNaN(ts)) return null;
-  return { key: o.requestId ?? `${file}:${ts}:${u.input_tokens}:${u.output_tokens}`, ts, input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cache: u.cache_creation_input_tokens ?? 0 };
+  const key = o.requestId ?? (o.message?.id ? `message:${o.message.id}` : `${file}:${offset}`);
+  return { key, ts, input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cache: u.cache_creation_input_tokens ?? 0 };
 }
 
 /**
@@ -109,6 +114,7 @@ function readWholeLines(file: string, from: number, to: number, records: UsageRe
     let done = from;
     let carry = Buffer.alloc(0);
     while (pos < to) {
+      const dataStart = pos - carry.length;
       const buf = Buffer.alloc(Math.min(CHUNK, to - pos));
       const n = fs.readSync(fd, buf, 0, buf.length, pos);
       if (n === 0) break;
@@ -119,9 +125,11 @@ function readWholeLines(file: string, from: number, to: number, records: UsageRe
         carry = Buffer.from(data);
         continue;
       }
-      for (const line of data.subarray(0, end).toString('utf8').split('\n')) {
-        const r = recordOf(line, file);
+      for (let start = 0; start <= end; ) {
+        const nl = data.indexOf(0x0a, start);
+        const r = recordOf(data.subarray(start, nl).toString('utf8'), file, dataStart + start);
         if (r) records.push(r);
+        start = nl + 1;
       }
       carry = Buffer.from(data.subarray(end + 1));
       done = pos - carry.length;
