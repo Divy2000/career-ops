@@ -178,7 +178,10 @@ function machineSummary(section: { line: number; content: string } | null, file:
     const parsed = YAML.parse(fence[1]!);
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
   } catch (err) {
-    const line = section.line + ((err as { linePos?: Array<{ line: number }> }).linePos?.[0]?.line ?? 0);
+    // section.line is the heading; the content starts on the next line and the fence body further down.
+    const bodyStart = fence.index! + fence[0].length - '\n```'.length - fence[1]!.length;
+    const bodyLine = section.line + 1 + (section.content.slice(0, bodyStart).match(/\n/g)?.length ?? 0);
+    const line = bodyLine - 1 + ((err as { linePos?: Array<{ line: number }> }).linePos?.[0]?.line ?? 1);
     throw new ParseError(`Machine Summary YAML is invalid: ${(err as Error).message.split('\n')[0]}`, file, line);
   }
 }

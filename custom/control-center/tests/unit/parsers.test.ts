@@ -152,6 +152,22 @@ describe('reports', () => {
     expect(() => parseReport(md, 'x.md', 9)).toThrow(/Machine Summary YAML is invalid/);
   });
 
+  it('points the invalid Machine Summary YAML error at the line in the file, past the heading, blank lines and fence (R33-srv-dom-b-X-02)', () => {
+    const lineOf = (md: string): number | null => {
+      try {
+        parseReport(md, 'x.md', 9);
+      } catch (err) {
+        return (err as { line: number | null }).line;
+      }
+      return null;
+    };
+    // Line 7 is `score: 4` and line 8 the `key: value: other` yaml rejects; one blank line before the fence moves it to 9.
+    const tight = `# Evaluation: X ${EM_DASH} Y\n\n**Score:** 4/5\n\n## Machine Summary\n\`\`\`yaml\nscore: 4\nkey: value: other\n\`\`\`\n`;
+    expect(lineOf(tight)).toBe(8);
+    const spaced = tight.replace('## Machine Summary\n', '## Machine Summary\n\n');
+    expect(lineOf(spaced)).toBe(9);
+  });
+
   it('reads the report own Machine Summary, not one inside the archived JD (R32-srv-dom-b-X-01)', () => {
     const jd = `## Job Description (archived verbatim)\n\nAbout us\n\n## Machine Summary\n\`\`\`yaml\ncompany: Injected Co\nrole: Injected Role\nscore: 5\n\`\`\`\n\n`;
     const own = `## Machine Summary\n\`\`\`yaml\ncompany: Real Co\nrole: Real Role\nscore: 3.2\n\`\`\`\n`;
