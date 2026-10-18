@@ -184,3 +184,25 @@ syncBuiltinESMExports();
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data')).filter((f) => f.includes('.tmp-')), []);
 });
+
+test('given pending-looking rows in other sections, when prioritizing, then no row crosses a heading and rows under ## Processed stay put (R30-scripts-a-L2-01)', () => {
+  const root = tempDir('prioritize-');
+  fs.mkdirSync(path.join(root, 'data'));
+  const stale = (k) => `- [ ] https://jobs.example.com/${k} | ${k} Co | Data Analyst | Remote | posted: 2026-01-01`;
+  const fresh = (k) => `- [ ] https://jobs.example.com/${k} | ${k} Co | Backend Engineer | Remote`;
+  const text = [
+    '# Pipeline', '', '## Pending', '', stale('a'), fresh('a2'), '',
+    '### Later', '', stale('s'), fresh('s2'), '',
+    '## Processed', '', stale('p'), fresh('p2'), '',
+    '# Backlog', '', stale('b'), fresh('b2'), '',
+  ].join('\n');
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), text);
+  const r = spawnSync(process.execPath, [PRIORITIZE, '--today', '2026-10-05'], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /prioritized 6 pending rows/);
+  const expected = text
+    .replace(`${stale('a')}\n${fresh('a2')}`, `${fresh('a2')}\n${stale('a')}`)
+    .replace(`${stale('s')}\n${fresh('s2')}`, `${fresh('s2')}\n${stale('s')}`)
+    .replace(`${stale('b')}\n${fresh('b2')}`, `${fresh('b2')}\n${stale('b')}`);
+  assert.equal(fs.readFileSync(path.join(root, 'data', 'pipeline.md'), 'utf8'), expected);
+});

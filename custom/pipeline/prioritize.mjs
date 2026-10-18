@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Reorder the pending rows of data/pipeline.md so today's new jobs, fresh
 // postings and backend/AI titles come first. rank-pipeline.mjs ranks in file
-// order, so this decides what gets ranked. Only pending rows move; every other
-// line keeps its position.
+// order, so this decides what gets ranked. Only pending rows move, each within
+// its own section; every other line keeps its position.
 //
 //   node custom/pipeline/prioritize.mjs [--today YYYY-MM-DD]
 
@@ -43,6 +43,28 @@ async function readFirstSeen() {
   return firstSeen;
 }
 
+// A row's section is part of its meaning: scan.mjs and the Control Center read any row under `## Processed` as finished
+// work, so a row must never cross a heading. Returns the line indexes of the `- [ ]` rows, one group per run between two
+// headings (a `###` subgroup keeps its rows too), leaving out every run inside a Processed section. Section boundaries
+// follow scan.mjs collectSeenUrls: a heading of level <= 2 ends a section, and only a `## Processed` one opens a done one.
+function pendingRuns(lines) {
+  const runs = [];
+  let run = [];
+  let inProcessed = false;
+  for (const [i, line] of lines.entries()) {
+    const heading = line.match(/^(#+)\s+(.*)$/);
+    if (heading) {
+      if (run.length) runs.push(run);
+      run = [];
+      if (heading[1].length <= 2) inProcessed = heading[1].length === 2 && /^processed\b/i.test(heading[2].trim());
+    } else if (!inProcessed && line.startsWith('- [ ] ')) {
+      run.push(i);
+    }
+  }
+  if (run.length) runs.push(run);
+  return runs;
+}
+
 const USAGE = `Usage: node custom/pipeline/prioritize.mjs [--today YYYY-MM-DD]
 Reorders the pending rows of data/pipeline.md: jobs first seen today, fresh postings and backend/AI titles first.
   --today YYYY-MM-DD   the day that counts as today (default: the local date)
@@ -77,9 +99,12 @@ async function main() {
       throw err;
     }
     const lines = text.split('\n');
-    const slots = lines.flatMap((l, i) => (l.startsWith('- [ ] ') ? [i] : []));
-    const sorted = orderPending(slots.map((i) => lines[i]), { today, firstSeen });
-    slots.forEach((slot, k) => { lines[slot] = sorted[k]; });
+    const sorted = [];
+    for (const slots of pendingRuns(lines)) {
+      const run = orderPending(slots.map((i) => lines[i]), { today, firstSeen });
+      slots.forEach((slot, k) => { lines[slot] = run[k]; });
+      sorted.push(...run);
+    }
     await copyFile(PIPELINE, `${PIPELINE}.bak`);
     const tmp = `${PIPELINE}.tmp-${process.pid}`;
     try {

@@ -457,14 +457,16 @@ const shim = path.resolve("custom/control-center/server/claude/claude-shim.mjs")
 // Not exec: each call that exits non-zero (the shim refusing it, or the real claude failing: a usage limit, no
 // network) is recorded, since rank-pipeline.mjs catches every failed call and still exits 0. Its own timeout kills this
 // wrapper with SIGTERM: the trap then kills the shim and the claude it runs (their own process group, set -m), records
-// the failure and exits 143, so nothing is orphaned and the timed-out call still fails the step. The trap is set before
-// the shim starts, and finds it by $!, so a signal at any point (before the start, or before child=$!) is handled.
+// the failure and exits 143, so nothing is orphaned and the timed-out call still fails the step. A cancel of the job
+// (TERM, INT, HUP or QUIT to its process group) never reaches the group of the shim, so the trap covers all four. The
+// trap is set before the shim starts, and finds it by $!, so a signal at any point (before the start, or before
+// child=$!) is handled.
 const failures = shellQuote(path.join(process.env.DIR, "failures"));
 fs.writeFileSync(path.join(process.env.DIR, "claude"), [
   "#!/bin/bash",
   "set -m",
   `on_term() { [ -z "$!" ] || { kill -TERM -- "-$!" 2>/dev/null; wait "$!" 2>/dev/null; }; echo 143 >> ${failures}; exit 143; }`,
-  "trap on_term TERM INT",
+  "trap on_term TERM INT HUP QUIT",
   `CLAUDE_CODE_OAUTH_TOKEN="$(cat ${shellQuote(path.join(process.env.DIR, "token"))})" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" ${shellQuote(process.execPath)} ${shellQuote(shim)} "$@" &`,
   "child=$!",
   "wait \"$child\"",
