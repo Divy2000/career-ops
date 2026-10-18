@@ -89,6 +89,30 @@ describe('oferta report format (modes/oferta.md, examples/sample-report.md)', ()
     const md = '# Evaluation: Acme - Eng\n\n**Score:** 4/5\n\n## Machine Summary\n```yaml\nadvertised_comp: "80-90k EUR"\n```\n\n## A) Role Summary\n\n| Field | Value |\n|---|---|\n| **Remote** | Hybrid |\n';
     expect(parseReport(md, '002-acme.md', 2).comp).toBe('80-90k EUR');
   });
+
+  it('reads the Machine Summary of a report laid out as the batch prompt writes it, after the archived JD (R33-srv-dom-b-X-01)', () => {
+    const prompt = fs.readFileSync(path.join(DEFAULT_CODE_ROOT, 'batch', 'batch-prompt.md'), 'utf8');
+    const start = prompt.indexOf('```markdown\n# Evaluation:');
+    expect(start).toBeGreaterThan(-1);
+    const body = prompt.slice(start + '```markdown\n'.length);
+    const template = body.slice(0, body.indexOf('\n```\n```') + '\n```\n'.length);
+    // The layout under test is the template's own: header, archived JD, then the Machine Summary.
+    expect(template.indexOf('## Job Description')).toBeGreaterThan(-1);
+    expect(template.indexOf('## Job Description')).toBeLessThan(template.indexOf('## Machine Summary'));
+    const yaml = 'company: "Acme"\nrole: "Eng"\nscore: 4.0\nfinal_decision: "Skip"\ndiscard_reasons:\n  - salary_too_low\nadvertised_comp: "80-90k EUR"';
+    const md = template
+      .replace(/\{the JD text from[^\n]*\}/, 'About us\n\n## Responsibilities\n\nBuild things')
+      .replace(/```yaml\n[\s\S]*?\n```/, '```yaml\n' + yaml + '\n```')
+      .replace('{Company}', 'Acme')
+      .replace('{Role}', 'Eng')
+      .replace('{X.X/5}', '4.0/5')
+      // The sections the prompt lists after the Machine Summary ("Then include:").
+      .concat('\n## A) Role Summary\n\n| Field | Value |\n|---|---|\n| **Remote** | Hybrid |\n\n## B) CV Match\n\nGood\n');
+    expect(prompt).toMatch(/^- `## Machine Summary`\n- `## A\) Role Summary`$/m);
+    const r = parseReport(md, '002-acme.md', 2);
+    expect(r.machine).toMatchObject({ company: 'Acme', final_decision: 'Skip' });
+    expect(r).toMatchObject({ finalDecision: 'Skip', discardReasons: ['salary_too_low'], comp: '80-90k EUR', score: 4 });
+  });
 });
 
 /** Every report template a mode defines: an H1 with placeholders whose next line is a dated `**...:**` header field. */

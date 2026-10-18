@@ -113,6 +113,16 @@ describe('blacklist (explicit confirm gate)', () => {
     const invalid = await send('PUT', '/api/blacklist', { confirm: true, rows: [{ company: 'a|b', since: '2026-10-03', scope: 'company', reason: '' }] }, { 'if-match': res.json().etag, ...EXPLICIT });
     expect(invalid.statusCode).toBe(400);
   });
+  it('refuses a company the scanner would skip as a header, separator or blank row, and writes nothing (R33-srv-dom-a-X-01)', async () => {
+    const current = (await get('/api/blacklist')).json();
+    const before = readData('data/blacklist.md');
+    for (const company of ['Company', ' company ', '   ', '---', ':-:']) {
+      const rows = [...current.rows, { company, since: '2026-10-18', scope: 'company', reason: 'x' }];
+      const res = await send('PUT', '/api/blacklist', { confirm: true, rows }, { 'if-match': current.etag, ...EXPLICIT });
+      expect(res.statusCode, `${JSON.stringify(company)}: ${res.body}`).toBe(400);
+      expect(readData('data/blacklist.md')).toBe(before);
+    }
+  });
 });
 
 describe('blacklist saves keep what the editor does not manage', () => {

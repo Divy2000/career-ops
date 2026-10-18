@@ -136,25 +136,41 @@ export function splitSections(body: string): { intro: string; sections: ReportSe
 }
 
 /**
- * The report's own `## Machine Summary` section: the template writes it directly after the header and the archived JD
- * last, so it is the first such heading outside a fence and before any `## Job Description` heading. A JD's own
- * "## Machine Summary" (or a yaml fence in the JD) is the posting's text, never the report's. The section ends at the
- * next `##` heading outside a fence.
+ * The report's own `## Machine Summary` section. oferta writes it directly after the header and the archived JD last;
+ * the batch prompt writes the archived JD first and the Machine Summary after it. So it is the first such heading before
+ * any `## Job Description` heading, or else the last one after it that the lettered blocks follow ("## A) ...", which
+ * the batch prompt writes next and keeps lettered in every language). Inside the JD only a report template section is
+ * a heading (the splitSections rule), so a JD's own yaml fence or "## Responsibilities" is the posting's text, and a
+ * JD's own "## Machine Summary" is never the report's. The section ends at the next `##` heading outside a fence.
  */
+const LETTERED_SECTION = /^(?:[A-Z]\)|Block\s[A-Z]\s*(?:$|[(:\u2014\u2013-]))/i;
+
 function machineSummarySection(md: string): { line: number; content: string } | null {
   const lines = md.split('\n');
   let inFence = false;
+  let inJd = false;
+  let seenJd = false;
+  let found: { line: number; content: string } | null = null;
   let start = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (/^```/.test(line)) inFence = !inFence;
-    const h = !inFence ? line.match(/^##\s+(.*)$/) : null;
-    if (!h) continue;
-    if (start !== -1) return { line: start + 1, content: lines.slice(start + 1, i).join('\n') };
-    if (JD_HEADING.test(h[1]!.trim())) return null;
+  for (let i = 0; i <= lines.length; i++) {
+    const line = lines[i];
+    if (line !== undefined && /^```/.test(line)) inFence = !inFence;
+    const h = line !== undefined && !inFence ? line.match(/^##\s+(.*)$/) : null;
+    if (line !== undefined && !h) continue;
+    const heading = h ? h[1]!.trim() : '';
+    if (h && inJd && !REPORT_SECTION.test(heading)) continue;
+    if (start !== -1) {
+      const section = { line: start + 1, content: lines.slice(start + 1, i).join('\n') };
+      start = -1;
+      if (!seenJd) return section;
+      if (h && LETTERED_SECTION.test(heading)) found = section;
+    }
+    if (!h) break;
+    inJd = JD_HEADING.test(heading);
+    if (inJd) seenJd = true;
     if (/^Machine Summary\s*$/.test(h[1]!)) start = i;
   }
-  return start === -1 ? null : { line: start + 1, content: lines.slice(start + 1).join('\n') };
+  return found;
 }
 
 function machineSummary(section: { line: number; content: string } | null, file: string): Record<string, unknown> | null {
@@ -165,7 +181,10 @@ function machineSummary(section: { line: number; content: string } | null, file:
     const parsed = YAML.parse(fence[1]!);
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
   } catch (err) {
-    const line = section.line + ((err as { linePos?: Array<{ line: number }> }).linePos?.[0]?.line ?? 0);
+    // section.line is the heading; the content starts on the next line and the fence body further down.
+    const bodyStart = fence.index! + fence[0].length - '\n```'.length - fence[1]!.length;
+    const bodyLine = section.line + 1 + (section.content.slice(0, bodyStart).match(/\n/g)?.length ?? 0);
+    const line = bodyLine - 1 + ((err as { linePos?: Array<{ line: number }> }).linePos?.[0]?.line ?? 1);
     throw new ParseError(`Machine Summary YAML is invalid: ${(err as Error).message.split('\n')[0]}`, file, line);
   }
 }

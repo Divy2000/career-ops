@@ -24,12 +24,25 @@ export const BLACKLIST_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const CELL = /^[^|\r\n]*$/;
 
 /**
+ * Whether scan.mjs parseBlacklist (and this domain's reparse) reads a row with this first cell, trimmed, at all: it
+ * skips a blank cell, a separator (only dashes, colons, spaces) and a header (Company), so a save must not write one.
+ */
+function scannerReadsCompany(company: string): boolean {
+  const c = company.trim();
+  return c !== '' && !/^[-: ]+$/.test(c) && c.toLowerCase() !== 'company';
+}
+
+/**
  * Lengths are capped by blacklistOverCap, not here: a cell already in the file passes through as is, whatever its
  * length, and `since` is checked by the route (YYYY-MM-DD for new rows, a legacy cell kept as it is). The number of
  * `extra` cells is bounded by the route against the file's own extra columns, so any table the editor loads stays savable.
  */
 export const blacklistRowSchema = z.object({
-  company: z.string().min(1).regex(/^[^|\r\n]+$/, 'no pipes or line breaks'),
+  company: z
+    .string()
+    .min(1)
+    .regex(/^[^|\r\n]+$/, 'no pipes or line breaks')
+    .refine(scannerReadsCompany, 'the scanner skips a blank, dash-only or "Company" entry; name a company or host'),
   since: z.string().regex(CELL, 'no pipes or line breaks'),
   scope: z.enum(['company', 'domain']),
   reason: z.string().regex(CELL, 'no pipes or line breaks'),
@@ -97,7 +110,7 @@ const SEPARATOR = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*(?::?-+:?\s*)?$/;
 function scannerRow(line: string, extra: string[] = []): BlacklistRow | null {
   const cells = splitCells(line);
   const company = cells[0] ?? '';
-  if (!company || /^[-: ]+$/.test(company) || company.toLowerCase() === 'company') return null;
+  if (!scannerReadsCompany(company)) return null;
   return {
     company,
     since: cells[1] ?? '',
