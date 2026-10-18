@@ -15,12 +15,14 @@ const OWN_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'tmp-check-'));
 // os.tmpdir() reads TEMP or TMP before TMPDIR on Windows.
 for (const key of ['TMPDIR', 'TEMP', 'TMP']) process.env[key] = OWN_TMP;
 let ownTmpRemoved = false;
-// A kill by signal skips 'exit': the dir is removed then, and the signal raised again when nothing else handles it.
+// A kill by signal skips 'exit': when nothing else handles the signal, the dir is removed and the signal raised again.
+// A spec with its own handler keeps running, so its dir stays and the 'exit' check below still runs.
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.once(signal, function onSignal() {
+    if (process.listenerCount(signal) > 0) return;
     ownTmpRemoved = true;
     fs.rmSync(OWN_TMP, { recursive: true, force: true });
-    if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    process.kill(process.pid, signal);
   });
 }
 process.on('exit', () => {

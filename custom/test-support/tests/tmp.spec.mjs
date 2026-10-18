@@ -168,6 +168,46 @@ test('specsWithoutTmpCheck lists the specs whose imports never reach tmp.mjs, fo
   assert.deepEqual(specsWithoutTmpCheck(tests, path.join(support, 'tmp.mjs')), ['block-comment.spec.mjs', 'commented.spec.mjs', 'none.spec.mjs']);
 });
 
+test('Given a spec that loads tmp.mjs handles SIGTERM itself and keeps running, its temp dir stays usable and what it leaves is still reported (R34-flake-tmpguard fix check 2)', async () => {
+  const dir = tempDir('tmp-check-signal-');
+  const fresh = tempDir('tmp-check-fresh-');
+  const file = path.join(dir, 'fixture.spec.mjs');
+  fs.writeFileSync(file, `import { test } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import ${JSON.stringify(TMP_MJS)};
+test('survives SIGTERM', async () => {
+  const alive = setInterval(() => {}, 1000);
+  const got = new Promise((r) => process.once('SIGTERM', r));
+  fs.writeFileSync(path.join(${JSON.stringify(fresh)}, 'pid'), String(process.pid));
+  await got;
+  clearInterval(alive);
+  fs.writeFileSync(path.join(os.tmpdir(), 'after-signal'), 'x');
+});
+`);
+  const runner = spawn(process.execPath, ['--test', file], { env: suiteEnv(process.env, fresh), stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  runner.stdout.on('data', (d) => { output += d; });
+  runner.stderr.on('data', (d) => { output += d; });
+  try {
+    const pidFile = path.join(fresh, 'pid');
+    const deadline = Date.now() + 30_000;
+    while (!fs.existsSync(pidFile) || !fs.readFileSync(pidFile, 'utf8')) {
+      assert.ok(Date.now() < deadline, 'the fixture spec never started');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM');
+    await new Promise((r) => (runner.exitCode !== null || runner.signalCode !== null ? r() : runner.once('close', r)));
+    fs.rmSync(pidFile);
+    assert.notEqual(runner.exitCode, 0, output);
+    assert.match(output, /left 1 entry in its temp dir \(now removed\): after-signal/);
+    assert.deepEqual(fs.readdirSync(fresh), []);
+  } finally {
+    runner.kill('SIGKILL');
+  }
+});
+
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   test(`Given a spec that loads tmp.mjs is killed by ${signal} mid-test, its private temp dir is still removed (R34-flake-tmpguard fix check)`, async () => {
     const dir = tempDir('tmp-check-signal-');
