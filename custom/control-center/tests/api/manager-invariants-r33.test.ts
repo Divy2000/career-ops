@@ -257,6 +257,45 @@ describe('one tracker settles a turn across server processes (R33-claude-L1-01)'
       expect(deltas()).toBe(2);
     });
   }, 40_000);
+
+  // R36-claude-L1-01: a standby that took the track claim but could not read the session the second time gave the claim
+  // back through a release that read the torn meta.json again, unguarded, so the throw left the timer uncaught.
+  it('given A is gone, when B takes the track claim but cannot read the session again, then B gives the claim back without throwing and later settles the turn', async () => {
+    await followedByBoth(async (a, b, id, deltas) => {
+      await a.close();
+      const claimFile = path.join(b.sessions.store.guardDirOf(id), 'track.claim');
+      const uncaught: unknown[] = [];
+      const onUncaught = (err: unknown) => void uncaught.push(err);
+      process.on('uncaughtException', onUncaught);
+      const read = b.sessions.store.read.bind(b.sessions.store);
+      let reads = 0;
+      let claimedDuringTornRead = false;
+      const spy = vi.spyOn(b.sessions.store, 'read').mockImplementation((sid: string) => {
+        if (sid !== id) return read(sid);
+        reads += 1;
+        if (reads === 1) return read(sid);
+        if (reads === 2) claimedDuringTornRead = fs.existsSync(claimFile);
+        throw new SyntaxError('Unexpected end of JSON input');
+      });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await until(() => reads >= 2, 'a standby tick to claim the turn and read the session again', 10_000);
+        // The tick has run past the release; any throw out of the timer has been raised by now.
+        await wait(50);
+        expect(claimedDuringTornRead).toBe(true);
+        expect(uncaught).toEqual([]);
+        expect(fs.existsSync(claimFile)).toBe(false);
+        expect(b.sessions.isActive(id)).toBe(true);
+      } finally {
+        spy.mockRestore();
+        warn.mockRestore();
+        process.off('uncaughtException', onUncaught);
+      }
+      await until(() => b.sessions.read(id)!.turns[0]!.endedAt !== null, 'B to settle the turn', 20_000);
+      expect(b.sessions.read(id)!.status).toBe('done');
+      expect(deltas()).toBe(2);
+    });
+  }, 40_000);
 });
 
 /** Mulberry32: a small seeded PRNG, so a failing sequence can be replayed from its printed seed. */
