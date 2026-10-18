@@ -1316,7 +1316,7 @@ else
           pending "Fix the problem above (a checkout without the Control Center contract is fixed by re-running the installer), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
         fi
       elif keychain_read_token; [ "$KEYCHAIN_RC" != 0 ]; then
-        # Read before the earlier drafts are moved aside: a refused run leaves them where "Resume from drafts" looks.
+        # Read before the earlier drafts are moved aside (where the run starts, below): a refused run leaves them in place.
         # The token the daily job and the Control Center would read is not usable either, so they wait as step 7 makes them.
         KEYCHAIN_OK=0
         if [ "$KEYCHAIN_RC" != 44 ]; then KEYCHAIN_UNREADABLE=1; fi
@@ -1324,17 +1324,6 @@ else
         say "  Headless onboarding did not run."
         pending "Fix the Keychain item as described above, then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       else
-        # Drafts from an earlier run would be listed as this run's and picked up by "Resume from drafts": they hold
-        # personal data, so they are moved aside, not deleted.
-        if [ -d "$draft" ] && [ -n "$(ls -A "$draft" 2>/dev/null)" ]; then
-          prev="$draft.prev-$(date +%Y%m%d-%H%M%S)-$$"
-          if mv "$draft" "$prev"; then
-            say "  Moved the drafts of an earlier headless run to $prev."
-          else
-            warn "  Could not move the earlier drafts out of $draft; they are listed with this run's."
-          fi
-        fi
-        mkdir -p "$draft"
         inputs=()
         if [ -n "$CV_COPY" ]; then inputs+=("$CV_COPY"); fi
         if [ "${#DOC_COPIES[@]}" -gt 0 ]; then inputs+=("${DOC_COPIES[@]}"); fi
@@ -1354,6 +1343,18 @@ else
         KEYCHAIN_TOKEN=""
       fi
       if [ "$headless_ready" = 1 ]; then
+        # Every check that can refuse this run comes before this point, and none of this step above changes a file,
+        # so a refused run leaves an earlier run's drafts where "Resume from drafts" looks. Those drafts would otherwise
+        # be listed as this run's and picked up: they hold personal data, so they are moved aside, not deleted.
+        if [ -d "$draft" ] && [ -n "$(ls -A "$draft" 2>/dev/null)" ]; then
+          prev="$draft.prev-$(date +%Y%m%d-%H%M%S)-$$"
+          if mv "$draft" "$prev"; then
+            say "  Moved the drafts of an earlier headless run to $prev."
+          else
+            warn "  Could not move the earlier drafts out of $draft; they are listed with this run's."
+          fi
+        fi
+        mkdir -p "$draft"
         say "  Running a restricted headless Claude (reads your documents, writes drafts only to $draft). This uses your Claude subscription."
         # The token lives only in the child's environment; it is never echoed, logged or placed on a command line.
         # As in the Control Center's sessions, SUBPROCESS_ENV_SCRUB keeps it out of hook and tool children, and
