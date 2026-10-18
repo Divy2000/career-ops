@@ -10,8 +10,13 @@ import type { AppSettings, AppSettingsRead } from '@shared/api';
 
 const SETTINGS_KEY = ['system', 'settings'];
 
-/** The server's read carries the file's version (ETag); a write sends it so a change made elsewhere is refused, not overwritten. */
-type VersionedRead = AppSettingsRead & { etag?: string };
+// Invariants this module keeps: AppTab.invariants.md.
+
+/**
+ * The server's read carries the file's version (ETag); a write sends it so a change made elsewhere is refused, not
+ * overwritten. `ownAt` is this browser's own-write counter when the read was asked for (see OwnWrite).
+ */
+type VersionedRead = AppSettingsRead & { etag?: string; ownAt?: number };
 type Written = AppSettings & { etag?: string };
 
 // Each write waits for the one before it to answer, in this tab through the queue and across the browser's tabs
@@ -35,69 +40,93 @@ const subscribe = (l: () => void) => {
 
 const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
 
-// The version this browser's latest own write left the file at, and the versions its writes started from or left,
-// shared by its tabs. A tab whose last read is one of those is behind only its sibling tabs (the Web Lock already
-// ordered their writes), so it writes on top of the latest; a version no tab of this browser saw (another device, a
-// hand edit) is a conflict. Versions name the file's content and can repeat, so the latest is kept, never a chain.
-const OWN_KEY = 'career-ops-app-settings-versions';
+// This browser's own writes, shared by its tabs: how many it has had taken (n) and the latest of them, each with the
+// version it was sent against (null: none) and the version it left. Only a write holding the Web Lock reads and
+// replaces this. Versions name the file's content and repeat, so only the counter says whether a read is older than a
+// write.
+type OwnWrites = { n: number; writes: Array<{ from: string | null; to: string }> };
+const OWN_KEY = 'career-ops-app-settings-own-writes';
 const OWN_MAX = 40;
-type OwnVersions = { latest: string; seen: string[] };
 // This tab's copy: what it uses when storage cannot be written (blocked, full), so its own saves still follow each other.
-let ownHere: OwnVersions | null = null;
+let ownHere: OwnWrites = { n: 0, writes: [] };
 let storageWorks = true;
-const readOwn = (): OwnVersions | null => {
+const isWrite = (w: unknown): w is OwnWrites['writes'][number] => !!w && typeof (w as { to?: unknown }).to === 'string' && ((w as { from?: unknown }).from === null || typeof (w as { from?: unknown }).from === 'string');
+const readOwn = (): OwnWrites => {
   if (!storageWorks) return ownHere;
   try {
-    const raw = JSON.parse(localStorage.getItem(OWN_KEY) ?? 'null') as Partial<OwnVersions> | null;
-    if (raw && typeof raw.latest === 'string' && Array.isArray(raw.seen)) return { latest: raw.latest, seen: raw.seen.filter((v): v is string => typeof v === 'string') };
+    const raw = JSON.parse(localStorage.getItem(OWN_KEY) ?? 'null') as Partial<OwnWrites> | null;
+    if (raw && Number.isSafeInteger(raw.n) && Array.isArray(raw.writes) && raw.writes.every(isWrite) && raw.writes.length <= raw.n!) return { n: raw.n!, writes: raw.writes };
     return ownHere;
   } catch {
     return ownHere;
   }
 };
-const storeOwn = (own: OwnVersions) => {
+const storeOwn = (own: OwnWrites) => {
   ownHere = own;
   try {
-    localStorage.setItem(OWN_KEY, JSON.stringify(ownHere));
+    localStorage.setItem(OWN_KEY, JSON.stringify(own));
   } catch {
     storageWorks = false;
   }
 };
-const recordWrite = (from: string, to: string) => {
-  storeOwn({ latest: to, seen: [...(readOwn()?.seen ?? []).filter((v) => v !== from && v !== to), from, to].slice(-OWN_MAX) });
-};
-// The server refused a write as changed and named its current version: the file is at that version now, whoever wrote
-// it, so a read of it is written as it is, not as one of this browser's earlier versions.
-const forgetVersion = (current: string) => {
-  const own = readOwn();
-  if (own?.seen.includes(current)) storeOwn({ latest: own.latest, seen: own.seen.filter((v) => v !== current) });
-};
-const writeBase = (read: string): string => {
-  const own = readOwn();
-  return own && own.seen.includes(read) ? own.latest : read;
+
+/**
+ * The version a write is checked against. A read is behind only this browser's tabs (the Web Lock ordered their
+ * writes) when one of its own writes since that read was sent against the read's version, and no later own write was
+ * sent against a version other than the one before it left (that one wrote on top of a change made elsewhere, which
+ * the read never showed). Such a read is written on top of the latest own write; any other read as it is, and a
+ * change made elsewhere since is refused.
+ */
+const ifMatchFor = (read: VersionedRead | undefined, own: OwnWrites): string | undefined => {
+  if (read?.etag === undefined) return undefined;
+  if (read.ownAt === undefined) return read.etag;
+  const first = own.n - own.writes.length;
+  for (let i = own.writes.length - 1; i >= 0 && first + i >= read.ownAt; i--) {
+    const w = own.writes[i]!;
+    if (w.from === read.etag) return own.writes.at(-1)!.to;
+    if (i > 0 && w.from !== own.writes[i - 1]!.to) break;
+  }
+  return read.etag;
 };
 
-const queueWrite = (patch: Partial<AppSettings>, reset: boolean, lastRead: () => string | undefined) => {
+/** A write's answer: the settings it left, or why it was refused, each as a read tagged with the counter it was answered at. */
+type WriteAnswer = { ok: true; read: VersionedRead } | { ok: false; error: unknown; ownAt: number | undefined };
+
+const queueWrite = (patch: Partial<AppSettings>, reset: boolean, lastRead: () => VersionedRead | undefined): Promise<WriteAnswer> => {
   const url = reset ? '/api/settings/app?reset=1' : '/api/settings/app';
-  const send = async () => {
-    const read = lastRead();
-    const base = read === undefined ? undefined : writeBase(read);
-    const written = await apiSend<Written>('PUT', url, patch, base === undefined ? {} : { 'if-match': base });
-    if (base !== undefined && written.etag) recordWrite(base, written.etag);
-    return written;
+  const send = async (): Promise<WriteAnswer> => {
+    const own = readOwn();
+    const ifMatch = ifMatchFor(lastRead(), own);
+    try {
+      const written = await apiSend<Written>('PUT', url, patch, ifMatch === undefined ? {} : { 'if-match': ifMatch });
+      if (!written.etag) return { ok: true, read: { ...written, problem: null } };
+      storeOwn({ n: own.n + 1, writes: [...own.writes, { from: ifMatch ?? null, to: written.etag }].slice(-OWN_MAX) });
+      return { ok: true, read: { ...written, problem: null, ownAt: own.n + 1 } };
+    } catch (error) {
+      return { ok: false, error, ownAt: own.n };
+    }
   };
-  const write = writeQueue.then(() => withWriteLock(send));
-  writeQueue = write.catch(() => undefined);
+  const write = writeQueue.then(() => withWriteLock(send)).catch((error: unknown): WriteAnswer => ({ ok: false, error, ownAt: undefined }));
+  writeQueue = write;
   return write;
 };
 
 /** The settings as the user last chose them: the server's read with every unanswered save on top. */
 export function useAppSettings(): UseQueryResult<AppSettingsRead> {
-  const q = useQuery({ queryKey: SETTINGS_KEY, queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
+  const q = useQuery({
+    queryKey: SETTINGS_KEY,
+    queryFn: async (): Promise<VersionedRead> => {
+      const ownAt = readOwn().n;
+      return { ...(await apiGet<VersionedRead>('/api/settings/app')), ownAt };
+    },
+  });
   const patches = useSyncExternalStore(subscribe, () => unanswered);
   const data = useMemo(() => (q.data ? patches.reduce(applyPatch, q.data) : undefined), [q.data, patches]);
   return { ...q, data } as UseQueryResult<AppSettingsRead>;
 }
+
+type Refusal = { code?: unknown; current?: VersionedRead } | null;
+const refusalOf = (error: unknown): Refusal => (error instanceof ApiError && error.status === 409 ? (error.body as Refusal) : null);
 
 export function useSaveSettings() {
   const qc = useQueryClient();
@@ -110,33 +139,32 @@ export function useSaveSettings() {
     setError(null);
     setRefused(null);
     setUnanswered([...unanswered, patch]);
+    let answer: WriteAnswer;
     try {
-      try {
-        const written = await queueWrite(patch, reset, () => qc.getQueryData<VersionedRead>(SETTINGS_KEY)?.etag);
-        // A read started before this write may answer after it: it is dropped, and the written settings shown until the refetch.
+      answer = await queueWrite(patch, reset, () => qc.getQueryData<VersionedRead>(SETTINGS_KEY));
+      // Taken: the written settings. Changed elsewhere: the latest values, for the user to check and save again (the
+      // fields' drafts are kept). A read started before this answer may land after it, so it is dropped first.
+      const refusal = answer.ok ? null : refusalOf(answer.error);
+      const shown = answer.ok ? answer.read : refusal?.code === 'settings-changed' && refusal.current ? { ...refusal.current, ownAt: answer.ownAt } : null;
+      if (shown) {
         await qc.cancelQueries({ queryKey: SETTINGS_KEY });
-        qc.setQueryData<VersionedRead>(SETTINGS_KEY, { ...written, problem: null });
-      } finally {
-        setUnanswered(unanswered.filter((p) => p !== patch));
+        qc.setQueryData<VersionedRead>(SETTINGS_KEY, shown);
       }
+    } finally {
+      setUnanswered(unanswered.filter((p) => p !== patch));
+    }
+    if (answer.ok) {
       onSaved?.();
       toast.success(okText);
       await Promise.all([qc.invalidateQueries({ queryKey: SETTINGS_KEY }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
       return true;
-    } catch (err) {
-      const refusal = err instanceof ApiError && err.status === 409 ? (err.body as { code?: unknown; current?: VersionedRead } | null) : null;
-      if (refusal?.code === 'settings-problem') setRefused({ patch, okText, onSaved });
-      // Changed elsewhere: the latest values are shown and the fields' drafts kept, for the user to check and save again.
-      if (refusal?.code === 'settings-changed') {
-        await qc.cancelQueries({ queryKey: SETTINGS_KEY });
-        if (refusal.current?.etag) forgetVersion(refusal.current.etag);
-        if (refusal.current) qc.setQueryData<VersionedRead>(SETTINGS_KEY, refusal.current);
-        void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
-      }
-      setError(`Could not save settings: ${describeError(err)}`);
-      toast.error('Settings not saved');
-      return false;
     }
+    const code = refusalOf(answer.error)?.code;
+    if (code === 'settings-problem') setRefused({ patch, okText, onSaved });
+    if (code === 'settings-changed') void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
+    setError(`Could not save settings: ${describeError(answer.error)}`);
+    toast.error('Settings not saved');
+    return false;
   };
   const replace = refused ? () => save(refused.patch, refused.okText, { onSaved: refused.onSaved, reset: true }) : null;
   return { save, error, replace };
