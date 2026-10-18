@@ -83,7 +83,29 @@ test('the headless Claude inherits exactly the ANTHROPIC_*/CLAUDE_CODE_* variabl
   }
 });
 
+test('every Claude Code version probe runs with the autoupdater off and no inherited credential, as the run it vouches for does (R32-scripts-b-L2-01, R30-scripts-b-X-01)', () => {
+  const env = { ANTHROPIC_AUTH_TOKEN: 'other', ANTHROPIC_BASE_URL: 'https://proxy.example.invalid', CLAUDE_CODE_OAUTH_TOKEN: 'inherited', CLAUDE_CODE_CLIENT_KEY: 'k', DISABLE_AUTOUPDATER: '' };
+  const { w, r } = headlessRun(env);
+  assert.ok(w.claudeArgv(), r.out);
+  const probes = w.log().filter((l) => l.startsWith('claude-version-env'));
+  assert.equal(probes.length, w.calls('claude --version').length, w.log().join('\n'));
+  assert.ok(probes.length > 0);
+  for (const p of probes) assert.equal(p, 'claude-version-env DISABLE_AUTOUPDATER=1 creds=', w.log().join('\n'));
+});
+
 // ---------------------------------------------------------------- invariant 7: one parser and one rule for versions
+
+test('headless onboarding accepts exactly the --version outputs the Control Center\'s gate and the floor accept (R30-scripts-b-X-01)', () => {
+  const approved = ['2.1.288', '2.1.289', '2.1.296-beta.1', '2.1.300'];
+  const outputs = ['2.1.289', ' 2.1.289', '2.1.296-beta.1', '2.1.288', 'v2.1.289', '2.1.289-rc.1', '2.1.300', '2.1.301', 'garbled'];
+  for (const version of outputs) {
+    const parsed = parseClaudeVersion(`${version} (Claude Code)`);
+    const expected = Boolean(parsed && versionAtLeast(parsed, MIN) && approved.includes(parsed));
+    const { w, r } = headlessRun({ FAKE_CLAUDE_VERSION: version }, { versions: approved });
+    assert.equal(w.claudeArgv()?.[0] === '-p', expected, `--version "${version} (Claude Code)": expected ${expected ? 'a run' : 'a refusal'}\n${r.out}`);
+    assert.doesNotMatch(r.out, /unexpected failure/, version);
+  }
+});
 
 // ---------------------------------------------------------------- invariants 1, 2, 5: one owner per piece of state
 
