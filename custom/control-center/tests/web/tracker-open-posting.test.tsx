@@ -1,5 +1,6 @@
 // Tracker preview: "Open posting" and the o key open a row's posting. A saved-JD reference (local:jds/<file>) opens
-// through /api/files/serve, as Application > Open posting does, not as a raw local: link (R19-feat-c-L1-02).
+// through /api/files/serve, as Application > Open posting does, not as a raw local: link (R19-feat-c-L1-02). A URL
+// postingHref refuses (javascript:, data:) gives neither a link nor a blank tab from the o key (R35-web1-FC-02).
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -17,7 +18,7 @@ let opened: unknown[][];
 
 const row = (url: string) => ({ num: 1, date: '2026-09-20', company: 'Acme', role: 'Engineer', score: 4, scoreRaw: '4.0/5', status: 'Applied', pdf: false, pdfRaw: '-', report: null, reportLabel: null, notes: '', location: null, url, posted: null, lastContact: null, summary: null, reportState: 'none' });
 
-async function render(url: string) {
+async function select(url: string) {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ kind: 'ok', path: 'data/applications.md', rows: [row(url)], etag: 'e' }), { status: 200, headers: { 'content-type': 'application/json' } })));
   const rootRoute = createRootRoute();
   const tracker = createRoute({
@@ -30,6 +31,11 @@ async function render(url: string) {
   await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(RouterProvider, { router }))));
   const tr = await until(() => [...host.querySelectorAll('tr')].find((r) => r.textContent?.includes('Acme')), 'the Acme row');
   await act(async () => tr.click());
+  await until(() => host.textContent?.includes('Open report'), 'the preview');
+}
+
+async function render(url: string) {
+  await select(url);
   return await until(() => [...host.querySelectorAll('a')].find((a) => a.textContent?.trim() === 'Open posting'), 'the Open posting link');
 }
 
@@ -66,4 +72,13 @@ describe('tracker preview Open posting', () => {
     await pressO();
     expect(opened).toEqual([['https://jobs.example.com/acme/1', '_blank', 'noopener']]);
   });
+
+  for (const url of ['javascript:alert(document.domain)', 'data:text/html,<script>alert(1)</script>']) {
+    it(`given the posting reference ${url}, then there is no Open posting link and the o key opens nothing`, async () => {
+      await select(url);
+      expect([...host.querySelectorAll('a')].some((a) => a.textContent?.trim() === 'Open posting')).toBe(false);
+      await pressO();
+      expect(opened).toEqual([]);
+    });
+  }
 });

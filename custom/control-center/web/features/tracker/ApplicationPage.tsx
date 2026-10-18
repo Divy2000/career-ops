@@ -96,6 +96,7 @@ function Verdict({ report }: { report: ReportFull }) {
 export function ApplicationPage() {
   const { n } = route.useParams();
   const q = useApplication(n);
+  const posting = q.data?.row.url ? postingHref(q.data.row.url) : undefined;
   const [tab, setTab] = useState<Tab>('report');
 
   return (
@@ -118,8 +119,8 @@ export function ApplicationPage() {
                 <StatusPill status={q.data.row.status} />
                 {q.data.row.summary?.legitimacy && <Pill>{q.data.row.summary.legitimacy}</Pill>}
                 <SponsorPill tier={q.data.sponsorship.companyFile?.verdict ?? q.data.sponsorship.companyFile?.dolTier} />
-                {q.data.row.url && (
-                  <a className="button-link" href={postingHref(q.data.row.url)} target="_blank" rel="noreferrer noopener">
+                {posting && (
+                  <a className="button-link" href={posting} target="_blank" rel="noreferrer noopener">
                     Open posting
                   </a>
                 )}

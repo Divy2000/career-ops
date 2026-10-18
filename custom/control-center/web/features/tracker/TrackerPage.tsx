@@ -142,6 +142,7 @@ export function TrackerPage() {
   const rows = useMemo(() => (data?.kind === 'ok' ? data.rows : []), [data]);
   const visible = useMemo(() => sortRows(filterRows(rows, search.tab, search.q), search.sort, search.dir), [rows, search]);
   const current = selected === null ? null : (visible.find((r) => r.num === selected.num && sameRow(selected.row, r)) ?? visible.find((r) => sameRow(selected.row, r)) ?? null);
+  const currentPosting = current?.url ? postingHref(current.url) : undefined;
   const select = (r: TrackerRow | undefined) => setSelected(r ? { num: r.num, row: rowIdentity(r) } : null);
   const visibleCols = COLUMNS.filter((c) => !c.optional || cols.has(c.key));
   const isChecked = (r: TrackerRow) => {
@@ -187,7 +188,7 @@ export function TrackerPage() {
         if (current) void go({ to: '/tracker/$n', params: { n: String(current.num) } });
         break;
       case 'o':
-        if (current?.url) window.open(postingHref(current.url), '_blank', 'noopener');
+        if (currentPosting) window.open(currentPosting, '_blank', 'noopener');
         break;
       case 'x':
         if (current) toggleChecked(current);
@@ -319,8 +320,8 @@ export function TrackerPage() {
                   <Link to="/tracker/$n" params={{ n: String(current.num) }} className="button-link">
                     Open report
                   </Link>
-                  {current.url && (
-                    <a className="button-link" href={postingHref(current.url)} target="_blank" rel="noreferrer noopener">
+                  {currentPosting && (
+                    <a className="button-link" href={currentPosting} target="_blank" rel="noreferrer noopener">
                       Open posting
                     </a>
                   )}
