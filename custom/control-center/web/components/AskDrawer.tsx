@@ -244,19 +244,16 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     }
     // A row named by number only is easy to confuse with another application: the setStatus confirm names it by
     // company and role, and shows the note it appends to the Notes cell (which can re-link reports).
-    const nameRow = (p: Record<string, unknown>): string => {
-      const n = rowParam(p);
-      const num = Number(n);
-      const row = Number.isInteger(num) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === num) : undefined;
-      return row ? `row #${n} (${row.company}${row.role ? ` - ${row.role}` : ''})` : `row #${n}`;
-    };
+    const rowNum = Number(rowParam(p.params));
+    const shownRow = p.action === 'setStatus' && Number.isInteger(rowNum) && tracker.data?.kind === 'ok' ? tracker.data.rows.find((r) => r.num === rowNum) : undefined;
+    const nameRow = (): string => (shownRow ? `row #${rowNum} (${shownRow.company}${shownRow.role ? ` - ${shownRow.role}` : ''})` : `row #${rowParam(p.params)}`);
     const question =
       p.action === 'evaluateCompany' && companyUrls.length > FANOUT_CONFIRM_ABOVE
         ? { title: `Start ${companyUrls.length} evaluation sessions?`, body: `The advisor proposes evaluating the ${companyUrls.length} pending Inbox postings at ${company}. They run in parallel under the Claude slot cap. Each one uses tokens.${companyLeftOut ? ` ${companyLeftOut}` : ''}`, confirmLabel: 'Start them', focusCancel: true }
         : p.action === 'evaluateCompany'
           ? { title: 'The advisor proposes a write', body: `Evaluate the ${companyUrls.length} pending Inbox ${companyUrls.length === 1 ? 'posting' : 'postings'} at ${company} (uses tokens).${companyLeftOut ? ` ${companyLeftOut}` : ''} Continue?`, confirmLabel: 'Do it', danger: true }
           : p.action === 'setStatus'
-            ? { title: 'The advisor proposes a write', body: `Set ${nameRow(p.params)} to ${String(p.params.state ?? '')}${p.params.note ? `, writing the note "${String(p.params.note)}" into its Notes cell` : ''}. Continue?`, confirmLabel: 'Do it', danger: true }
+            ? { title: 'The advisor proposes a write', body: `Set ${nameRow()} to ${String(p.params.state ?? '')}${p.params.note ? `, writing the note "${String(p.params.note)}" into its Notes cell` : ''}. Continue?`, confirmLabel: 'Do it', danger: true }
             : { title: 'The advisor proposes a write', body: `${def.label(p.params)}. Continue?`, confirmLabel: 'Do it', danger: true };
     if (def.confirm && !(await confirm(question))) {
       update(p.id, { state: 'rejected', note: 'declined' });
@@ -397,7 +394,15 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           break;
         }
         case 'setStatus':
-          await apiSend('POST', '/api/actions/tracker.setStatus', { params: { row: Number(rowParam(p.params)), state: String(p.params.state), ...(p.params.note ? { note: String(p.params.note) } : {}) } });
+          // The row the confirm named: after a reindex the server refuses (409) a number now holding another application.
+          await apiSend('POST', '/api/actions/tracker.setStatus', {
+            params: {
+              row: Number(rowParam(p.params)),
+              state: String(p.params.state),
+              ...(p.params.note ? { note: String(p.params.note) } : {}),
+              ...(shownRow ? { expectCompany: shownRow.company, expectRole: shownRow.role, expectReport: shownRow.report } : {}),
+            },
+          });
           await qc.invalidateQueries({ queryKey: ['tracker'] });
           break;
         case 'remember': {

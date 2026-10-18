@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { deriveModes } from '../../scripts/derive-mode-policies.js';
@@ -222,5 +223,30 @@ describe('evaluation sessions record the desired ask (R20-claude-L2-01)', () => 
 
   it('given an evaluate-class mode that never asks for a number, when it writes the observations log, then it is refused', () => {
     expect(matches('data/salary-observations.tsv', getModePolicy('triage')!.writeGlobs)).toBe(false);
+  });
+});
+
+describe('derive-mode-policies CLI', () => {
+  // Node realpaths the ESM entry for import.meta.url but argv[1] keeps the spelling typed, so a run through a symlinked
+  // checkout must still write the snapshot instead of exiting 0 having done nothing (R30-supervisor-X-01).
+  it('writes the snapshot when run through a symlinked checkout', () => {
+    const real = tempDir('derive-modes-');
+    const repo = path.join(real, 'repo');
+    const scripts = path.join(repo, 'custom', 'control-center', 'scripts');
+    fs.mkdirSync(scripts, { recursive: true });
+    fs.copyFileSync(path.resolve(__dirname, '../../scripts/derive-mode-policies.ts'), path.join(scripts, 'derive-mode-policies.ts'));
+    fs.mkdirSync(path.join(repo, 'lib'));
+    fs.copyFileSync(path.join(DEFAULT_CODE_ROOT, 'lib', 'is-main-module.mjs'), path.join(repo, 'lib', 'is-main-module.mjs'));
+    fs.mkdirSync(path.join(repo, 'modes'));
+    fs.writeFileSync(path.join(repo, 'modes', 'demo.md'), '# Demo mode\n');
+    const link = path.join(real, 'link');
+    fs.symlinkSync(repo, link);
+    // tsx keeps a compile cache under TMPDIR; inside the temp dir it goes with it.
+    const tsx = path.resolve(__dirname, '../../node_modules/tsx/dist/cli.mjs');
+    const r = spawnSync(process.execPath, [tsx, path.join(link, 'custom', 'control-center', 'scripts', 'derive-mode-policies.ts')], { cwd: real, encoding: 'utf8', env: { ...process.env, TMPDIR: real } });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('wrote 1 modes');
+    const out = JSON.parse(fs.readFileSync(path.join(repo, 'custom', 'control-center', 'server', 'claude', 'modes.generated.json'), 'utf8'));
+    expect(out).toEqual([{ id: 'demo', file: 'modes/demo.md', title: 'Demo mode', scripts: [], paths: [] }]);
   });
 });

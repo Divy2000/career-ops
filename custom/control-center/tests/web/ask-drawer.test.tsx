@@ -673,6 +673,55 @@ describe('Ask drawer: setStatus names its row and shows the note it writes (R17-
   });
 });
 
+describe('Ask drawer: setStatus carries the identity of the row the confirm named (R30-feat-c-L2-01c)', () => {
+  const TRACKER = { kind: 'ok', path: 'data/applications.md', etag: 'e', rows: [{ num: 1, date: '2026-10-01', company: 'Acme', role: 'Engineer', report: 7 }] };
+  let posts: Array<{ url: string; body: unknown }>;
+  let answer: () => Response;
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  beforeEach(async () => {
+    posts = [];
+    answer = () => json({ result: 'ok' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          posts.push({ url, body: JSON.parse(String(init.body)) });
+          return answer();
+        }
+        if (url === '/api/tracker') return json(TRACKER);
+        return json([]);
+      }),
+    );
+    await remountDrawer();
+    // The confirm names the row from the loaded tracker, so it has to be loaded before the proposal is reviewed.
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const bodyButton = (name: string) => [...document.body.querySelectorAll('button')].find((b) => b.textContent?.trim() === name);
+  const approve = async () => {
+    await act(async () => emitEnvelope!('act', { action: 'setStatus', params: { row: 1, state: 'Applied' } }, 1));
+    const item = host.querySelector<HTMLLIElement>('li.proposal')!;
+    await act(async () => bodyButton('Review and run')!.click());
+    await until(() => document.body.querySelector('.dialog')?.textContent?.includes('Acme'), 'the confirm naming Acme');
+    await act(async () => bodyButton('Do it')!.click());
+    return item;
+  };
+
+  it('sends the company, role and report of the row the confirm showed, so a reindex cannot move the write onto another row', async () => {
+    const item = await approve();
+    expect(posts).toEqual([{ url: '/api/actions/tracker.setStatus', body: { params: { row: 1, state: 'Applied', expectCompany: 'Acme', expectRole: 'Engineer', expectReport: 7 } } }]);
+    expect(item.dataset.proposalState).toBe('done');
+  });
+
+  it('a 409 because another row now sits under that number fails the proposal with the server message', async () => {
+    answer = () => json({ error: 'Row #1 now holds Globex (Designer), not the row you picked. Reload the tracker.' }, 409);
+    const item = await approve();
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Row #1 now holds Globex (Designer)');
+  });
+});
+
 describe('Ask drawer: evaluating every posting at a company (SW7-web-a-03)', () => {
   let posts: Array<{ url: string; body: unknown }>;
   const row = (url: string, company: string, done = false) => ({ url, company, role: 'Engineer', location: null, compensation: null, done, section: done ? 'done' : 'pending', postedAt: null, rank: null, rankReason: null, note: null, firstSeen: null, source: 'manual', seniority: null, line: 1 });
