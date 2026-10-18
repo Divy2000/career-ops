@@ -21,8 +21,11 @@ random operation sequences.
    holds the Web Lock, reads and replaces it (localStorage, or this tab's copy when storage is blocked). Every read put
    in the query cache carries `ownAt`, the counter when that read was asked for (for a write's answer or refusal: the
    counter it was answered at).
-6. **If-Match is a pure function of (cached read, record).** A read is behind only this browser when an own write
-   since it (counter above `ownAt`) was sent against the read's version and no later own write was sent against a
+6. **If-Match is a pure function of (base read, record).** The base read is the cached read when the save starts,
+   the one its patch was made from; the record is read when the write holds the Web Lock. A read the cache gets in
+   between (a refusal's current values, a refetch) never becomes the base of a patch made before it, so a save queued
+   behind a `settings-changed` refusal is refused too. (R37-feat-c-L1-01) A read is behind only this browser when an
+   own write since it (counter above `ownAt`) was sent against the read's version and no later own write was sent against a
    version other than the one its predecessor left; it is then sent against the latest own write's version. Any other
    read is sent against its own version, so a change made elsewhere that a sibling tab wrote on top of is still
    refused for a tab that never showed it. Versions are content hashes and repeat (A-B-A, a deleted or restored file),

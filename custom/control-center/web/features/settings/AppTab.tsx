@@ -92,11 +92,15 @@ const ifMatchFor = (read: VersionedRead | undefined, own: OwnWrites): string | u
 /** A write's answer: the settings it left, or why it was refused, each as a read tagged with the counter it was answered at. */
 type WriteAnswer = { ok: true; read: VersionedRead } | { ok: false; error: unknown; ownAt: number | undefined };
 
-const queueWrite = (patch: Partial<AppSettings>, reset: boolean, lastRead: () => VersionedRead | undefined): Promise<WriteAnswer> => {
+/**
+ * `base` is the read the patch was made from, taken when the save starts: a read the cache gets later (a refusal's
+ * current values, a refetch) never showed the user what this patch keeps, so it must not become its version.
+ */
+const queueWrite = (patch: Partial<AppSettings>, reset: boolean, base: VersionedRead | undefined): Promise<WriteAnswer> => {
   const url = reset ? '/api/settings/app?reset=1' : '/api/settings/app';
   const send = async (): Promise<WriteAnswer> => {
     const own = readOwn();
-    const ifMatch = ifMatchFor(lastRead(), own);
+    const ifMatch = ifMatchFor(base, own);
     try {
       const written = await apiSend<Written>('PUT', url, patch, ifMatch === undefined ? {} : { 'if-match': ifMatch });
       if (!written.etag) return { ok: true, read: { ...written, problem: null } };
@@ -141,7 +145,7 @@ export function useSaveSettings() {
     setUnanswered([...unanswered, patch]);
     let answer: WriteAnswer;
     try {
-      answer = await queueWrite(patch, reset, () => qc.getQueryData<VersionedRead>(SETTINGS_KEY));
+      answer = await queueWrite(patch, reset, qc.getQueryData<VersionedRead>(SETTINGS_KEY));
       // Taken: the written settings. Changed elsewhere: the latest values, for the user to check and save again (the
       // fields' drafts are kept). A read started before this answer may land after it, so it is dropped first.
       const refusal = answer.ok ? null : refusalOf(answer.error);
