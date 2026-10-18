@@ -3,6 +3,7 @@
 // number does not list the deleted row's sessions (R31-feat-c-L2-01b).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeTestApp, type TestApp } from '../helpers/app.js';
+import { runsEnded } from '../helpers/runs.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -10,6 +11,8 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await t.close();
+  // Each session started a detached run: removing the data root while one still writes its folder fails (ENOTEMPTY).
+  await runsEnded(t.cfg.dataRoot);
 });
 
 async function startedTarget(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
