@@ -329,3 +329,13 @@ test('specsWithoutTmpCheck lists a spec whose helpers import each other in a cyc
     'cycle-then-tmp.spec.mjs': "import './cycle-a.mjs';\nimport '../../test-support/tmp.mjs';\n",
   }), ['cycle.spec.mjs']);
 });
+
+test('specsWithoutTmpCheck lists a spec whose only mention of tmp.mjs is an import line inside a template string, while quotes in a regex and comment openers in a string hide no real import (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'template.spec.mjs': `import { test } from 'node:test';\nconst fixture = \`\n${tmpImport}\n\`;\n`,
+    'nested-template.spec.mjs': `const fixture = \`a \${\`b\`} \${{ x: 1 }.x}\n${tmpImport}\n\`;\n`,
+    'after-template.spec.mjs': `const fixture = \`\${'}'}\`;\nconst quote = /["'\`]/;\n${tmpImport}\n`,
+    'glob-string.spec.mjs': `const glob = '**/*.spec.mjs';\n${tmpImport}\nconst end = '*/';\n`,
+  }), ['nested-template.spec.mjs', 'template.spec.mjs']);
+});
