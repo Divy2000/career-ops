@@ -11,6 +11,17 @@ describe('summarizeDigest', () => {
     expect(summarizeDigest(body)[0]).toEqual([{ text: 'H-1B lottery is now wage-weighted (final rule published 2025-12-29).', bold: true }]);
   });
 
+  it('keeps the content after a bold label that is not a headline (R33-shared-comp-L2-01)', () => {
+    const body = '- **What changed:** USCIS raised the H-1B petition fee to $100,000. More text.\n- **Effective date:** 2026-11-01.\n- **USCIS** raised the fee for new petitions. Later text.\n- **H-1B fee:** $100,000 for petitions filed from abroad.';
+    expect(lines(body)).toEqual([
+      'What changed: USCIS raised the H-1B petition fee to $100,000.',
+      'Effective date: 2026-11-01.',
+      'USCIS raised the fee for new petitions.',
+      'H-1B fee: $100,000 for petitions filed from abroad.',
+    ]);
+    expect(summarizeDigest(body)[1]).toEqual([{ text: 'Effective date:', bold: true }, { text: ' 2026-11-01.' }]);
+  });
+
   it('keeps the first sentence of a bullet without a bold lead', () => {
     expect(lines('- Proposed rule on a new petition fee published for comment. Nothing else changes.\n* Agency page updated; premium unchanged.')).toEqual(['Proposed rule on a new petition fee published for comment.', 'Agency page updated; premium unchanged.']);
   });

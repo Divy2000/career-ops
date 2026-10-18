@@ -166,9 +166,12 @@ function collectDefinitions(node: { type: string; identifier?: string; url?: str
   return defs;
 }
 
+/** A bold lead stands alone only as a full sentence; a label ("Effective date:", "USCIS") needs the text after it. */
+const isHeadline = (lead: DigestSpan[]): boolean => /[.!?]["')\]\u2019\u201d]*$/u.test(spansText(lead));
+
 /**
- * Compact highlights from a policy digest section: for each top-level bullet its bold lead, or else its first sentence,
- * clipped on rendered text. The full digest lives on Sponsorship.
+ * Compact highlights from a policy digest section: for each top-level bullet its bold lead when that is a sentence, or
+ * else its first sentence, clipped on rendered text. The full digest lives on Sponsorship.
  */
 export function summarizeDigest(body: string, max = 4): DigestSpan[][] {
   const tree = parser.parse(body);
@@ -184,9 +187,9 @@ export function summarizeDigest(body: string, max = 4): DigestSpan[][] {
     const lead = first?.type === 'strong' ? (() => {
       const l: DigestSpan[] = [];
       flatten([first], undefined, undefined, l, defs);
-      return l;
+      return tidy(l);
     })() : null;
-    const line = clip(tidy(lead ?? firstSentence(tidy(spans))));
+    const line = clip(tidy(lead && isHeadline(lead) ? lead : firstSentence(tidy(spans))));
     if (line.length === 0) continue;
     out.push(line);
     if (out.length === max) break;
