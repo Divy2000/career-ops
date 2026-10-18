@@ -33,6 +33,8 @@ const ALERTS = path.join(DATA, 'data/immigration/company-alerts.tsv');
 const TIER_CACHE = path.join(DATA, 'data/immigration/sponsor-tiers.json');
 const OUT = path.join(DATA, 'data/shortlist.md');
 const CHECK = path.join(CODE, 'plugins/h1b-sponsor/check.mjs');
+// check.mjs defaults its lookup cache to the checkout, which is not the data root when CAREER_OPS_ROOT points elsewhere.
+const H1B_CACHE = path.join(DATA, 'data/cache/h1b');
 const TIER_TTL_DAYS = 30;
 
 function arg(args, name, fallback) {
@@ -45,7 +47,7 @@ function arg(args, name, fallback) {
 }
 
 async function checkName(name) {
-  const { stdout } = await run('node', [CHECK, name, '--json'], { cwd: CODE, timeout: 60000 });
+  const { stdout } = await run('node', [CHECK, name, '--json', '--cache-dir', H1B_CACHE], { cwd: CODE, timeout: 60000 });
   const res = JSON.parse(stdout);
   return { tier: res.found ? res.friendlinessTier : 'unknown', matched: res.displayName ?? null };
 }

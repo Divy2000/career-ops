@@ -10,6 +10,7 @@ import { rootEnv } from '../../test-support/root-env.mjs';
 import { formatRankSegment } from '../../../rank-pipeline.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
 import { localToday } from '../../../lib/local-today.mjs';
+import { cacheKey } from '../../../plugins/h1b-sponsor/lib/cache.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SHORTLIST = path.join(REPO, 'custom', 'pipeline', 'shortlist.mjs');
@@ -559,4 +560,30 @@ syncBuiltinESMExports();
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(path.join(root, 'data', 'immigration')).filter((f) => f.includes('.tmp-')), []);
+});
+
+// ---- H-1B lookup cache follows the data root (R31-tests-custom-X-01) ----
+
+test('a tier lookup caches its H-1B answer under the data root, never in the checkout data/cache/h1b (R31-tests-custom-X-01)', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ results: [] }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const root = rankedRoot();
+  // A name no real cache holds, so a leftover entry can only have come from this run.
+  const company = `Shortlist Cache Probe ${process.pid}`;
+  fs.writeFileSync(path.join(root, 'data', 'pipeline.md'), `# Pipeline\n\n## Pending\n\n- [ ] https://jobs.example.com/1 | ${company} | Backend Engineer | Remote | ${formatRankSegment(4.0, 'fit')}\n`);
+  const entry = `${cacheKey(company)}.json`;
+  try {
+    const child = spawn(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root, { H1B_API_BASE: `http://127.0.0.1:${server.address().port}` }), stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    child.stderr.setEncoding('utf8').on('data', (d) => { err += d; });
+    assert.equal(await new Promise((r) => child.on('exit', r)), 0, err);
+    assert.ok(fs.existsSync(path.join(root, 'data', 'cache', 'h1b', entry)), 'the lookup is cached under the data root');
+    assert.equal(fs.existsSync(path.join(REPO, 'data', 'cache', 'h1b', entry)), false, 'the checkout data/cache/h1b is untouched');
+  } finally {
+    server.close();
+    fs.rmSync(path.join(REPO, 'data', 'cache', 'h1b', entry), { force: true });
+  }
 });
