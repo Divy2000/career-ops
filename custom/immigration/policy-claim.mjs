@@ -3,14 +3,16 @@
 // acknowledged only when a pass ends done, and both append the same rows to policy-changes.tsv and company-alerts.tsv
 // and a digest section. A pass takes the queue by holding data/immigration/.policy-pass.claim:
 //   { owner, batch, at }  owner is session:<id>, daily:<pid>, or starting:<nonce> while a session is being created;
-//   a starting claim also names the process creating it: { pid, pidStart } (its pid and start time in seconds since the
-//   epoch, read under a pinned TZ and locale: ps text depends on the caller's zone, and the Control Center and the
-//   launchd daily job run in different ones; an earlier claim's string pidStart holds when it is that start in some zone).
+//   a starting claim also names the process creating it: { pid, pidStart, pidAt } (its pid, when it wrote them, and its
+//   start time in seconds since the epoch, read under a pinned TZ and locale: ps text depends on the caller's zone, and
+//   the Control Center and the launchd daily job run in different ones; an earlier claim's string pidStart holds when
+//   it is that start in some zone).
 // A claim whose owner is gone is stale and taken over: a session that no longer exists or has a final status
 // (done, error, cancelled; a paused awaiting_user pass keeps it), a daily job whose pid is dead, no longer the one
 // .run-daily.pid names or no longer bash running run-daily.sh, or a start whose process has exited (a start can wait on a Keychain prompt
 // for as long as it is left open, so no time limit applies while that process runs; an earlier-format claim, whose
-// zone-ambiguous start can match a reused pid by chance, holds for at most a day). Every read-decide-write of the
+// zone-ambiguous start can match a reused pid by chance, or one whose writer could not read its own start time, holds
+// for at most a day). Every read-decide-write of the
 // claim runs under a short mkdir lock, so two claimants never both win.
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -104,7 +106,13 @@ export function ownerLive(dataRoot, claim, now = Date.now()) {
       return Math.abs(offset) <= 14 * 3600 && offset % 900 === 0 && Number.isFinite(at) && now - at < LEGACY_START_MS;
     }
     // Only ps naming another start time is proof the pid was reused; a ps that cannot run says nothing.
-    return started === undefined || typeof claim.pidStart !== 'number' || started === claim.pidStart;
+    if (started === undefined) return true;
+    if (typeof claim.pidStart === 'number') return started === claim.pidStart;
+    // Its writer could not read its own start time. A process started after the claim was written cannot be that
+    // writer; one started before may be, but a reused pid matches that too, so it holds for a day, not for good. A
+    // retag keeps the claim's at, so the time the writer named itself is pidAt (an earlier claim has only at).
+    const at = Date.parse(claim.pidAt ?? claim.at);
+    return started !== null && Number.isFinite(at) && started * 1000 <= at && now - at < LEGACY_START_MS;
   }
   return false;
 }
@@ -159,10 +167,10 @@ function lstartSeconds(text) {
 }
 
 let ownStart;
-/** This process, as a starting claim names it. */
+/** This process, as a starting claim names it; a start time ps could not give is asked for again next time. */
 function self() {
-  if (ownStart === undefined) ownStart = processStart(process.pid) ?? null;
-  return { pid: process.pid, pidStart: ownStart };
+  if (typeof ownStart !== 'number') ownStart = processStart(process.pid);
+  return { pid: process.pid, pidStart: ownStart ?? null, pidAt: new Date().toISOString() };
 }
 
 /**
