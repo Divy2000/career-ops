@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ServerConfig } from '../config.js';
 import { BusyError, liveWorkOn, ModeRefusedError, NotFoundError, OutdatedSessionError, type SessionManager } from '../claude/manager.js';
-import { englishModeOf, listLaunchableModeIds } from '../claude/modes.js';
+import { englishModeOf, listLaunchableModeIds, sessionRefusal } from '../claude/modes.js';
 import { isReportGated } from '../claude/honesty.js';
 import type { SessionMeta } from '../claude/sessions.js';
 import { readPipeline } from '../domains/pipeline.js';
@@ -97,6 +97,16 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return true;
   };
   const LOST_CLAIM = 'another AI policy pass took over the queued items while this one was starting, so it was cancelled. Try again once that pass finishes.';
+  // The claim lock can be held past its wait (a claimant that died holding it counts as stale only later).
+  const claimBusy = (err: unknown) => `the AI policy pass claim could not be handed over (${(err as Error).message}), so it was cancelled. Try again in a minute.`;
+  /** Runs a claim cleanup without letting its own throw hide the error or answer that ended the start. */
+  const bestEffort = (what: string, fn: () => unknown) => {
+    try {
+      fn();
+    } catch (err) {
+      app.log.warn({ err }, `could not ${what}; a starting claim this server cannot release holds the AI policy pass until it restarts`);
+    }
+  };
   const release = (sessionId: string) => {
     try {
       policyClaim.release(opts.cfg.dataRoot, `session:${sessionId}`);
@@ -295,7 +305,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       try {
         pass = await preparePolicyPass(opts.cfg.codeRoot, opts.cfg.dataRoot);
       } catch (err) {
-        policyClaim.release(opts.cfg.dataRoot, starting);
+        const claimed = starting;
+        bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, claimed));
         if (err instanceof PendingUnreadableError) return reply.code(422).send({ error: err.message });
         if (err instanceof PolicyQueueBusyError) return reply.code(409).send({ error: `Not started: ${err.message}.` });
         throw err;
@@ -312,10 +323,25 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
         return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}` });
       }
       const meta = await manager.start({ ...parsed.data, prompt: userPrompt, model: chosenModel, reportNum: null, policyBatch: pass?.batch ?? null });
-      if (starting && !handOver(starting, meta)) return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}`, session: manager.cancel(meta.id) });
+      if (starting) {
+        let handed: boolean;
+        try {
+          handed = handOver(starting, meta);
+        } catch (err) {
+          // The session already runs: it is cancelled as on a lost claim, so it does not bill a pass that holds no claim.
+          app.log.warn({ err, sessionId: meta.id }, 'could not hand the AI policy pass claim over to its session');
+          const session = manager.cancel(meta.id);
+          const claimed = starting;
+          bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, claimed));
+          releaseOnceExited(meta.id, meta.turns.at(-1)?.runId);
+          return reply.code(409).send({ error: `Not started: ${claimBusy(err)}`, session });
+        }
+        if (!handed) return reply.code(409).send({ error: `Not started: ${LOST_CLAIM}`, session: manager.cancel(meta.id) });
+      }
       return reply.code(202).send(meta);
     } catch (err) {
-      if (starting) policyClaim.release(opts.cfg.dataRoot, starting);
+      const claimed = starting;
+      if (claimed) bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, claimed));
       dropBatch();
       if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
       throw err;
@@ -329,6 +355,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (!manager.effectivePolicy(parsed.data.mode)) return reply.code(404).send({ error: `unknown mode ${parsed.data.mode}` });
     const noReplies = replyWatchSessionRefused(opts.cfg.dataRoot, parsed.data.mode);
     if (noReplies) return reply.code(422).send({ error: noReplies });
+    // Fan-out is Batch evaluate: every other mode's start guards (Process inbox, the policy-pass claim, the one check
+    // per company) live in POST /api/sessions only, so a fan-out of one would run beside the session they hold back.
+    const refusal = sessionRefusal(parsed.data.mode);
+    if (refusal) return reply.code(422).send({ error: refusal });
+    if (!isReportGated(parsed.data.mode)) return reply.code(400).send({ error: `a fan-out only evaluates postings; ${parsed.data.mode} is not a posting evaluation mode` });
     const inboxHeld = processInboxHolds(parsed.data.mode, parsed.data.urls);
     if (inboxHeld) return reply.code(409).send({ error: `Not started: ${inboxHeld}` });
     try {
@@ -406,7 +437,7 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const starting = `starting:${crypto.randomUUID()}`;
     const busy = claimForTurn(req.params.id, starting, `session:${req.params.id}`);
     if (busy) return reply.code(409).send({ error: busy });
-    const giveBack = () => policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`);
+    const giveBack = () => bestEffort('give the AI policy pass claim back to the forked session', () => policyClaim.retag(opts.cfg.dataRoot, starting, `session:${req.params.id}`));
     return mutate(reply, async () => {
       let forked;
       // The fork may wait for a cancelled source to finish before it creates the copy: the source counts as starting
@@ -435,9 +466,20 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       // The source gives its batch up only once the fork holds the claim.
       const batch = manager.read(req.params.id)?.policyBatch ?? null;
       if (batch !== null) manager.store.setPolicyBatch(forked.id, batch);
-      if (!handOver(starting, forked)) {
+      let handed: boolean | { err: unknown };
+      try {
+        handed = handOver(starting, forked);
+      } catch (err) {
+        app.log.warn({ err, sessionId: forked.id }, 'could not hand the AI policy pass claim over to its fork');
+        handed = { err };
+      }
+      if (handed !== true) {
         if (batch !== null) manager.store.setPolicyBatch(forked.id, null);
-        return reply.code(409).send({ error: `Not forked: ${LOST_CLAIM}`, session: manager.cancel(forked.id) });
+        const session = manager.cancel(forked.id);
+        if (handed === false) return reply.code(409).send({ error: `Not forked: ${LOST_CLAIM}`, session });
+        // The fork never held the pass: the claim and the batch stay with the paused source.
+        giveBack();
+        return reply.code(409).send({ error: `Not forked: ${claimBusy(handed.err)}`, session });
       }
       if (batch !== null) manager.store.setPolicyBatch(req.params.id, null);
       return reply.code(202).send(manager.read(forked.id) ?? forked);
