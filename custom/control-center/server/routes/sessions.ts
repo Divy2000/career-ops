@@ -377,6 +377,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
       if (claimed) bestEffort('release the starting AI policy pass claim', () => policyClaim.release(opts.cfg.dataRoot, claimed));
       dropBatch();
       if (err instanceof ModeRefusedError) return reply.code(422).send({ error: err.message });
+      // Another start of the posting (here or in another server process) holds its claim, or recorded its session first.
+      if (err instanceof BusyError) return reply.code(409).send({ error: err.message });
       throw err;
     }
   });

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import type { ServerConfig } from '../config.js';
 import { pidAlive, type Runner } from '../runner/runner.js';
-import { createWhole, processStartTime, readOrNull, removeIf, UNREADABLE_LOCK_GRACE_MS, type ProcessStart } from '../../supervisor/instance-lock.js';
+import { postingClaimFile, processClaimHeld, takeProcessClaim } from './process-claim.js';
 import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
@@ -335,56 +335,7 @@ export function printedReservation(output: string): number[] {
  * marks it running): two server processes on one data root (blue/green) would otherwise both start a paid turn on it.
  */
 const TURN_CLAIM_FILE = 'turn.claim';
-let ownStart: ProcessStart | undefined;
-/** Held while a process replaces a stale turn claim; it takes milliseconds, so one left this old is a crashed holder's. */
-const TURN_CLAIM_REPLACE_FILE = 'turn.claim.replace';
-
-/** The replacement lock beside a session's turn claim, or null while another process holds it. Returns its release. */
-function lockTurnClaimReplace(dir: string, text: string): (() => void) | null {
-  const file = path.join(dir, TURN_CLAIM_REPLACE_FILE);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (createWhole(file, text)) return () => removeIf(file, text);
-    const seen = readOrNull(file);
-    if (seen === null) continue;
-    let age: number;
-    try {
-      age = Date.now() - fs.statSync(file).mtimeMs;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw err;
-    }
-    if (age < UNREADABLE_LOCK_GRACE_MS) return null;
-    removeIf(file, seen);
-  }
-  return null;
-}
-
-/**
- * Whether the process a turn claim names is gone: dead or a reused PID. A live holder keeps its claim however long it
- * prepares (a slow token read), since a peer starting the turn beside it would run two turns, and so does one ps
- * cannot date or that recorded no start of its own. A claim cut short is gone once the unreadable grace has passed.
- */
-export function turnClaimGone(file: string, text: string, startOf: (pid: number) => ProcessStart = processStartTime): boolean {
-  let holder: { pid?: unknown; start?: unknown; at?: unknown };
-  try {
-    holder = JSON.parse(text) as typeof holder;
-  } catch {
-    return unreadableClaimGone(file);
-  }
-  if (!Number.isInteger(holder.pid) || (holder.pid as number) <= 0 || typeof holder.at !== 'number') return unreadableClaimGone(file);
-  const start = startOf(holder.pid as number);
-  if (start === null) return true;
-  // A holder that runs but whose start ps cannot tell is held: freeing a live one would start a second paid turn.
-  if (start === 'unknown') return false;
-  // Only a start that differs proves the PID reused; a live holder that recorded none keeps its claim.
-  return typeof holder.start === 'number' && start !== holder.start;
-}
-
-/** A claim with no readable holder is gone once the unreadable grace has passed, or once its holder removed it. */
-function unreadableClaimGone(file: string): boolean {
-  const st = fs.statSync(file, { throwIfNoEntry: false });
-  return st === undefined || Date.now() - st.mtimeMs >= UNREADABLE_LOCK_GRACE_MS;
-}
+export { turnClaimGone } from './process-claim.js';
 
 export interface ManagerDeps {
   readToken: TokenReader;
@@ -416,6 +367,8 @@ export class SessionManager {
   private refreshing = new Set<string>();
   /** The postings (evaluation class and postingKey) a fan-out or a replayed original request is starting right now, before their runs exist. */
   private fanningOut = new Set<string>();
+  /** The postings a fan-out holding their claim is passing to start() right now: start() takes the claim over. */
+  private handingOver = new Set<string>();
   /** Sessions cancelled while their first turn prepares (queued, no turn yet): the turn stops before it spawns. */
   private cancelledBeforeSpawn = new Set<string>();
   /** Sessions whose own turn is being prepared and not yet spawned (`sending` also holds a fork's source). */
@@ -482,6 +435,20 @@ export class SessionManager {
   /** `onCreated` hears of the session as soon as it is recorded, so a caller can settle it if the start then throws. */
   async start(input: StartInput, onCreated?: (meta: SessionMeta) => void): Promise<SessionMeta> {
     const policy = this.turnPolicy(input.mode);
+    const posting = postingKey(input.mode, input.target);
+    // Handed over synchronously by the fan-out that holds the claim and is making this call: nothing runs between.
+    const handed = posting !== null && this.handingOver.delete(`${evaluationClass(input.mode)}\0${posting}`);
+    // Claimed across server processes until the session is recorded and its turn running: two that both found the
+    // posting free would each start a paid evaluation of it.
+    const unclaim = handed ? () => {} : this.claimReplay({ mode: input.mode, target: input.target }, null);
+    try {
+      return await this.startTurn(input, policy, onCreated);
+    } finally {
+      unclaim();
+    }
+  }
+
+  private async startTurn(input: StartInput, policy: ModePolicy, onCreated?: (meta: SessionMeta) => void): Promise<SessionMeta> {
     const meta = this.store.create({ mode: input.mode, policyClass: policy.policyClass, target: input.target, model: input.model ?? null, reportNum: input.reportNum ?? null, policyBatch: input.policyBatch ?? null });
     onCreated?.(meta);
     return this.runTurn(meta, policy, input.prompt, { resume: false, fork: false, blacklistAllowed: input.blacklistAllowed, original: true });
@@ -595,13 +562,10 @@ export class SessionManager {
    */
   private claimTurn(id: string): () => void {
     const dir = this.store.guardDirOf(id);
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, TURN_CLAIM_FILE);
-    // Asked again until ps dates this process: a claim with no start of its own is never freed while the PID runs.
-    if (typeof ownStart !== 'number') ownStart = processStartTime(process.pid);
-    const text = JSON.stringify({ pid: process.pid, start: ownStart, at: Date.now(), nonce: crypto.randomUUID() });
-    const release = () => {
-      removeIf(file, text);
+    const unclaim = takeProcessClaim(path.join(dir, TURN_CLAIM_FILE));
+    if (!unclaim) throw new BusyError(`session ${id} is starting a turn in another server process`);
+    return () => {
+      unclaim();
       // A session another process deleted after it was read leaves no guard folder made only for this claim; one that
       // holds anything else is left as it is.
       if (this.store.read(id) !== null) return;
@@ -611,30 +575,11 @@ export class SessionManager {
         if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
       }
     };
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (createWhole(file, text)) return release;
-      const seen = readOrNull(file);
-      if (seen === null) continue;
-      if (!turnClaimGone(file, seen)) break;
-      // Replaced under a lock of its own: two processes replacing one stale claim at once could otherwise move aside the
-      // claim the other just took, and lose it when a third creates one meanwhile.
-      const unlock = lockTurnClaimReplace(dir, text);
-      if (!unlock) break;
-      try {
-        if (readOrNull(file) === seen) removeIf(file, seen);
-        if (createWhole(file, text)) return release;
-      } finally {
-        unlock();
-      }
-    }
-    throw new BusyError(`session ${id} is starting a turn in another server process`);
   }
 
   /** Whether a live process (this one or a peer) holds the session's turn claim: it is preparing a turn there. */
   private turnClaimHeld(id: string): boolean {
-    const file = path.join(this.store.guardDirOf(id), TURN_CLAIM_FILE);
-    const seen = readOrNull(file);
-    return seen !== null && !turnClaimGone(file, seen);
+    return processClaimHeld(path.join(this.store.guardDirOf(id), TURN_CLAIM_FILE));
   }
 
   /**
@@ -646,13 +591,14 @@ export class SessionManager {
     if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${meta.id} is ${meta.status}`);
     // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a new turn now
     // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
-    if (opts.finishing !== false && this.active.has(meta.id)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+    // Another server process may be the one stopping it (a blue/green handover), which this one does not track.
+    if (opts.finishing !== false && (this.active.has(meta.id) || this.lastRunStillGoing(meta))) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
   }
 
   /** Waits (up to RUN_END_WAIT_MS) for a session's ended turn to finish stopping and finalizing; refused when it does not. */
   private async untilFinished(id: string): Promise<void> {
     const deadline = Date.now() + RUN_END_WAIT_MS;
-    while (this.active.has(id)) {
+    while (this.active.has(id) || this.lastRunStillGoing(this.must(id))) {
       if (Date.now() > deadline) throw new BusyError(`session ${id} is still finishing its previous turn`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -663,15 +609,35 @@ export class SessionManager {
    * claimed (as a starting fan-out claims its URLs) until its turn is running, so no start slips in while it prepares.
    * `exceptId` is the session doing the replay, which does not count against itself. Returns the release.
    */
-  private claimReplay(meta: SessionMeta, exceptId: string | null = meta.id): () => void {
-    if (this.isStartingInBatch(meta.mode, meta.target)) throw new BusyError(meta.target.type === 'company' ? `another sponsorship check is already starting for ${meta.target.value?.trim()}` : `another evaluation is already starting ${meta.target.value}`);
-    const live = this.liveEvaluationFor(meta.mode, meta.target, exceptId ?? undefined);
-    if (live) throw new BusyError(`session ${live} is already ${liveWorkOn(meta.target)}`);
+  private claimReplay(meta: Pick<SessionMeta, 'mode' | 'target'> & { id?: string }, exceptId: string | null = meta.id ?? null): () => void {
     const posting = postingKey(meta.mode, meta.target);
     if (posting === null) return () => {};
-    const key = `${evaluationClass(meta.mode)}\0${posting}`;
+    const release = this.holdPosting(`${evaluationClass(meta.mode)}\0${posting}`);
+    if (!release) throw new BusyError(meta.target.type === 'company' ? `another sponsorship check is already starting for ${meta.target.value?.trim()}` : `another evaluation is already starting ${meta.target.value}`);
+    try {
+      // Checked under the claim: a peer's session recorded before it let its claim go is seen here.
+      const live = this.liveEvaluationFor(meta.mode, meta.target, exceptId ?? undefined);
+      if (live) throw new BusyError(`session ${live} is already ${liveWorkOn(meta.target)}`);
+    } catch (err) {
+      release();
+      throw err;
+    }
+    return release;
+  }
+
+  /**
+   * Claims a posting (its evaluation class and postingKey) for a start in this process, in memory and on disk so another
+   * server process on the same roots (blue/green) sees it too. Null while either holds it; returns the release.
+   */
+  private holdPosting(key: string): (() => void) | null {
+    if (this.fanningOut.has(key)) return null;
+    const unclaim = takeProcessClaim(postingClaimFile(this.cfg.guardRoot, key));
+    if (!unclaim) return null;
     this.fanningOut.add(key);
-    return () => this.fanningOut.delete(key);
+    return () => {
+      this.fanningOut.delete(key);
+      unclaim();
+    };
   }
 
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
@@ -680,33 +646,39 @@ export class SessionManager {
     // Each session gets a reserved report number for its posting's evaluation, which only a posting evaluation writes.
     if (!isReportGated(input.mode)) throw new ModeRefusedError(`a fan-out only evaluates postings; ${input.mode} is not a posting evaluation mode`);
     // A second evaluation of a posting a live session of the mode's class evaluates (one waiting for the user's reply
-    // too: the reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
+    // too: the reply finishes it), or another start is preparing, would write a second report and tracker row for it.
     const cls = evaluationClass(input.mode);
     const key = (url: string) => `${cls}\0${postingKey(input.mode, { type: 'url', value: url })}`;
-    const live = new Map<string, string>();
-    for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && this.isLive(m)) live.set(key(m.target.value), m.id);
-    const refused: SessionMeta[] = [];
-    const urls: string[] = [];
-    // Two spellings of one posting in this batch (a tracking param, a trailing slash) are one evaluation: the first starts.
-    const batch = new Map<string, string>();
-    for (const url of input.urls) {
-      const holder = live.get(key(url));
-      const twin = batch.get(key(url));
-      const why = holder ? `not started: session ${holder} is already evaluating ${url}` : twin ? `not started: ${twin} in this batch is the same posting` : this.fanningOut.has(key(url)) ? `not started: another batch evaluate is starting ${url}` : null;
-      if (why) refused.push(unstartedMeta(input.mode, { type: 'url', value: url }, input.model ?? null, why));
-      else {
-        urls.push(url);
-        batch.set(key(url), url);
-      }
-    }
-    if (urls.length === 0) return { sessions: refused, reserved: [] };
-    for (const url of urls) this.fanningOut.add(key(url));
+    const releases = new Map<string, () => void>();
     try {
+      // Two spellings of one posting in this batch (a tracking param, a trailing slash) are one evaluation: the first starts.
+      const batch = new Map<string, string>();
+      const unclaimed = new Set<string>();
+      for (const url of input.urls) {
+        if (batch.has(key(url))) continue;
+        batch.set(key(url), url);
+        const release = this.holdPosting(key(url));
+        if (release) releases.set(url, release);
+        else unclaimed.add(url);
+      }
+      // Read under the claims: a peer's session recorded before it let its claim go is seen here.
+      const live = new Map<string, string>();
+      for (const m of this.store.list()) if (evaluationClass(m.mode) === cls && m.target.type === 'url' && m.target.value && this.isLive(m)) live.set(key(m.target.value), m.id);
+      const refused: SessionMeta[] = [];
+      const urls: string[] = [];
+      for (const url of input.urls) {
+        const holder = live.get(key(url));
+        const twin = batch.get(key(url));
+        const why = holder ? `not started: session ${holder} is already evaluating ${url}` : twin !== url ? `not started: ${twin} in this batch is the same posting` : unclaimed.has(url) ? `not started: another evaluation is already starting ${url}` : null;
+        if (why) refused.push(unstartedMeta(input.mode, { type: 'url', value: url }, input.model ?? null, why));
+        else urls.push(url);
+      }
+      if (urls.length === 0) return { sessions: refused, reserved: [] };
       // The i-th reserved number goes to the i-th session, so the refused ones come after the started ones.
       const out = await this.startFanOut({ ...input, urls });
       return { sessions: [...out.sessions, ...refused], reserved: out.reserved };
     } finally {
-      for (const url of urls) this.fanningOut.delete(key(url));
+      for (const release of releases.values()) release();
     }
   }
 
@@ -725,10 +697,14 @@ export class SessionManager {
           created = m;
           this.recordedReportNums([num]);
         };
+        // This fan-out holds the posting's claim: start() takes it over instead of being refused by it.
+        const posting = `${evaluationClass(input.mode)}\0${postingKey(input.mode, target)}`;
+        this.handingOver.add(posting);
         try {
           sessions.push(await this.start({ mode: input.mode, target, prompt: evaluatePrompt(url), model: input.model ?? null, reportNum: num }, recorded));
           handed.add(num);
         } catch (err) {
+          this.handingOver.delete(posting);
           // One URL that cannot start must not hide the ones that did: the caller keeps only the failed URLs for a retry.
           const message = (err as Error).message;
           const recorded = created as SessionMeta | null;
@@ -849,12 +825,20 @@ export class SessionManager {
    */
   private assertNotRunningElsewhere(meta: SessionMeta): void {
     if (meta.status === 'running') throw new BusyError(`session ${meta.id} is running`);
+    if (this.lastRunStillGoing(meta)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+  }
+
+  /**
+   * Whether the session's last turn has not ended and its run (in this process or another) has not either: a cancelled
+   * run keeps its Claude process until SIGKILL. Delete, reply and fork all refuse or wait on it.
+   */
+  private lastRunStillGoing(meta: SessionMeta): boolean {
     const turn = meta.turns.at(-1);
-    if (!turn || turn.endedAt !== null) return;
+    if (!turn || turn.endedAt !== null) return false;
     const run = this.runner.store.read(turn.runId);
-    if (run === null || run.endedAt !== null || this.runner.store.readExit(turn.runId) !== null) return;
+    if (run === null || run.endedAt !== null || this.runner.store.readExit(turn.runId) !== null) return false;
     // A cancelled run left by a stopped process is taken over here and settled, or followed until it exits.
-    if (run.status !== 'cancelled' || this.runner.ending(turn.runId)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+    return run.status !== 'cancelled' || this.runner.ending(turn.runId);
   }
 
   private async deleteClaimed(id: string): Promise<boolean> {
@@ -1960,7 +1944,7 @@ const LIVE_STATUSES = new Set<SessionMeta['status']>(['queued', 'running', 'awai
  * What a mode's duplicate guard compares: every report-gated mode (oferta, auto-pipeline, a localized oferta) writes the
  * posting's report and tracker row, so they are one class; any other mode is only a duplicate of itself.
  */
-function evaluationClass(mode: string): string {
+export function evaluationClass(mode: string): string {
   return isReportGated(mode) ? '\0report' : mode;
 }
 
@@ -1974,7 +1958,7 @@ function owesReport(meta: SessionMeta): boolean {
  * one), the saved JD a local:jds/ text target names (as finalize keys it), or the company a sponsorship check writes
  * data/immigration/companies/** for (by its company-file slug).
  */
-function postingKey(mode: string, target: SessionMeta['target']): string | null {
+export function postingKey(mode: string, target: SessionMeta['target']): string | null {
   if (target.type === 'url' && target.value) return `url\0${dedupUrlKey(target.value)}`;
   if (target.type === 'company' && mode === 'sponsorship-check') {
     if (target.value?.trim()) return `company\0${sponsorCheckCompany(target.value)}`;
