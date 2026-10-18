@@ -14,7 +14,16 @@ import { tempDir } from '../helpers/tmp.js';
 
 let t: TestApp;
 let repo: string;
-const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: repo, stdio: 'pipe' });
+// The host's global and system config (commit signing, a failing core.hooksPath) and any exported GIT_DIR, GIT_WORK_TREE
+// or GIT_INDEX_FILE would otherwise break the setup commit or send it to another repository.
+const LOCAL_VARS = execFileSync('git', ['rev-parse', '--local-env-vars'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+const gitEnv = (): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  for (const k of [...LOCAL_VARS, 'GIT_CONFIG_PARAMETERS']) delete env[k];
+  return env;
+};
+const git = (...args: string[]) =>
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd: repo, stdio: 'pipe', env: gitEnv() });
 beforeAll(async () => {
   repo = tempDir('cc-r22-wl-repo-');
   git('init', '-q');
@@ -26,7 +35,7 @@ beforeAll(async () => {
   t = await makeTestApp({ codeRoot: repo });
 });
 afterAll(async () => {
-  await t.close();
+  await t?.close();
 });
 const get = (url: string) => t.app.inject({ method: 'GET', url, headers: t.authed });
 
