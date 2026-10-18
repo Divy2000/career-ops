@@ -34,6 +34,18 @@ describe('evaluation honesty gate', () => {
     ]);
   });
 
+  it('counts a report that is a symlink to a file, as the reports/ index does, and still skips a folder (R34-reports-FC-01)', () => {
+    const root = copyFixtureRoot();
+    const before = snapshotReports(root);
+    const target = path.join(root, 'elsewhere.md');
+    fs.writeFileSync(target, '# Evaluation: Linked\n\n**Score:** 3.9/5\n\n## A) Role Summary\nx\n');
+    fs.symlinkSync(target, path.join(root, 'reports', '021-linked.md'));
+    fs.mkdirSync(path.join(root, 'reports', '022-folder.md'));
+    fs.mkdirSync(path.join(root, 'linked-dir'));
+    fs.symlinkSync(path.join(root, 'linked-dir'), path.join(root, 'reports', '023-dirlink.md'));
+    expect(detectNewReports(root, before)).toEqual([{ num: 21, file: '021-linked.md', score: 3.9 }]);
+  });
+
   it('credits a turn only with its own report: the reserved number when it has one, else a report in its own files log', () => {
     const found = [
       { num: 42, file: '042-acme.md', score: 4 },

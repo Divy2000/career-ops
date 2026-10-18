@@ -2,9 +2,7 @@
 // process exited cleanly, produced output and, for report-producing modes, a
 // new report appeared under reports/ (RESERVED sentinels ignored). A verdict
 // line alone is never trusted; the score is read from the new report header.
-import fs from 'node:fs';
-import path from 'node:path';
-import { isReservedReportFile, readReportFile, reportNumberOf } from '../domains/reports.js';
+import { listReportNames, readReportFile, reportNumberOf } from '../domains/reports.js';
 import { englishModeOf, type PolicyClass } from './modes.js';
 import type { EnvelopeKind } from './envelopes.js';
 import type { SessionStatus } from './sessions.js';
@@ -16,14 +14,7 @@ export interface NewReport {
 }
 
 export function snapshotReports(dataRoot: string): Set<string> {
-  try {
-    // Only files: a folder named like a report (a session that wrote reports/099-acme.md/jd.txt) is no report.
-    const entries = fs.readdirSync(path.join(dataRoot, 'reports'), { withFileTypes: true });
-    return new Set(entries.filter((e) => e.isFile() && !isReservedReportFile(e.name) && reportNumberOf(e.name) !== null).map((e) => e.name));
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Set();
-    throw err;
-  }
+  return new Set(listReportNames(dataRoot));
 }
 
 /** A report's header score; null when it has none or cannot be read (EACCES, gone again): it still counts as new. */
