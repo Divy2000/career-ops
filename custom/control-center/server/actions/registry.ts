@@ -1,5 +1,6 @@
 // Static action registry: the only way the client runs anything. Every entry
 // builds an argv array; the client never sends a command string.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -20,6 +21,8 @@ import { STATUS_NOTE_MAX } from '../../shared/tracker-status.js';
 import { writeTmpInput } from './tmp-inputs.js';
 import { replyWatchRefused } from '../domains/replyCandidates.js';
 import { heldReportNumsOf, SessionStore, sessionsDir } from '../claude/sessions.js';
+import { turnClaimGone } from '../claude/process-claim.js';
+import { processStartTime, readOrNull, removeIf, type ProcessStart } from '../../supervisor/instance-lock.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | 'pdf-index' | `immigration:${string}`;
 
@@ -167,37 +170,205 @@ function auditBaseline(dataRoot: string, runId: string): { json?: string; proble
  * Report numbers a session manager is reserving, or has reserved but no session record holds yet, per data root.
  * Release report numbers reads the session records to refuse a number a session holds, so it consults this too:
  * a fan-out records its sessions one at a time, and a re-reservation records its number after taking it.
+ *
+ * Every server process on the data root (blue/green) honours the others' too: each change is written to this
+ * process's hold file (reportNumHoldsDir), which a peer reads as long as this process is alive.
  */
-interface UnrecordedReservations {
-  taking: number;
-  nums: Set<number>;
+export class UnrecordedReservations {
+  readonly nums: Set<number>;
   /** Releases that passed the check and have not ended: a reservation waits for them, or one could free what it takes. */
-  releasing: Set<Promise<void>>;
+  readonly releasing: Set<Promise<void>>;
+  #taking = 0;
+  readonly #file: string;
+
+  constructor(dataRoot: string) {
+    this.#file = path.join(reportNumHoldsDir(dataRoot), `${process.pid}-${HOLDS_NONCE}.json`);
+    // Numbers are added only while taking, whose strict write already holds them all for a peer; each write is the
+    // whole state, so the next one that succeeds names them too.
+    this.nums = new WatchedSet<number>(() => this.#persist(false));
+    // A release a peer cannot see could free a number the peer is about to take, so it is refused unless written.
+    this.releasing = new WatchedSet<Promise<void>>((op) => this.#persist(op === 'add'));
+  }
+
+  get taking(): number {
+    return this.#taking;
+  }
+
+  set taking(value: number) {
+    const before = this.#taking;
+    this.#taking = value;
+    try {
+      this.#persist(value > before);
+    } catch (err) {
+      this.#taking = before;
+      throw err;
+    }
+  }
+
+  get file(): string {
+    return this.#file;
+  }
+
+  /**
+   * Writes this process's holds, or removes the file once nothing is held. A hold being added fails loudly when it
+   * cannot be written (strict), so nothing is reserved or released that a peer cannot see; a hold being dropped only
+   * warns, since a file left behind holds more, never less.
+   */
+  #persist(strict: boolean): void {
+    try {
+      if (this.#taking <= 0 && this.nums.size === 0 && this.releasing.size === 0) {
+        fs.rmSync(this.#file, { force: true });
+        return;
+      }
+      if (typeof ownStart !== 'number') ownStart = processStartTime(process.pid);
+      const hold: ReportNumHold = { pid: process.pid, start: ownStart, at: Date.now(), nonce: HOLDS_NONCE, taking: this.#taking > 0, releasing: this.releasing.size > 0, nums: [...this.nums] };
+      fs.mkdirSync(path.dirname(this.#file), { recursive: true });
+      const tmp = `${this.#file}.${crypto.randomUUID()}.tmp`;
+      try {
+        fs.writeFileSync(tmp, JSON.stringify(hold));
+        fs.renameSync(tmp, this.#file);
+      } catch (err) {
+        fs.rmSync(tmp, { force: true });
+        throw err;
+      }
+    } catch (err) {
+      if (strict) throw new Error(`Could not record the report-number hold in ${this.#file}: ${(err as Error).message}`, { cause: err });
+      console.warn(`[actions] could not update the report-number hold in ${this.#file}: ${(err as Error).message}`);
+    }
+  }
 }
+
+/** A Set that reports each change it makes, after making it; a change whose report throws is undone. */
+class WatchedSet<T> extends Set<T> {
+  readonly #changed: (op: 'add' | 'delete') => void;
+
+  constructor(changed: (op: 'add' | 'delete') => void) {
+    super();
+    this.#changed = changed;
+  }
+
+  override add(value: T): this {
+    if (this.has(value)) return this;
+    super.add(value);
+    try {
+      this.#changed('add');
+    } catch (err) {
+      super.delete(value);
+      throw err;
+    }
+    return this;
+  }
+
+  override delete(value: T): boolean {
+    if (!super.delete(value)) return false;
+    this.#changed('delete');
+    return true;
+  }
+
+  override clear(): void {
+    if (this.size === 0) return;
+    super.clear();
+    this.#changed('delete');
+  }
+}
+
+interface ReportNumHold {
+  pid: number;
+  start: ProcessStart;
+  at: number;
+  nonce: string;
+  taking: boolean;
+  releasing: boolean;
+  nums: number[];
+}
+
+const HOLDS_NONCE = crypto.randomUUID();
+let ownStart: ProcessStart | undefined;
 const unrecordedReservations = new Map<string, UnrecordedReservations>();
+
+/** Where every server process on the data root keeps its report-number holds, one file per process. */
+export function reportNumHoldsDir(dataRoot: string): string {
+  return path.join(path.dirname(sessionsDir(dataRoot)), 'report-num-holds');
+}
 
 export function unrecordedFor(dataRoot: string): UnrecordedReservations {
   const key = path.resolve(dataRoot);
   let entry = unrecordedReservations.get(key);
-  if (!entry) unrecordedReservations.set(key, (entry = { taking: 0, nums: new Set(), releasing: new Set() }));
+  if (!entry) unrecordedReservations.set(key, (entry = new UnrecordedReservations(key)));
   return entry;
 }
 
 /**
- * Marks a reservation as being taken and waits until no release is running (a forced release removes whatever
- * sentinel it finds). Marked before the wait, so a release asked for meanwhile is refused instead of passing it.
+ * What the other live server processes on the data root hold. A hold file that cannot be read, from a process still
+ * alive, might hold anything, so it counts as taking and releasing both. A dead holder's file is removed.
+ */
+function peerHolds(dataRoot: string): { taking: boolean; releasing: boolean; nums: number[] } {
+  const own = unrecordedFor(dataRoot).file;
+  const dir = reportNumHoldsDir(dataRoot);
+  const out = { taking: false, releasing: false, nums: [] as number[] };
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out;
+    throw err;
+  }
+  for (const name of names) {
+    const file = path.join(dir, name);
+    if (!name.endsWith('.json') || file === own) continue;
+    const text = readOrNull(file);
+    if (text === null) continue;
+    if (turnClaimGone(file, text)) {
+      removeIf(file, text);
+      continue;
+    }
+    let hold: Partial<ReportNumHold>;
+    try {
+      hold = JSON.parse(text) as Partial<ReportNumHold>;
+    } catch {
+      hold = {};
+    }
+    if (typeof hold.taking !== 'boolean' || typeof hold.releasing !== 'boolean' || !Array.isArray(hold.nums)) {
+      out.taking = out.releasing = true;
+      continue;
+    }
+    out.taking ||= hold.taking;
+    out.releasing ||= hold.releasing;
+    out.nums.push(...hold.nums.filter((n): n is number => Number.isInteger(n)));
+  }
+  return out;
+}
+
+const PEER_RELEASE_POLL_MS = 50;
+
+/**
+ * Marks a reservation as being taken and waits until no release is running here or in a peer process (a forced
+ * release removes whatever sentinel it finds). Marked before the wait, so a release asked for meanwhile is refused
+ * instead of passing it: a release marks itself before it reads the reservations, so one of the two sees the other.
  */
 export async function beginTakingReportNums(dataRoot: string): Promise<UnrecordedReservations> {
   const entry = unrecordedFor(dataRoot);
   entry.taking += 1;
-  while (entry.releasing.size > 0) await Promise.all(entry.releasing);
-  return entry;
+  try {
+    for (;;) {
+      if (entry.releasing.size > 0) await Promise.all(entry.releasing);
+      else if (peerHolds(dataRoot).releasing) await new Promise((r) => setTimeout(r, PEER_RELEASE_POLL_MS));
+      else return entry;
+    }
+  } catch (err) {
+    entry.taking -= 1;
+    throw err;
+  }
 }
 
-/** Whether a reservation is being taken now (its numbers unknown until it returns), and the numbers taken but not yet recorded. */
+/**
+ * Whether a reservation is being taken now (its numbers unknown until it returns), and the numbers taken but not yet
+ * recorded, by this process or a peer on the data root.
+ */
 function unrecordedReportNums(dataRoot: string): { taking: boolean; nums: number[] } {
   const entry = unrecordedReservations.get(path.resolve(dataRoot));
-  return { taking: (entry?.taking ?? 0) > 0, nums: entry ? [...entry.nums] : [] };
+  const peers = peerHolds(dataRoot);
+  return { taking: (entry?.taking ?? 0) > 0 || peers.taking, nums: [...(entry ? [...entry.nums] : []), ...peers.nums] };
 }
 
 /**
@@ -221,6 +392,22 @@ function heldReportNums(dataRoot: string, guardRoot: string): { held: Array<{ nu
     }
   }
   return { held };
+}
+
+/** Why releasing report numbers first..last could free a number a session holds or is about to, or null. */
+function releaseProblem(ctx: ActionContext, first: number, last: number): CheckProblem | null {
+  // A Batch evaluate or a reply taking a fresh number holds it before any session record says so.
+  const unrecorded = unrecordedReportNums(ctx.dataRoot);
+  if (unrecorded.taking) return { status: 409, error: 'A session is reserving report numbers right now, so one of these may be about to be its own. Nothing was released; try again in a moment.' };
+  const starting = [...new Set(unrecorded.nums.filter((n) => n >= first && n <= last))];
+  if (starting.length > 0) return { status: 409, error: `Report ${starting.join(', ')} is reserved for a session that is starting. Nothing was released; it releases its own number.` };
+  // Without the guard root the numbers sessions reserved themselves cannot be read, so any might be held.
+  if (!ctx.guardRoot) return { status: 409, error: 'The session guard folder is not known here, so a session may hold one of these numbers. Nothing was released.' };
+  const sessions = heldReportNums(ctx.dataRoot, ctx.guardRoot);
+  if ('unreadable' in sessions) return { status: 409, error: `Session ${sessions.unreadable} cannot be read (${sessions.why}), so it may hold one of these numbers. Nothing was released.` };
+  const held = sessions.held.filter((h) => h.num >= first && h.num <= last);
+  if (held.length === 0) return null;
+  return { status: 409, error: `Report ${held.map((h) => `${h.num} is held by session ${h.sessionId}`).join(', ')}. Cancel it if it is running, or delete it if it has ended; either releases its number.` };
 }
 
 const RUN_DAILY = 'custom/immigration/run-daily.sh';
@@ -429,29 +616,31 @@ export const ACTIONS: ActionDef[] = [
     // (Batch evaluate, or one awaiting a reply) would be handed out again: refused while any session holds it.
     check: (p, ctx) => {
       const [first, last] = p.range.includes('-') ? p.range.split('-').map(Number) : [Number(p.range), Number(p.range)];
-      // A Batch evaluate or a reply taking a fresh number holds it before any session record says so.
-      const unrecorded = unrecordedReportNums(ctx.dataRoot);
-      if (unrecorded.taking) return { status: 409, error: 'A session is reserving report numbers right now, so one of these may be about to be its own. Nothing was released; try again in a moment.' };
-      const starting = unrecorded.nums.filter((n) => n >= first! && n <= last!);
-      if (starting.length > 0) return { status: 409, error: `Report ${starting.join(', ')} is reserved for a session that is starting. Nothing was released; it releases its own number.` };
-      // Without the guard root the numbers sessions reserved themselves cannot be read, so any might be held.
-      if (!ctx.guardRoot) return { status: 409, error: 'The session guard folder is not known here, so a session may hold one of these numbers. Nothing was released.' };
-      const sessions = heldReportNums(ctx.dataRoot, ctx.guardRoot);
-      if ('unreadable' in sessions) return { status: 409, error: `Session ${sessions.unreadable} cannot be read (${sessions.why}), so it may hold one of these numbers. Nothing was released.` };
-      const held = sessions.held.filter((h) => h.num >= first! && h.num <= last!);
-      if (held.length === 0) {
-        // Until the release has run, a reservation waits rather than take a number it is about to remove.
-        const entry = unrecordedFor(ctx.dataRoot);
-        let ended!: () => void;
-        const releasing = new Promise<void>((resolve) => (ended = resolve));
+      // Marked running before the reservations are read: a peer process marks its reservation before it reads the
+      // releases, so of a release and a reservation starting at once, one sees the other. Until the release has run,
+      // a reservation waits rather than take a number it is about to remove.
+      const entry = unrecordedFor(ctx.dataRoot);
+      let ended!: () => void;
+      const releasing = new Promise<void>((resolve) => (ended = resolve));
+      const end = () => {
+        entry.releasing.delete(releasing);
+        ended();
+      };
+      try {
         entry.releasing.add(releasing);
-        (ctx.onSettled ??= []).push(() => {
-          entry.releasing.delete(releasing);
-          ended();
-        });
-        return null;
+      } catch (err) {
+        return { status: 409, error: `${(err as Error).message}. Nothing was released.` };
       }
-      return { status: 409, error: `Report ${held.map((h) => `${h.num} is held by session ${h.sessionId}`).join(', ')}. Cancel it if it is running, or delete it if it has ended; either releases its number.` };
+      let problem: CheckProblem | null;
+      try {
+        problem = releaseProblem(ctx, first!, last!);
+      } catch (err) {
+        end();
+        throw err;
+      }
+      if (problem) end();
+      else (ctx.onSettled ??= []).push(end);
+      return problem;
     },
     build: (p, ctx) => node(ctx, 'reserveReportNum', ['--release', p.range]),
   }),
