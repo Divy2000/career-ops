@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { gitTestEnv } from '../../test-support/git-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC = path.join(HERE, '..', 'sync.sh');
@@ -765,7 +766,7 @@ function driftGaps(globs) {
   const gaps = [];
   for (const glob of globs) {
     const sample = glob.replaceAll('**/', 'a/b/').replaceAll('**', 'a/b').replaceAll('*', 'x');
-    const tracked = spawnSync('git', ['-C', REPO_ROOT, 'ls-files', '--', `:(glob)${glob}`], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+    const tracked = spawnSync('git', ['-C', REPO_ROOT, 'ls-files', '--', `:(glob)${glob}`], { env: gitTestEnv(), encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
     const paths = [sample, ...tracked].filter((p) => p !== SECTION_GATED);
     const kept = protectedOf(paths);
     const open = paths.filter((p) => !kept.has(p));
@@ -954,7 +955,7 @@ test('the headless sync Claude runs with its autoupdater off, so a long session 
 
 test('a commit made in the sync worktree while the test suites run is never pushed: the run fails before any push (R31-scripts-b-X-03)', () => {
   const dir = tempDir('sync-verified-head-');
-  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  const env = gitTestEnv();
   const g = (cwd, ...args) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
   const origin = path.join(dir, 'origin.git');
   const wt = path.join(dir, 'wt');
