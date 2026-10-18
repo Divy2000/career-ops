@@ -43,10 +43,13 @@ describe('a Dev Chat revert beside a turn another server process holds (R33-mgr-
     try {
       const meta = idleSession(app);
       const peer = await heldByOtherProcess(app, meta.id, 'track.claim');
-      const refused = await revert(app, meta.id);
-      expect(refused.statusCode).toBe(409);
-      expect(refused.json().error).toMatch(/finishing/);
-      await peer.exit();
+      try {
+        const refused = await revert(app, meta.id);
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json().error).toMatch(/finishing/);
+      } finally {
+        await peer.exit();
+      }
       expect((await revert(app, meta.id)).statusCode).toBe(200);
     } finally {
       await app.close();
@@ -89,6 +92,29 @@ describe('a Dev Chat revert beside a turn another server process holds (R33-mgr-
     } finally {
       await app.close();
       await peer.close();
+      await runsEnded(dataRoot);
+    }
+  });
+});
+
+// R34-srv-core-L2-02: whileIdle read the store unguarded, so a malformed id or a torn record answered 500.
+describe('a Dev Chat revert of a session that cannot be read (R34-srv-core-L2-02)', () => {
+  it.each([
+    ['a malformed session id', (_app: App) => '../x'],
+    ['a torn meta.json', (app: App) => {
+      const meta = idleSession(app);
+      fs.writeFileSync(path.join(app.sessions.store.dirOf(meta.id), 'meta.json'), '{"id":');
+      return meta.id;
+    }],
+  ])('given %s, when a turn is reverted, then it answers 404 like the changes card', async (_name, sessionOf) => {
+    const dataRoot = copyFixtureRoot();
+    const app = await makeTestApp({ dataRoot });
+    try {
+      const res = await revert(app, sessionOf(app));
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error).toBe('no such session');
+    } finally {
+      await app.close();
       await runsEnded(dataRoot);
     }
   });

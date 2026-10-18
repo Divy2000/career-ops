@@ -53,30 +53,41 @@ describe('a cancelled turn another server process is still finalizing (R33-claud
       if (before === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
       else process.env.FAKE_CLAUDE_SCENARIO = before;
     };
-    const a = await makeTestApp({ dataRoot, guardRoot }, { exec: slowRelease });
-    const b = await makeTestApp({ dataRoot, guardRoot });
-    const meta = a.sessions.store.create({ mode, policyClass: a.sessions.effectivePolicy(mode)!.policyClass, target, model: null, reportNum: 7 });
-    a.sessions.store.setStatus(meta.id, 'done');
-    await a.sessions.send(meta.id, 'What is overdue?');
-    await until(() => a.sessions.read(meta.id)!.turns.length === 1, 'turn 1 to begin');
-    b.sessions.cancel(meta.id);
-    await until(() => releasing, 'A to block in its report-number release');
-    const seen = b.sessions.read(meta.id)!;
-    expect(seen.status).toBe('cancelled');
-    expect(seen.turns.at(-1)!.endedAt).toBeNull();
-    return { a, b, id: meta.id, open, dataRoot, restore };
+    let a: TestApp | undefined;
+    let b: TestApp | undefined;
+    try {
+      a = await makeTestApp({ dataRoot, guardRoot }, { exec: slowRelease });
+      b = await makeTestApp({ dataRoot, guardRoot });
+      const meta = a.sessions.store.create({ mode, policyClass: a.sessions.effectivePolicy(mode)!.policyClass, target, model: null, reportNum: 7 });
+      a.sessions.store.setStatus(meta.id, 'done');
+      await a.sessions.send(meta.id, 'What is overdue?');
+      await until(() => a!.sessions.read(meta.id)!.turns.length === 1, 'turn 1 to begin');
+      b.sessions.cancel(meta.id);
+      await until(() => releasing, 'A to block in its report-number release');
+      const seen = b.sessions.read(meta.id)!;
+      expect(seen.status).toBe('cancelled');
+      expect(seen.turns.at(-1)!.endedAt).toBeNull();
+      return { a, b, id: meta.id, open, dataRoot, restore };
+    } catch (err) {
+      // Nothing reaches the caller's teardown: undo the scenario env, the blocked finalize and the apps here.
+      await teardown({ a, b, open, dataRoot, restore });
+      throw err;
+    }
   }
 
-  async function teardown(s: { a: TestApp; b: TestApp; open: () => void; dataRoot: string; restore: () => void }): Promise<void> {
+  async function teardown(s: { a?: TestApp; b?: TestApp; open: () => void; dataRoot: string; restore: () => void }): Promise<void> {
     s.open();
     try {
-      await quiet(s.a);
-      await quiet(s.b);
+      if (s.a) await quiet(s.a);
+      if (s.b) await quiet(s.b);
     } finally {
-      await s.a.close();
-      await s.b.close();
-      s.restore();
-      await runsEnded(s.dataRoot);
+      try {
+        await s.a?.close();
+        await s.b?.close();
+      } finally {
+        s.restore();
+        await runsEnded(s.dataRoot);
+      }
     }
   }
 
@@ -146,23 +157,29 @@ describe('one tracker settles a turn across server processes (R33-claude-L1-01)'
     fs.writeFileSync(scenario, JSON.stringify({ events: [{ type: 'system', subtype: 'init', model: 'fake-model', tools: ['Read'] }, text('one '), ...Array.from({ length: 25 }, () => ({ __sleep: 100 })), text('two'), { type: 'result', subtype: 'success', result: 'one two', total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 1 }, num_turns: 1, is_error: false }] }));
     const before = process.env.FAKE_CLAUDE_SCENARIO;
     process.env.FAKE_CLAUDE_SCENARIO = scenario;
-    const a = await makeTestApp({ dataRoot, guardRoot });
-    const b = await makeTestApp({ dataRoot, guardRoot }, { deferReconcile: true });
+    let a: TestApp | undefined;
+    let b: TestApp | undefined;
     try {
+      a = await makeTestApp({ dataRoot, guardRoot });
+      b = await makeTestApp({ dataRoot, guardRoot }, { deferReconcile: true });
       const meta = a.sessions.store.create({ mode: 'advisor', policyClass: 'read-only', target: { type: 'none', value: null }, model: null });
       a.sessions.store.setStatus(meta.id, 'done');
       await a.sessions.send(meta.id, 'What is overdue?');
-      const deltas = () => a.sessions.store.readEvents(meta.id).filter((e) => e.event.type === 'text.delta').length;
+      const store = a.sessions.store;
+      const deltas = () => store.readEvents(meta.id).filter((e) => e.event.type === 'text.delta').length;
       await until(() => deltas() === 1, 'the first delta');
       b.activate();
       expect(b.sessions.isActive(meta.id)).toBe(true);
       await fn(a, b, meta.id, deltas);
     } finally {
-      await a.close();
-      await b.close();
-      if (before === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
-      else process.env.FAKE_CLAUDE_SCENARIO = before;
-      await runsEnded(dataRoot);
+      try {
+        await a?.close();
+        await b?.close();
+      } finally {
+        if (before === undefined) delete process.env.FAKE_CLAUDE_SCENARIO;
+        else process.env.FAKE_CLAUDE_SCENARIO = before;
+        await runsEnded(dataRoot);
+      }
     }
   }
 

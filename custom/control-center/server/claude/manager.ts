@@ -534,16 +534,16 @@ export class SessionManager {
    * Runs `fn` on the session's record while no turn can start, run or finish on it in any server process: under its turn
    * claim, after the idle check (a turn still finishing included) on the record read under that claim. `fn` runs
    * synchronously, so nothing starts between the check and its act. Throws BusyError for a busy session; returns undefined,
-   * without running `fn`, for one that no longer exists.
+   * without running `fn`, for one that no longer exists or cannot be read (a malformed id, a torn meta.json).
    */
   whileIdle<T>(id: string, fn: (meta: SessionMeta) => T): T | undefined {
-    const before = this.store.read(id);
+    const before = this.read(id);
     if (before === null) return undefined;
     this.assertIdle(before);
     const unclaimTurn = this.claimTurn(id);
     try {
       // Read again under the claim: another server process may have started a turn since.
-      const meta = this.store.read(id);
+      const meta = this.read(id);
       if (meta === null) return undefined;
       this.assertIdle(meta);
       return fn(meta);
@@ -942,22 +942,40 @@ export class SessionManager {
     if (!turn || !recorded) {
       // Already settled (a status other than running or queued) with no run to follow: nothing more to record.
       if (!live) return;
-      // Another server process (blue/green) is preparing its turn under the claim, or follows it: that process settles it.
-      if (this.turnClaimHeld(meta.id) || this.trackClaimHeld(meta.id)) return;
-      const reason = 'run record missing after a restart';
-      this.store.setStatus(meta.id, 'error', reason);
-      // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
-      if (meta.reportNum !== null) {
-        const since = this.ownedSince(meta, meta.reportNum);
-        this.store.setReportNum(meta.id, null);
-        void this.releaseReportNum(meta.reportNum, false, since);
-      }
-      this.emit(meta.id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
+      this.settleUnrecorded(meta.id, turn?.runId ?? null);
       return;
     }
     const policy = this.effectivePolicy(meta.mode) ?? policyForClass(meta.policyClass);
     const state = this.readTurnState(meta.id, turn.n);
-    this.track(meta.id, turn.n, turn.runId, policy, state, '');
+    this.track(meta.id, turn.n, turn.runId, policy, state, '', { spawned: false });
+  }
+
+  /**
+   * Ends in error a running session whose last turn (`runId`, null for none) has no run record, under its turn claim
+   * with no await inside: another server process (blue/green) preparing its turn holds that claim, one following it holds
+   * the track claim, and either settles it. The record is read again under the claim, so a session a peer started again
+   * or settled since it was listed is left as that peer recorded it.
+   */
+  private settleUnrecorded(id: string, runId: string | null): void {
+    const unclaimTurn = this.takeSessionClaim(id, TURN_CLAIM_FILE);
+    if (!unclaimTurn) return;
+    try {
+      if (this.trackClaimHeld(id)) return;
+      const meta = this.store.read(id);
+      const turn = meta?.turns.at(-1);
+      if (!meta || !(meta.status === 'running' || meta.status === 'queued') || (turn?.runId ?? null) !== runId) return;
+      const reason = 'run record missing after a restart';
+      this.store.setStatus(id, 'error', reason);
+      // No turn will finalize this session: its reservation goes back to the pool (claimed first, as finalize does).
+      if (meta.reportNum !== null) {
+        const since = this.ownedSince(meta, meta.reportNum);
+        this.store.setReportNum(id, null);
+        void this.releaseReportNum(meta.reportNum, false, since);
+      }
+      this.emit(id, { type: 'status', status: 'error', reason, ...(turn ? { turn: turn.n } : {}) });
+    } finally {
+      unclaimTurn();
+    }
   }
 
   close(): void {
@@ -1488,7 +1506,7 @@ export class SessionManager {
       throw new TurnStartedError(message);
     }
     // The turn is recorded: it is followed (and finalized once) whatever else fails, or a reply would leave it open.
-    this.track(meta.id, n, run.id, policy, state, token);
+    this.track(meta.id, n, run.id, policy, state, token, { spawned: true });
     try {
       this.emit(meta.id, { type: 'status', status: 'running', turn: n });
       this.bus.publish('session.status', { sessionId: meta.id, status: 'running', mode: meta.mode, turn: n });
@@ -1498,9 +1516,10 @@ export class SessionManager {
     return began;
   }
 
-  private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {
+  /** `spawned`: the turn is one this process just spawned, under the session's turn claim it still holds. */
+  private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string, opts: { spawned: boolean }): void {
     if (this.active.has(id)) return;
-    const tracked: Tracked = { timer: null, release: this.claimTrack(id), settling: false };
+    const tracked: Tracked = { timer: null, release: this.claimTrack(id, opts.spawned), settling: false };
     this.active.set(id, tracked);
     const progressFile = path.join(this.store.guardDirOf(id), 'turns', String(n), 'progress.json');
     const parser = new StreamParser();
@@ -1638,7 +1657,7 @@ export class SessionManager {
         const before = settled();
         if (before === null) return;
         if (before) return this.untrack(id);
-        tracked.release = this.claimTrack(id);
+        tracked.release = this.claimTrack(id, false);
         if (!tracked.release) return;
         // Asked again under the claim: the holder may have settled it and let go between the two.
         const after = settled();
@@ -1689,15 +1708,49 @@ export class SessionManager {
   }
 
   /**
-   * Takes the session's track claim, or null while another live tracker holds it. A claim that cannot be written (a
-   * guard folder gone read-only) is warned of and the turn is followed without it: left unfollowed it would never end.
+   * Takes the session's track claim, or null (the tracker stands by and asks again) while another live tracker holds it.
+   * A tracker starts only under the session's turn claim, the one every idle check (send, fork, delete, whileIdle) holds
+   * while it trusts that no track claim is held: a turn this process just `spawned` holds it already, and any other
+   * tracker (a reconcile, a standby taking over) takes it first, standing by while another process holds it.
+   * A track claim that cannot be written (a full disk, a guard folder gone read-only) is warned of: a turn this process
+   * just spawned is followed without it (left unfollowed it would never end) unless a live tracker holds the claim, and
+   * any other tracker stands by, since it cannot tell whether a live peer is following the turn.
    */
-  private claimTrack(id: string): (() => void) | null {
+  private claimTrack(id: string, spawned: boolean): (() => void) | null {
+    let unclaimTurn: (() => void) | null = null;
+    if (!spawned) {
+      try {
+        unclaimTurn = this.takeSessionClaim(id, TURN_CLAIM_FILE);
+      } catch (err) {
+        console.warn(`[sessions] session ${id}: could not take its turn claim to follow its turn, so it stands by and asks again: ${(err as Error).message}`);
+        return null;
+      }
+      if (!unclaimTurn) return null;
+    }
     try {
       return this.takeSessionClaim(id, TRACK_CLAIM_FILE);
     } catch (err) {
+      if (!spawned || this.trackClaimMaybeHeld(id)) {
+        console.warn(`[sessions] session ${id}: could not take its track claim, so it stands by and asks again: ${(err as Error).message}`);
+        return null;
+      }
       console.warn(`[sessions] session ${id}: could not take its track claim, so another server process cannot see it finishing: ${(err as Error).message}`);
       return () => {};
+    } finally {
+      try {
+        unclaimTurn?.();
+      } catch (err) {
+        console.warn(`[sessions] session ${id}: could not give back the turn claim it took to follow its turn: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** Whether a live process may hold the session's track claim: true when that cannot be told either. */
+  private trackClaimMaybeHeld(id: string): boolean {
+    try {
+      return this.trackClaimHeld(id);
+    } catch {
+      return true;
     }
   }
 
