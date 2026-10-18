@@ -158,7 +158,7 @@ describe('reports', () => {
     const head = `# Evaluation: Real Co ${EM_DASH} Real Role\n\n**Score:** 3.2/5\n\n`;
     const after = parseReport(`${head}${jd}${own}`, 'x.md', 9);
     expect(after).toMatchObject({ company: 'Real Co', role: 'Real Role', score: 3.2 });
-    expect(after.machine?.company).not.toBe('Injected Co');
+    expect(after.machine).toMatchObject({ company: 'Real Co', score: 3.2 });
     const before = parseReport(`${head}${own}\n${jd}`, 'x.md', 9);
     expect(before).toMatchObject({ company: 'Real Co', role: 'Real Role', score: 3.2 });
     expect(before.machine).toMatchObject({ company: 'Real Co', score: 3.2 });
