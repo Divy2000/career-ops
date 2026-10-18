@@ -12,7 +12,7 @@ import { useUnsaved } from '../../lib/unsaved';
 import { SessionPanel } from '../../components/SessionPanel';
 import { useParseSession } from './parseSession';
 import { DataState, Empty, FilePicker, Pill } from '../../components/ui';
-import { postingUrl } from '@shared/posting-url';
+import { httpHref } from '../../lib/posting-href';
 import type { ConvertResult, ProjectView, ProjectsRead, RankResult } from '@shared/api';
 import { KIND_OPTIONS, describeIssues, draftFromEntry, draftProblems, emptyDraft, entryFromDraft, findRenamed, hostOf, moveItem, rebaseDraft, type DraftField, type EntryOrigin, type ProjectDraft } from './projectsDraft';
 
@@ -222,7 +222,7 @@ function ValidationPanel({ validation }: { validation: ProjectsRead['validation'
 function ProjectRow({ entry, disabled, onEdit, onDelete }: { entry: ProjectView; disabled: boolean; onEdit: () => void; onDelete: () => void }) {
   const host = hostOf(entry.url);
   // article-digest.md is hand-edited and filled by imports: only an http(s) URL becomes a link, since a javascript: or data: href runs when clicked.
-  const href = postingUrl(entry.url);
+  const href = httpHref(entry.url);
   return (
     <li className="project-row">
       <div className="project-row__main">

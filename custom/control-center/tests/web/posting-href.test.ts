@@ -11,11 +11,19 @@ describe('postingHref', () => {
     });
   }
 
+  // A display link only needs a safe scheme: the write routes' 2048-character and no-credentials limits do not apply
+  // to opening a posting a hand-edited file already holds (R35 fix-check FC-02).
+  for (const url of [`https://jobs.example.com/1?utm=${'x'.repeat(3000)}`, 'https://user:pw@jobs.example.com/1', ' https://jobs.example.com/1 ']) {
+    it(`given the http(s) URL ${url.slice(0, 40)}, then it still links to it`, () => {
+      expect(postingHref(url)).toBe(url.trim());
+    });
+  }
+
   it('given a saved JD reference, then it links to the file through the serve route', () => {
     expect(postingHref('local:jds/acme.md')).toBe(`/api/files/serve?path=${encodeURIComponent('jds/acme.md')}`);
   });
 
-  for (const ref of ['javascript:alert(document.domain)', ' JavaScript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'vbscript:msgbox(1)', 'file:///etc/passwd', '//evil.example/x', 'jobs.example.com/1', '']) {
+  for (const ref of ['javascript:alert(document.domain)', ' JavaScript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'vbscript:msgbox(1)', 'file:///etc/passwd', '//evil.example/x', 'jobs.example.com/1', 'https://jobs.example.com/1\nx', '']) {
     it(`given ${JSON.stringify(ref)}, then there is no link`, () => {
       expect(postingHref(ref)).toBeUndefined();
     });
