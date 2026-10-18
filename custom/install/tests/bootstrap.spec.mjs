@@ -205,6 +205,29 @@ test('a repository URL with a credential in its userinfo is shown without it, in
   assert.doesNotMatch(noTty.out, /ghp_SECRET/);
 });
 
+test('Given a password with a raw @ in the repository URL, the banner and the no-terminal error show none of it (R35-scripts-b-L2-01)', () => {
+  const secretUrl = 'https://me:p@ss@SECRET@github.com/Divy2000/career-ops.git';
+  const w = world();
+  const confirmed = w.run(['--no-start'], { script: BOOTSTRAP_SH, tty: 'y\n', env: { CAREER_OPS_REPO_URL: secretUrl } });
+  assert.equal(confirmed.status, 0, confirmed.out);
+  assert.ok(confirmed.out.split('\n').includes('  repository: https://github.com/Divy2000/career-ops.git'), confirmed.out);
+  assert.doesNotMatch(confirmed.out, /SECRET|ss@/);
+  const noTty = world().run([], { script: BOOTSTRAP_SH, env: { CAREER_OPS_REPO_URL: secretUrl } });
+  assert.equal(noTty.status, 1, noTty.out);
+  assert.match(noTty.out, /git clone https:\/\/github\.com\/Divy2000\/career-ops\.git &&/);
+  assert.doesNotMatch(noTty.out, /SECRET|ss@/);
+});
+
+test('Given an existing checkout whose origin password holds a raw @, the refusal prints none of it (R35-scripts-b-L2-01)', () => {
+  const w = world();
+  const dest = path.join(w.home, 'career-ops');
+  w.makeCheckout(dest, { origin: 'https://me:p@ss@SECRET@github.com/career-ops-hq/career-ops.git' });
+  const r = w.run([], { script: BOOTSTRAP_SH, tty: 'y\n' });
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /is https:\/\/github\.com\/career-ops-hq\/career-ops\.git, not the fork/);
+  assert.doesNotMatch(r.out, /SECRET|ss@/);
+});
+
 test('an existing checkout whose origin holds a credential is refused without printing it (R32-scripts-b-L2-02)', () => {
   const w = world();
   const dest = path.join(w.home, 'career-ops');
