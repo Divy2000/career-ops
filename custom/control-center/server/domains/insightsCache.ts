@@ -134,7 +134,21 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
       /* no usable cache */
     }
   }
-  const r = await exec(process.execPath, [scriptPath, ...extra.args], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1', ...extra.env } });
+  // Loads that miss together share one run of the script for these inputs; a recompute joins it too, since a run that
+  // has not finished yet is as fresh as a new one. The entry goes when the run settles, a throw included.
+  const flightKey = `${file}\n${key}`;
+  const inFlight = runs.get(flightKey);
+  if (inFlight) return inFlight;
+  const run = runInsight(cfg, exec, { script, label: def.label, scriptPath, args: extra.args, env: extra.env, key, file, now }).finally(() => runs.delete(flightKey));
+  runs.set(flightKey, run);
+  return run;
+}
+
+const runs = new Map<string, Promise<InsightRead>>();
+
+async function runInsight(cfg: ServerConfig, exec: Exec, job: { script: string; label: string; scriptPath: string; args: string[]; env: Record<string, string>; key: string; file: string; now: () => number }): Promise<InsightRead> {
+  const { script, scriptPath, key, file, now } = job;
+  const r = await exec(process.execPath, [scriptPath, ...job.args], { cwd: cfg.codeRoot, timeoutMs: 60_000, env: { CAREER_OPS_ROOT: cfg.dataRoot, NO_COLOR: '1', ...job.env } });
   let json: unknown;
   try {
     json = JSON.parse(r.stdout);
@@ -143,7 +157,7 @@ export async function readInsight(cfg: ServerConfig, exec: Exec, script: Insight
   }
   const read: InsightRead = {
     script,
-    label: def.label,
+    label: job.label,
     kind: r.code === 0 ? 'ok' : 'failed',
     computedAt: new Date(now()).toISOString(),
     inputsKey: key,
