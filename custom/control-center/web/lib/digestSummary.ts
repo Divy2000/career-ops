@@ -84,22 +84,29 @@ function tidy(spans: DigestSpan[]): DigestSpan[] {
   return out.filter((s) => s.text !== '');
 }
 
-// A period after these ends no sentence: dotted initials (U.S., e.g.) and one-letter initials (Donald J.) are caught by
-// shape, the rest, including citation abbreviations (90 Fed. Reg.), by name.
-const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec', 'no', 'nos', 'vs', 'etc', 'approx', 'dept', 'gov', 'inc', 'corp', 'co', 'ltd', 'mr', 'mrs', 'ms', 'dr', 'st', 'jr', 'sr', 'est', 'fig', 'fed', 'reg', 'sec', 'pub', 'rev', 'pt']);
+// A period after these ends no sentence: dotted initials (U.S., e.g.) are caught by shape, the rest by name.
+const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec', 'no', 'nos', 'vs', 'etc', 'approx', 'dept', 'gov', 'inc', 'corp', 'co', 'ltd', 'mr', 'mrs', 'ms', 'dr', 'st', 'jr', 'sr', 'est', 'fig']);
+// These are also words ("the Fed.", "the SEC."), so they abbreviate only inside a citation: "90 Fed. Reg. 45678", "Pub. L. 117".
+const CITATION_WORDS = new Set(['fed', 'reg', 'sec', 'pub', 'rev', 'pt']);
+const CITATION_NEXT = /^\p{Lu}\p{L}{0,3}\.$/u;
+const CAPITALIZED = /^\p{Lu}/u;
 
 /** Where the first sentence of `text` ends (after its . ! or ?), or -1: a period after an abbreviation, or before a lowercase word or a number ("Oct. 15"), is no end. */
 function sentenceEnd(text: string): number {
   for (const m of text.matchAll(/[.!?](?=\s|$)/g)) {
     const i = m.index!;
+    const nextWord = /^\s+(\S+)/.exec(text.slice(i + 1))?.[1];
     if (text[i] === '.') {
       // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
-      const word = (text.slice(0, i).split(/\s/).pop() ?? '').replace(/^[(["'\u2018\u201c]+/u, '');
-      if (/^(?:\p{L}\.)+\p{L}$/u.test(word) || /^\p{Lu}$/u.test(word)) continue;
+      const words = text.slice(0, i).split(/\s/);
+      const word = (words.pop() ?? '').replace(/^[(["'\u2018\u201c]+/u, '');
+      if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) continue;
       if (ABBREVIATIONS.has(word.toLowerCase())) continue;
+      if (CITATION_WORDS.has(word.toLowerCase()) && nextWord !== undefined && CITATION_NEXT.test(nextWord)) continue;
+      // A middle initial sits between two capitalized words ("Donald J. Trump"); "schedule B. Employers" ends.
+      if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(words.pop() ?? '') && nextWord !== undefined && CAPITALIZED.test(nextWord)) continue;
     }
-    const next = /^\s+(\S)/.exec(text.slice(i + 1))?.[1];
-    if (next === undefined || !/[\p{Ll}\d]/u.test(next)) return i + 1;
+    if (nextWord === undefined || !/[\p{Ll}\d]/u.test(nextWord[0]!)) return i + 1;
   }
   return -1;
 }

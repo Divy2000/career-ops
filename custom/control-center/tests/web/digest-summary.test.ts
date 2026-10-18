@@ -43,6 +43,12 @@ describe('summarizeDigest', () => {
     expect(lines('- The rule cites 8 U.S.C. Sec. 1184 and Pub. L. 117 in Pt. 214. Later text.')).toEqual(['The rule cites 8 U.S.C. Sec. 1184 and Pub. L. 117 in Pt. 214.']);
   });
 
+  it('still ends the first sentence at a bare agency name or a lone letter that closes it (R33-shared-comp-X-01 fix-check FC-01)', () => {
+    expect(lines('- Employers must file with the SEC. Later text.')).toEqual(['Employers must file with the SEC.']);
+    expect(lines('- The change was announced by the Fed. Employers must update filings.')).toEqual(['The change was announced by the Fed.']);
+    expect(lines('- Filings are due under schedule B. Employers must update them.')).toEqual(['Filings are due under schedule B.']);
+  });
+
   it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
     expect(lines('- The rule applies in the U.S. Employers must file by Monday.')).toEqual(['The rule applies in the U.S. Employers must file by Monday.']);
   });
