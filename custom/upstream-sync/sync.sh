@@ -248,6 +248,9 @@ CLAUDE_HOLD="$(sync_verdict "$CLAUDE_RC" "$CLAUDE_OUT")"
 echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
+# The commit every gate below checks. The suites run the merged code inside the worktree, which can commit or check
+# out there: only this commit may be pushed or land on main.
+VERIFIED_OID="$(git rev-parse HEAD)" || fail "cannot read the verified sync commit"
 clean_sync_worktree "$WT" || fail "cannot clean untracked and ignored files from the sync worktree"
 refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail "reinstalling the merged root dependencies failed"
 ensure_playwright_browser || fail "cannot install the merged Playwright's Chromium (see the line above)"
@@ -273,7 +276,10 @@ suite_failures "$STATE_DIR/$TODAY.after-failures.txt" || fail "upstream suite ru
 NEW_FAILURES="$(new_failures "$BASELINE_FAILURES" "$STATE_DIR/$TODAY.after-failures.txt")" || fail "cannot compare the upstream suite with its baseline"
 echo "new upstream-suite failures: $(printf '%s' "$NEW_FAILURES" | grep -c . || true)"
 
-git push -q --force-with-lease origin "$BRANCH" || fail "git push failed"
+HEAD_NOW="$(git rev-parse HEAD)" || fail "cannot read the sync commit after the test suites"
+[ "$HEAD_NOW" = "$VERIFIED_OID" ] ||
+  fail "the sync worktree HEAD moved from $VERIFIED_OID to $HEAD_NOW while the test suites ran; nothing pushed"
+git push -q --force-with-lease origin "$VERIFIED_OID:refs/heads/$BRANCH" || fail "git push failed"
 BODY="$STATE_DIR/$TODAY.pr-body.md"
 {
   echo "Weekly merge of career-ops-hq/career-ops main ($BEHIND commits) into this fork."
@@ -308,7 +314,7 @@ echo "PR: $PR_URL"
 MAIN_MOVED="$(main_moved "$BASE_REV")"
 BLOCKERS="$(merge_blockers)"
 if [ -z "$BLOCKERS" ]; then
-  MERGE_OID="$(git rev-parse HEAD)" || fail "cannot read the sync commit"
+  MERGE_OID="$VERIFIED_OID"
   git push -q --force-with-lease="main:$BASE_REV" origin "$MERGE_OID:refs/heads/main" ||
     fail "the fork main moved, or refused the push, before the sync commit could land on it; $PR_URL is left open"
   echo "merged $PR_URL"

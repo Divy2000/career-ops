@@ -1673,7 +1673,9 @@ function mergeDecision({ moveMain = false, fetchFails = false, race = false } = 
     const to = lines.findIndex((l, i) => i > from && l.startsWith('  cd "$LIVE"'));
     assert.ok(from > -1 && to > from, 'no MAIN_MOVED .. cd "$LIVE" block in sync.sh');
     const script = `source "${LIB}"\nfail() { echo "!!! $1"; exit 1; }\nPR_URL=https://example.invalid/pr/1\nBRANCH=sync/x\nLIVE="${w.live}"\n${lines.slice(from, to + 1).join('\n')}\necho "deployed $MERGE_OID"\nelse\necho "hold: $BLOCKERS"\nfi`;
-    const env = { ...GIT_ENV, PATH: `${bin}:${process.env.PATH}`, BASE_REV: baseRev, CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
+    // The commit the gates verified, recorded by sync.sh right after verify_merge: here the sync merge just made.
+    const verifiedOid = git(w.live, 'rev-parse', 'HEAD').trim();
+    const env = { ...GIT_ENV, PATH: `${bin}:${process.env.PATH}`, BASE_REV: baseRev, VERIFIED_OID: verifiedOid, CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
     const res = spawnSync('bash', ['-c', script], { cwd: w.live, env, encoding: 'utf8' });
     const now = git(w.live, 'rev-parse', 'refs/remotes/origin/main').trim();
     const forkMain = git(w.originBare, 'rev-parse', 'refs/heads/main').trim();
