@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
+import { withFileLock } from '../lib/file-lock.js';
 
 export const NOTES_START = '<!-- co-web-notes:start -->';
 export const NOTES_END = '<!-- co-web-notes:end -->';
@@ -41,18 +42,30 @@ export class ProfileMissingError extends Error {
   }
 }
 
-export function rememberFact(dataRoot: string, fact: string): 'ok' | 'deduped' {
+/**
+ * Adds the fact under the cross-process lock the user-file editor's save of modes/_profile.md takes, so neither a
+ * save nor the other server child of a blue/green handover lands inside this read-modify-write. Throws
+ * LockTimeoutError (see isLockTimeout) when another holder keeps the lock past 5 s, as the editor save waits.
+ */
+export async function rememberFact(codeRoot: string, dataRoot: string, fact: string): Promise<'ok' | 'deduped'> {
   const p = path.join(dataRoot, 'modes', '_profile.md');
-  let md: string;
-  try {
-    md = fs.readFileSync(p, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new ProfileMissingError();
-    throw err;
-  }
-  const { text, result } = applyRememberedFact(md, fact);
-  if (result === 'ok') {
-    writeFileAtomic(p, text, dataRootOnly(dataRoot));
-  }
-  return result;
+  return withFileLock(
+    codeRoot,
+    p,
+    () => {
+      let md: string;
+      try {
+        md = fs.readFileSync(p, 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') throw new ProfileMissingError();
+        throw err;
+      }
+      const { text, result } = applyRememberedFact(md, fact);
+      if (result === 'ok') {
+        writeFileAtomic(p, text, dataRootOnly(dataRoot));
+      }
+      return result;
+    },
+    { timeoutMs: 5000 },
+  );
 }

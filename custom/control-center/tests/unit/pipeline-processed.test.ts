@@ -107,6 +107,21 @@ describe('moving an evaluated posting to Processed', () => {
     expect(moveToProcessed(named, URL, POSTING).text).toContain(`- [x] #042 | ${URL} | Acme | Engineer (report) | 4.2/5 | PDF ❌`);
   });
 
+  it('keeps a company or role that reads like a label, as the Pipeline page reads the row: labels are only a trailing run (R35-misc2-FC-01)', () => {
+    const dash = String.fromCharCode(0x2014);
+    const cases: Array<[string, string]> = [
+      [`${URL} | note: labs | Backend Engineer`, 'note: labs | Backend Engineer'],
+      [`${URL} | Acme | posted: 2026-09-15 | Remote`, 'Acme | posted: 2026-09-15'],
+      [`${URL} | note: labs | rank: 4.0/5 | Remote | rank: 4.0/5 ${dash} fit | posted: 2026-09-15`, 'note: labs | rank: 4.0/5'],
+      [`${URL} | note: labs | Backend Engineer | note: from a friend | rank: 4.0/5 ${dash} fit`, 'note: labs | Backend Engineer'],
+      [`${URL} | Acme | Backend Engineer | posted: 2026-09-15 | note: x | posted: 2026-09-16`, 'Acme | Backend Engineer'],
+    ];
+    for (const [row, cells] of cases) {
+      const md = `## Pending\n- [ ] ${row}\n## Processed\n`;
+      expect(moveToProcessed(md, URL, POSTING).text, row).toContain(`- [x] #042 | ${URL} | ${cells} | 4.2/5 | PDF ❌`);
+    }
+  });
+
   it('only drops the Pending copy of a URL Processed already lists', () => {
     const md = `## Pending\n- [ ] ${URL} | Acme | Eng\n## Processed\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ✅\n`;
     expect(moveToProcessed(md, URL, POSTING).text).toBe(`## Pending\n## Processed\n- [x] #040 | ${URL} | Acme | Eng | 4.0/5 | PDF ✅\n`);

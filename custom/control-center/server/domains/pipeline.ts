@@ -49,6 +49,15 @@ export const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trus
  * past the title. Order within the run is not checked: rows on disk carry rank before posted.
  */
 function labelRunStart(cells: string[]): number {
+  const start = trailingLabelRun(cells);
+  return start === 2 ? 3 : start;
+}
+
+/**
+ * Where the trailing run of distinct written labels starts in a row's cells from the URL on (cells.length when there
+ * is none); a label cell before it is a company or title that reads like one.
+ */
+export function trailingLabelRun(cells: string[]): number {
   const seen = new Set<string>();
   let start = cells.length;
   for (let i = cells.length - 1; i >= 1; i--) {
@@ -57,7 +66,7 @@ function labelRunStart(cells: string[]): number {
     seen.add(name);
     start = i;
   }
-  return start === 2 ? 3 : start;
+  return start;
 }
 
 export function seniorityOf(title: string): string | null {

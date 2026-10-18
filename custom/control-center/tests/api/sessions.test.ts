@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { copyFixtureRoot, FAKE_TOKEN, makeTestApp, PACKAGE_ROOT, SCENARIO_DIR, type TestApp } from '../helpers/app.js';
 import { SESSION_POLICY_VERSION } from '../../server/claude/modes.js';
 import type { SessionMeta } from '../../server/claude/sessions.js';
@@ -805,6 +807,45 @@ describe('Claude sessions', () => {
       expect(res.json().error).toMatch(/onboarding/);
       expect(fs.existsSync(profile)).toBe(false);
     } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('remembering a fact takes the cross-process lock the profile editor save takes (R35-xproc-FC-01)', () => {
+  it('while another process holds the modes/_profile.md lock, a remember answers 503 busy and writes nothing, then writes once it is free', async () => {
+    const app = await makeTestApp();
+    const profile = path.join(app.cfg.dataRoot, 'modes', '_profile.md');
+    const before = fs.readFileSync(profile, 'utf8');
+    const prior = process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+    process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = '300';
+    // A real second process holds the lock, as the other server child of a blue/green handover would.
+    const lockModule = pathToFileURL(path.join(app.cfg.codeRoot, 'pipeline-lock.mjs')).href;
+    const holder = spawn(process.execPath, ['--input-type=module', '-e', `const { acquirePipelineLock } = await import(${JSON.stringify(lockModule)}); const l = await acquirePipelineLock(${JSON.stringify(profile)}, { timeoutMs: 60000 }); process.stdout.write('ready\\n'); process.stdin.resume(); process.stdin.on('end', () => { l.release(); process.exit(0); });`], { env: { PATH: process.env.PATH ?? '' }, stdio: ['pipe', 'pipe', 'inherit'] });
+    const exited = new Promise<void>((resolve) => holder.on('exit', () => resolve()));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        holder.stdout!.on('data', (b: Buffer) => b.toString().includes('ready') && resolve());
+        holder.on('exit', (code) => reject(new Error(`lock holder exited ${code} before it was ready`)));
+      });
+      const busy = await call(app, 'POST', '/api/memory', { fact: 'Prefers remote roles' });
+      expect(busy.statusCode, busy.body).toBe(503);
+      expect(busy.headers['retry-after']).toBe('1');
+      expect(busy.json().error).toMatch(/busy.*try again/);
+      expect(fs.readFileSync(profile, 'utf8')).toBe(before);
+      holder.stdin!.end();
+      await exited;
+      const free = await call(app, 'POST', '/api/memory', { fact: 'Prefers remote roles' });
+      expect(free.statusCode, free.body).toBe(200);
+      expect(free.json()).toEqual({ result: 'ok' });
+      expect(fs.readFileSync(profile, 'utf8')).toContain('\n- Prefers remote roles\n');
+    } finally {
+      if (holder.exitCode === null) {
+        holder.kill();
+        await exited;
+      }
+      if (prior === undefined) delete process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS;
+      else process.env.CAREER_OPS_PIPELINE_LOCK_MAX_WAIT_MS = prior;
       await app.close();
     }
   });

@@ -15,6 +15,8 @@ import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
 import { sponsorCheckCompany } from '../sponsorship/companyKey';
 import { postingHref } from '../../lib/posting-href';
+import { rowIdentity } from './StatusControl';
+import type { Target } from '../../lib/sessions';
 
 /**
  * Where an application's launcher remembers its sessions: the row number with the row's identity. A delete elsewhere
@@ -23,6 +25,9 @@ import { postingHref } from '../../lib/posting-href';
  */
 export const applicationLauncherKey = (row: Pick<TrackerRow, 'num' | 'company' | 'role' | 'report'>, slot: string) =>
   `cc.application.${row.num}.${slot}:${JSON.stringify([row.company, row.role, row.report])}`;
+
+/** A row-scoped start names the application shown, so one a reindex moved under the number is refused (409). */
+const rowTarget = (row: Pick<TrackerRow, 'num' | 'company' | 'role' | 'report'>): Target => ({ type: 'app', value: String(row.num), expect: rowIdentity(row) });
 
 /**
  * Every session whose target is this application (spec 2.4): its row number, and the row it was started on when the
@@ -245,7 +250,7 @@ export function ApplicationPage() {
                 heading="Outreach and research"
                 key={applicationLauncherKey(q.data.row, 'outreach')}
                 rememberAs={applicationLauncherKey(q.data.row, 'outreach')}
-                target={{ type: 'app', value: String(q.data.row.num) }}
+                target={rowTarget(q.data.row)}
                 modes={[
                   { id: 'cover', label: 'Cover letter', prompt: `Write the cover letter for tracker row #${q.data.row.num} (${q.data.row.company}).` },
                   { id: 'email', label: 'Outreach email', prompt: `Draft an outreach email for tracker row #${q.data.row.num} (${q.data.row.company}).` },
@@ -260,7 +265,7 @@ export function ApplicationPage() {
                 heading="Interview"
                 key={applicationLauncherKey(q.data.row, 'interview')}
                 rememberAs={applicationLauncherKey(q.data.row, 'interview')}
-                target={{ type: 'app', value: String(q.data.row.num) }}
+                target={rowTarget(q.data.row)}
                 modes={[
                   { id: 'interview-prep', label: 'Interview prep', prompt: `Prepare me for the interview at ${q.data.row.company} (row #${q.data.row.num}).` },
                   { id: 'interview/plan', label: 'Plan', prompt: `Plan the interview process for row #${q.data.row.num}.` },
@@ -276,7 +281,7 @@ export function ApplicationPage() {
                 heading="Offer and outcome"
                 key={applicationLauncherKey(q.data.row, 'offer')}
                 rememberAs={applicationLauncherKey(q.data.row, 'offer')}
-                target={{ type: 'app', value: String(q.data.row.num) }}
+                target={rowTarget(q.data.row)}
                 modes={[
                   { id: 'offer-prep', label: 'Offer prep', prompt: `Prepare the offer negotiation for row #${q.data.row.num} (${q.data.row.company}).` },
                   { id: 'outcome', label: 'Record outcome', prompt: `Record the outcome for row #${q.data.row.num}.` },
@@ -293,7 +298,7 @@ export function ApplicationPage() {
                   heading="Generate with AI"
                   key={applicationLauncherKey(q.data.row, 'documents')}
                   rememberAs={applicationLauncherKey(q.data.row, 'documents')}
-                  target={{ type: 'app', value: String(q.data.row.num) }}
+                  target={rowTarget(q.data.row)}
                   modes={[
                     { id: 'pdf', label: 'Tailored CV PDF', prompt: `Generate the tailored CV PDF for tracker row #${q.data.row.num} (${q.data.row.company}).` },
                     { id: 'pdf/hm-audit', label: 'PDF with hiring-manager audit', prompt: `Generate the tailored CV PDF for row #${q.data.row.num} and run the hiring-manager audit.` },

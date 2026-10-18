@@ -11,6 +11,7 @@ import { dedupUrlKey } from '../../shared/dedup-url.js';
 import { EXPLICIT_HEADER } from './settings.js';
 import type { EventBus } from '../watch/bus.js';
 import { ProfileMissingError, rememberFact } from '../domains/memory.js';
+import { isLockTimeout } from '../lib/file-lock.js';
 import { sessionModel } from '../domains/settings.js';
 import { extractSourceText } from '../domains/projects.js';
 import { claimHolderText, PendingUnreadableError, policyClaim, PolicyQueueBusyError, preparePolicyPass, type PolicyPass } from '../domains/policyPass.js';
@@ -113,7 +114,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return true;
   };
   const LOST_CLAIM = 'another AI policy pass took over the queued items while this one was starting, so it was cancelled. Try again once that pass finishes.';
-  // The claim lock can be held past its wait (a claimant that died holding it counts as stale only later).
+  // The claim lock can be held past its wait by a live claimant. One that died holding it is broken at once, unless it
+  // died before naming its pid in the lock or its pid was reused: that lock counts as stale only after LOCK_STALE_MS.
   const claimBusy = (err: unknown) => `the AI policy pass claim could not be handed over (${(err as Error).message}), so it was cancelled. Try again in a minute.`;
   /**
    * Runs a claim cleanup without letting its own throw hide the error or answer that ended the start. A cleanup that
@@ -632,9 +634,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ fact: z.string().min(1).max(300) }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     try {
-      return { result: rememberFact(opts.cfg.dataRoot, parsed.data.fact) };
+      return { result: await rememberFact(opts.cfg.codeRoot, opts.cfg.dataRoot, parsed.data.fact) };
     } catch (err) {
       if (err instanceof ProfileMissingError) return reply.code(409).send({ error: err.message });
+      // A lock held too long is a 503 busy with retry-after, as on the user-file editor save of the same file.
+      if (isLockTimeout(err)) return reply.code(503).header('retry-after', '1').send({ error: 'modes/_profile.md is busy (another save is writing it), try again in a moment' });
       throw err;
     }
   });
