@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
-import { readText } from './files.js';
+import { readText, type TextRead } from './files.js';
 import { localDate } from '../../shared/local-date.js';
 
 export interface DigestSection {
@@ -50,12 +50,16 @@ export interface ImmigrationOverview {
   companies: CompanyFile[];
   /** The company files, or the companies folder, that could not be read (a folder named *.md, no permission); null when all were. */
   companiesError: string | null;
+  /** The parsed file; `{ error }` when it exists but is not JSON or cannot be read. */
   tiers: unknown;
+  /** The parsed file; `{ error }` when it exists but is not JSON or cannot be read. */
   seen: unknown;
   /** Items the watcher queued for the AI pass (pending.json); null when absent or unreadable. */
   pendingCount: number | null;
   /** Set when pending.json exists but cannot be read as a list; null when it is absent or fine. */
   pendingError: string | null;
+  /** The digest, the official feed, the logs folder or the newest log, when one could not be read (a folder where a file should be, no permission); each is then shown as absent. Null when all were. */
+  filesError: string | null;
   dailyLog: DailyLog | null;
   logDates: string[];
 }
@@ -186,21 +190,41 @@ export function readDailyLog(dataRoot: string, date: string): DailyLog | null {
   return read.kind === 'ok' ? parseDailyLog(read.text, date) : null;
 }
 
-function pendingOf(v: unknown): { count: number | null; error: string | null } {
+type JsonRead = { kind: 'ok'; value: unknown } | { kind: 'unreadable'; message: string };
+
+function pendingOf(read: JsonRead): { count: number | null; error: string | null } {
+  if (read.kind === 'unreadable') return { count: null, error: read.message };
+  const v = read.value;
   if (v === null) return { count: null, error: null };
   if (Array.isArray(v)) return { count: v.length, error: null };
   const malformed = typeof v === 'object' && (v as { error?: unknown }).error === 'malformed JSON';
   return { count: null, error: malformed ? 'pending.json is not valid JSON' : 'pending.json is not a list of items' };
 }
 
-function readJson(p: string): unknown {
-  const read = readText(p);
-  if (read.kind !== 'ok') return null;
+/** A file that exists but cannot be read (a folder in its place, no permission) is reported, not thrown: it costs only itself. */
+function readTextOrError(p: string): TextRead | { kind: 'error'; message: string } {
   try {
-    return JSON.parse(read.text);
-  } catch {
-    return { error: 'malformed JSON', path: p };
+    return readText(p);
+  } catch (err) {
+    return { kind: 'error', message: (err as Error).message };
   }
+}
+
+function readJsonOrError(p: string): JsonRead {
+  const read = readTextOrError(p);
+  if (read.kind === 'error') return { kind: 'unreadable', message: `${path.basename(p)} could not be read: ${read.message}` };
+  if (read.kind !== 'ok') return { kind: 'ok', value: null };
+  try {
+    return { kind: 'ok', value: JSON.parse(read.text) };
+  } catch {
+    return { kind: 'ok', value: { error: 'malformed JSON', path: p } };
+  }
+}
+
+/** The parsed file, null when absent, `{ error }` when it is not JSON or cannot be read. */
+function readJson(p: string): unknown {
+  const read = readJsonOrError(p);
+  return read.kind === 'unreadable' ? { error: read.message, path: p } : read.value;
 }
 
 const ALERT_COLUMNS = ['date', 'company', 'slug', 'status', 'headline', 'url'] as const;
@@ -234,16 +258,24 @@ export function parseAlertHistory(text: string): Record<string, string>[] {
 export async function readImmigrationOverview(codeRoot: string, dataRoot: string, today = localDate(), dailyRunning: () => Promise<boolean | null> = async () => null): Promise<ImmigrationOverview> {
   const lib = await importCore<ImmigrationLib>(codeRoot, 'custom/immigration/lib.mjs');
   const imm = path.join(dataRoot, 'data', 'immigration');
-  const digestRead = readText(path.join(imm, 'policy-digest.md'));
+  // Each file that exists but cannot be read is reported and shown as absent; none of them fails the whole overview.
+  const unreadableFiles: string[] = [];
+  const readOrNote = (rel: string): TextRead => {
+    const read = readTextOrError(path.join(imm, rel));
+    if (read.kind !== 'error') return read;
+    unreadableFiles.push(`${rel}: ${read.message}`);
+    return { kind: 'missing', path: path.join(imm, rel) };
+  };
+  const digestRead = readOrNote('policy-digest.md');
   let digest: ImmigrationOverview['digest'] = { kind: 'missing' };
   if (digestRead.kind === 'ok') {
     const sections = parseDigest(digestRead.text);
     const latestDate = sections.map((s) => s.date).sort().pop() ?? null;
     digest = { kind: 'ok', sections, latestDate, staleDays: latestDate ? daysBetween(latestDate, today) : null };
   }
-  const changesRead = readText(path.join(imm, 'policy-changes.tsv'));
-  const alertsRead = readText(path.join(imm, 'company-alerts.tsv'));
-  const feedRead = readText(path.join(imm, 'official-feed.tsv'));
+  const changesRead = readTextOrError(path.join(imm, 'policy-changes.tsv'));
+  const alertsRead = readTextOrError(path.join(imm, 'company-alerts.tsv'));
+  const feedRead = readOrNote('official-feed.tsv');
   // Both files are written by Claude sessions; the core parsers throw on the first bad line. One bad line costs only that
   // file's parsed view (and is reported), never the whole overview.
   const parsed = <T>(fn: () => T, empty: T): { value: T; error: string | null } => {
@@ -254,8 +286,14 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     }
   };
   // The core keeps only the latest alert per slug; the full history comes from the raw TSV.
-  const alerts = parsed(() => (alertsRead.kind === 'ok' ? [...lib.parseCompanyAlerts(alertsRead.text)].map(([slug, a]) => ({ slug, ...a })) : []), []);
-  const changes = parsed(() => (changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : []), []);
+  const alerts =
+    alertsRead.kind === 'error'
+      ? { value: [], error: `company-alerts.tsv could not be read: ${alertsRead.message}` }
+      : parsed(() => (alertsRead.kind === 'ok' ? [...lib.parseCompanyAlerts(alertsRead.text)].map(([slug, a]) => ({ slug, ...a })) : []), []);
+  const changes =
+    changesRead.kind === 'error'
+      ? { value: [], error: `policy-changes.tsv could not be read: ${changesRead.message}` }
+      : parsed(() => (changesRead.kind === 'ok' ? lib.parsePolicyChanges(changesRead.text) : []), []);
   const latest = alerts.value;
   const history: Record<string, unknown>[] = alertsRead.kind === 'ok' ? parseAlertHistory(alertsRead.text) : [];
   const companies: CompanyFile[] = [];
@@ -280,9 +318,19 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     }
     companies.push(parseCompanyFile(text, name.replace(/\.md$/, ''), p, lib.readCheckedAt));
   }
-  const logDates = listLogDates(dataRoot);
-  const pending = pendingOf(readJson(path.join(imm, 'pending.json')));
-  const latestLog = logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null;
+  let logDates: string[] = [];
+  try {
+    logDates = listLogDates(dataRoot);
+  } catch (err) {
+    unreadableFiles.push(`logs/: ${(err as Error).message}`);
+  }
+  const pending = pendingOf(readJsonOrError(path.join(imm, 'pending.json')));
+  let latestLog: DailyLog | null = null;
+  try {
+    latestLog = logDates[0] ? readDailyLog(dataRoot, logDates[0]) : null;
+  } catch (err) {
+    unreadableFiles.push(`logs/${logDates[0]}.log: ${(err as Error).message}`);
+  }
   return {
     digest,
     policyChanges: changes.value,
@@ -297,6 +345,7 @@ export async function readImmigrationOverview(codeRoot: string, dataRoot: string
     seen: readJson(path.join(imm, 'seen.json')),
     pendingCount: pending.count,
     pendingError: pending.error,
+    filesError: unreadableFiles.length ? `could not read ${unreadableFiles.join('; ')}` : null,
     dailyLog: latestLog && (await withJobState(latestLog, today, dailyRunning, () => logHasStart(dataRoot, today))),
     logDates,
   };
