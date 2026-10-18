@@ -14,7 +14,7 @@ import { listReportFiles, listReportNames, reportNumberOf } from '../domains/rep
 import { companyHistoryInputs } from '../domains/insightsCache.js';
 import { containedTarget, OutsideRootsError } from '../lib/atomic-write.js';
 import { RunStore } from '../runner/store.js';
-import { prefillUrlProblem } from '../../shared/prefill.js';
+import { prefillUrlProblem, secretParam } from '../../shared/prefill.js';
 import { outputFileProblem } from '../../shared/output-path.js';
 import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 import { STATUS_NOTE_MAX } from '../../shared/tracker-status.js';
@@ -134,7 +134,15 @@ const outputPath = (ext: RegExp, what: string) =>
     const problem = outputFileProblem(p, ext, what);
     if (problem) ctx.addIssue({ code: 'custom', message: problem });
   });
-const httpUrl = z.string().url().refine((u) => /^https?:\/\//.test(u), 'http(s) only').max(2048);
+// The URL goes to a child as an argument (readable in ps) and into its log, so one carrying sign-in details or a
+// secret-looking parameter is refused.
+const httpUrl = z
+  .string()
+  .url()
+  .refine((u) => /^https?:\/\//.test(u), 'http(s) only')
+  .refine((u) => URL.canParse(u) && !new URL(u).username && !new URL(u).password, 'no user name or password in the link')
+  .refine((u) => !URL.canParse(u) || secretParam(new URL(u)) === null, 'no token, key or other secret-looking parameter in the link')
+  .max(2048);
 const company = z.string().min(1).max(200).regex(/^[^\0\r\n]+$/);
 
 /** Ephemeral input files live under the data root, never in the repo, and go when the run ends (tmp-inputs.ts). */

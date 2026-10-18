@@ -58,7 +58,11 @@ beforeEach(() => {
       }
       if (method === 'GET') return json(200, key === '/api/plugins' ? { ...doc, config: { kind: 'ok', path: 'config/plugins.yml', raw: '', etag: doc.etag } } : doc);
       // As the real routes: the write lock serializes saves, and each compares If-Match with the version on disk.
-      if ((headers['If-Match'] ?? null) !== doc.etag) return json(409, { error: 'the file changed since you loaded it', current: doc });
+      if ((headers['If-Match'] ?? null) !== doc.etag) {
+        // The cadence route answers a conflict as the config route does: with config/profile.yml's ConfigRead.
+        const current = key === '/api/followups/cadence' ? { kind: doc.kind, path: 'config/profile.yml', raw: '', etag: doc.etag, doc: { followup_cadence: doc.cadence }, parseError: null } : doc;
+        return json(409, { error: 'the file changed since you loaded it', current });
+      }
       const etag = `${doc.etag}+`;
       // A structured save writes its ops and a raw save its text, so the refetch after it reads the version written, as on the real routes.
       const ops = (body as { ops?: YamlOp[] } | null)?.ops;
@@ -424,6 +428,25 @@ describe('cadence and blacklist editors while the post-save refetch is on its wa
     await act(async () => refetch.release!());
     await until(() => !document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.disabled, 'the fields back');
     expect(document.querySelector<HTMLInputElement>('#cadence-applied_first_days')!.value).toBe('9');
+  });
+
+  it('after a cadence conflict whose refetch fails, the next save goes on the version the conflict showed, not a second 409 (R35-feat-c-L1-01)', async () => {
+    files = { '/api/followups/cadence': { kind: 'ok', etag: 'c1', cadence: { applied_first_days: 7 }, keys: ['applied_first_days'], parseError: null } };
+    const { CadenceForm } = await import('@web/features/settings/ProfileForm');
+    await mount(createElement(CadenceForm));
+    const field = await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '7' && document.querySelector<HTMLInputElement>('#cadence-applied_first_days'), 'the cadence field');
+    await type(field, '9');
+    // Another writer changes the file, and the reads fail while the conflict is answered.
+    files['/api/followups/cadence'] = { ...files['/api/followups/cadence']!, etag: 'c2', cadence: { applied_first_days: 8 } };
+    readsFail = true;
+    await click(button('Save cadence')!);
+    await until(() => writes().length === 1 && button('Retry'), 'the conflict and the failed read');
+    readsFail = false;
+    await click(button('Retry')!);
+    await until(() => document.querySelector<HTMLInputElement>('#cadence-applied_first_days')?.value === '9', 'the form back with the typed value');
+    await click(button('Save cadence')!);
+    await until(() => /Follow-up cadence saved/.test(document.body.textContent ?? ''), 'the saved note');
+    expect(writes().map((w) => w.headers['If-Match'])).toEqual(['c1', 'c2']);
   });
 
   it('the blacklist keeps showing the written rows, not the pre-save copy', async () => {

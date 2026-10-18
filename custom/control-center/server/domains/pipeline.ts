@@ -41,6 +41,25 @@ const FLAGGED_URL_RE = new RegExp(`^(\\S+)\\s+(?:--|${RANK_DASH})?\\s*(.*)$`);
 // `Remote: US` (scan.mjs keeps colons in it): only those written forms are labels, in any column.
 export const WRITTEN_SEGMENT = new RegExp(`^(?:posted: \\d{4}-\\d{2}-\\d{2}|trust: \\d{1,3}(?: [a-z_]+(?:,[a-z_]+)*)?|note: \\S.*|rank: \\d+(?:\\.\\d+)?\\/5(?:\\s*${RANK_DASH}\\s*\\S.*)?)$`);
 
+/**
+ * Where the labels start in a row's cells from the URL on (cells.length when there are none). Writers append them
+ * last, each once (posted, trust, note, rank), either right after the URL (rank-pipeline on a bare pasted URL) or after
+ * the company and title cells, which scan.mjs always writes together. So a company or title that reads like a label
+ * (`note: labs`) stays text: labels are a trailing run of distinct ones, starting at the first cell after the URL or
+ * past the title. Order within the run is not checked: rows on disk carry rank before posted.
+ */
+function labelRunStart(cells: string[]): number {
+  const seen = new Set<string>();
+  let start = cells.length;
+  for (let i = cells.length - 1; i >= 1; i--) {
+    const name = WRITTEN_SEGMENT.test(cells[i]!) ? cells[i]!.slice(0, cells[i]!.indexOf(':')) : null;
+    if (name === null || seen.has(name)) break;
+    seen.add(name);
+    start = i;
+  }
+  return start === 2 ? 3 : start;
+}
+
 export function seniorityOf(title: string): string | null {
   const t = title.toLowerCase();
   if (/\b(intern|internship)\b/.test(t)) return 'intern';
@@ -107,8 +126,10 @@ export function parsePipeline(md: string): PipelineRow[] {
     const skipped = cells[0]!.startsWith('#--');
     const positional: string[] = [];
     const labels = new Map<string, string>();
-    cells.slice(urlAt).forEach((cell, idx) => {
-      const lm = idx >= 1 && WRITTEN_SEGMENT.test(cell) ? cell.match(LABELED) : null;
+    const fromUrl = cells.slice(urlAt);
+    const labelsAt = labelRunStart(fromUrl);
+    fromUrl.forEach((cell, idx) => {
+      const lm = idx >= labelsAt ? cell.match(LABELED) : null;
       if (lm) labels.set(lm[1]!.toLowerCase(), lm[2]!.trim());
       else positional.push(cell);
     });

@@ -282,6 +282,29 @@ describe('output/ file names the prefill and re-render accept (seed: SW3-web-a-0
   });
 });
 
+describe('posting links the URL-taking actions put on a command line (R35-shared-comp-1-01)', () => {
+  const samples: Array<[string, (url: string) => unknown]> = [
+    ['docs.prepareApplication', (url) => ({ url, pdf: 'output/cv.pdf' })],
+    ['docs.fetchJd', (url) => ({ url })],
+    ['docs.archivePosting', (url) => ({ url, report: 1 })],
+    ['docs.liveness', (url) => ({ urls: [url] })],
+  ];
+  it.each(samples)('%s refuses a link carrying a user name or password and keeps taking a plain one', (id, params) => {
+    const a = findAction(id)!;
+    for (const url of ['https://user:secret@boards.greenhouse.io/acme/jobs/1', 'https://user@jobs.lever.co/acme/abc', 'https://:secret@example.com/job/1']) {
+      expect(a.params.safeParse(params(url)).success, url).toBe(false);
+    }
+    expect(a.params.safeParse(params('https://boards.greenhouse.io/acme/jobs/1')).success).toBe(true);
+  });
+  it.each(samples)('%s refuses a link carrying a secret-looking parameter and keeps taking tracking ones', (id, params) => {
+    const a = findAction(id)!;
+    for (const url of ['https://example.com/job/1?token=abc', 'https://example.com/job/1?gh_jid=1&access_token=abc', 'https://example.com/job/1#api_key=abc']) {
+      expect(a.params.safeParse(params(url)).success, url).toBe(false);
+    }
+    expect(a.params.safeParse(params('https://www.linkedin.com/jobs/view/4001?trackingId=abc&refId=x')).success).toBe(true);
+  });
+});
+
 describe('action registry covers section 3.3', () => {
   // Builders may stage ephemeral input files under the data root, so it must exist.
   const ctx = { codeRoot: '/code', dataRoot: copyFixtureRoot(), tmpInputs: [] as string[] };

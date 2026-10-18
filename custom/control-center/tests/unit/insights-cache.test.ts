@@ -376,3 +376,33 @@ describe('concurrent loads of one insight share a single run (R32-srv-dom-a-X-02
     await b;
   });
 });
+
+describe('the insights cache under overlapping runs for changed inputs (R35-srv-dom-a-X-01)', () => {
+  it('given a run for older inputs that ends after the run for newer ones, when both settle, then the cache keeps the newer run', async () => {
+    const releases: Array<() => void> = [];
+    let started = 0;
+    const exec: Exec = () =>
+      new Promise((resolve) => {
+        const n = (started += 1);
+        const done = () => resolve({ code: 0, stdout: JSON.stringify({ run: n }), stderr: '' });
+        // Only the two overlapping runs wait to be released; a rerun after them answers at once.
+        if (n > 2) done();
+        else releases.push(done);
+      });
+    const cfg = testConfig();
+    const older = readInsight(cfg, exec, 'funnelVelocity');
+    await vi.waitFor(() => expect(started).toBe(1));
+    const later = new Date(Date.now() + 120_000);
+    fs.utimesSync(path.join(cfg.dataRoot, 'data', 'applications.md'), later, later);
+    const newer = readInsight(cfg, exec, 'funnelVelocity');
+    await vi.waitFor(() => expect(started).toBe(2));
+    releases[1]!();
+    expect((await newer).json).toEqual({ run: 2 });
+    releases[0]!();
+    expect((await older).json).toEqual({ run: 1 });
+    const again = await readInsight(cfg, exec, 'funnelVelocity');
+    expect(again).toMatchObject({ fromCache: true, json: { run: 2 } });
+    expect(started).toBe(2);
+    expect(fs.readdirSync(path.join(cfg.dataRoot, 'data', 'control-center', 'insights'))).toEqual(['funnelVelocity.json']);
+  });
+});
