@@ -226,7 +226,10 @@ function runSync(world, { home, inherited = {}, security = 'exit 44' }) {
   }
   // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
   // weekly sync runs these specs) would send this run's log into the user's real data/upstream-sync.
-  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, CC_NODE_BIN: _node, ...env } = { ...GIT_ENV, ...inherited };
+  // Anthropic and Claude Code variables the shell running these specs exports (Claude Code sets several) are dropped
+  // too, so a run sees only the ones a test passes in and its assertions never depend on the host.
+  const hostEnv = Object.fromEntries(Object.entries(GIT_ENV).filter(([n]) => !/^(ANTHROPIC_|CLAUDE_CODE_)/.test(n)));
+  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, CC_NODE_BIN: _node, ...env } = { ...hostEnv, ...inherited };
   // The node running these specs, pinned as the plist pins one: sync.sh puts Homebrew's folders first on its PATH.
   // Only a test's own inherited pin replaces it, never one from the shell or the plist that runs these specs.
   const childEnv = { ...env, CC_NODE_BIN: inherited.CC_NODE_BIN ?? process.execPath, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` };
@@ -367,13 +370,19 @@ test('inherited Anthropic credentials are dropped before any child of the sync r
     const inherited = {
       ANTHROPIC_API_KEY: 'sk-api', ANTHROPIC_AUTH_TOKEN: 'sk-auth', ANTHROPIC_BASE_URL: 'https://proxy.invalid',
       CLAUDE_CODE_OAUTH_TOKEN: 'sk-oauth', CLAUDE_CODE_API_KEY_HELPER: 'x', CLAUDE_CODE_EFFORT_LEVEL: 'low',
+      // Settings whose names only contain a credential word (TOKENS is not the TOKEN segment) are not credentials.
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000', CLAUDE_CODE_ENTRYPOINT: 'cli',
     };
     const res = runSync(w, { home, inherited, security: `env > "${seen}"\nexit 44` });
     assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
     // Names only: the values in this environment can be the developer's real credentials.
     const names = readFileSync(seen, 'utf8').split('\n').map((l) => l.split('=')[0]);
-    assert.deepEqual(names.filter((n) => /^(ANTHROPIC_|CLAUDE_CODE_.*(TOKEN|KEY))/.test(n)), []);
-    assert.ok(names.includes('CLAUDE_CODE_EFFORT_LEVEL'), 'a non-credential CLAUDE_CODE_* setting is kept');
+    // The credential rule sync.sh applies: any ANTHROPIC_* name, or a CLAUDE_CODE_* name with a credential segment.
+    const credential = /^ANTHROPIC_|^CLAUDE_CODE_(.*_)?(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?)(_|$)/;
+    assert.deepEqual(names.filter((n) => credential.test(n)), []);
+    for (const kept of ['CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_ENTRYPOINT']) {
+      assert.ok(names.includes(kept), `the non-credential setting ${kept} is kept`);
+    }
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
