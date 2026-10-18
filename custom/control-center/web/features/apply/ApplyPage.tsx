@@ -13,7 +13,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { CostPill, Message } from '../../components/ActionBar';
 import { DataState, Pill } from '../../components/ui';
 import { prefillBlockers } from './prefill';
-import { rowIdentity, type RowIdentity } from '../tracker/StatusControl';
+import { rowIdentity, sameRow, type RowIdentity } from '../tracker/StatusControl';
 import type { ApplyDocuments } from '@shared/api';
 
 const rowRoute = getRouteApi('/apply/$n');
@@ -154,13 +154,49 @@ function writeDraftDocs(sid: string, docs: DraftDocs | null): void {
   }
 }
 
+// The application a row's session was started for, by its session id. A tracker number is reused once its row is
+// deleted (the next addition takes max + 1), so a session remembered under the number is the shown row's only while the
+// row is still that application. A session with none kept (started elsewhere) is taken as the row's.
+const sessionRowKey = (sid: string) => `cc.apply.row.${sid}`;
+function readSessionRow(sid: string): RowIdentity | null {
+  try {
+    const raw = sessionStorage.getItem(sessionRowKey(sid));
+    if (raw === null) return null;
+    const parsed = JSON.parse(raw) as Partial<RowIdentity>;
+    if (typeof parsed.company !== 'string' || typeof parsed.role !== 'string' || !(parsed.report === null || typeof parsed.report === 'number')) return null;
+    return { company: parsed.company, role: parsed.role, report: parsed.report };
+  } catch {
+    return null;
+  }
+}
+function writeSessionRow(sid: string, row: RowIdentity | null): void {
+  try {
+    if (row === null) sessionStorage.removeItem(sessionRowKey(sid));
+    else sessionStorage.setItem(sessionRowKey(sid), JSON.stringify(rowIdentity(row)));
+  } catch {
+    // storage refused: a reused number's session is only taken as the row's
+  }
+}
+/** Whether the session was started for another application than `identity`, the one now under its row number. */
+function startedForOther(sid: string | null, identity: RowIdentity | undefined): boolean {
+  if (!sid || !identity) return false;
+  const row = readSessionRow(sid);
+  return row !== null && !sameRow(row, identity);
+}
+
 function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
   const navigate = useNavigate();
   const engine = useEngine();
   // The draft is a paid session and Fill is reachable only here: the row's last apply session is re-attached when the
   // page comes back, and its answers envelope (replayed by the panel) rebuilds the form.
   const remembered = useRememberedSession(applyKey(n));
-  const sessionId = remembered.panel.sessionId;
+  const rememberedId = remembered.panel.sessionId;
+  // Another application's draft under a reused number is not this row's: it is let go, and the form starts clean.
+  const foreignDraft = n !== null && startedForOther(rememberedId, identity);
+  const sessionId = foreignDraft ? null : rememberedId;
+  useEffect(() => {
+    if (foreignDraft && rememberedId) lastSession(applyKey(n)).forget(rememberedId);
+  }, [foreignDraft, rememberedId, n]);
   const [typedUrl, setUrl] = useState<string | null>(null);
   const storedUrl = readTypedUrl(sessionId);
   // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings
@@ -192,6 +228,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
     if (sessionId) {
       writeTypedUrl(sessionId, null);
       writeDraftDocs(sessionId, null);
+      writeSessionRow(sessionId, null);
     }
     onNewDraft();
   };
@@ -237,10 +274,13 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
       // Only the user's picks are kept: a preselected suggestion is no choice, so a newer tailored file is preselected
       // when the page comes back. A reply reports the draft it runs in: its prompt named no documents, so the draft's
       // own are left as they are. A fork of a re-attached draft carries the draft's choices on.
-      if (sid !== sessionId) writeDraftDocs(sid, { pdf: latestPicks.current.pdf ?? storedPdf, cover: latestPicks.current.cover ?? storedCover });
+      if (sid !== sessionId) {
+        writeDraftDocs(sid, { pdf: latestPicks.current.pdf ?? storedPdf, cover: latestPicks.current.cover ?? storedCover });
+        if (n !== null && identity) writeSessionRow(sid, identity);
+      }
       rememberSessionId(sid);
     },
-    [typedUrl, storedUrl, sessionId, storedPdf, storedCover, rememberSessionId],
+    [typedUrl, storedUrl, sessionId, storedPdf, storedCover, rememberSessionId, n, identity],
   );
   // A pick made after the draft started is the one Fill attaches, so it is kept for the re-attached draft as well.
   const pickDoc = (kind: keyof DraftDocs, value: string) => {
@@ -272,6 +312,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
         if (sessionId) {
           writeTypedUrl(sessionId, null);
           writeDraftDocs(sessionId, null);
+          writeSessionRow(sessionId, null);
         }
         onNewDraft();
       }
@@ -291,7 +332,13 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   // Each click starts a paid session that writes the row's CV, so the button stays off while the last one started here
   // (remembered across leaving the page, for the session page it opens) is starting, queued or running.
   const pdfSession = useRememberedSession(`cc.pdf.${n ?? 'none'}`);
-  const pdfId = n ? pdfSession.panel.sessionId : null;
+  const pdfRemembered = n ? pdfSession.panel.sessionId : null;
+  // Another application's CV run under a reused number neither holds Generate off nor is linked as this row's.
+  const foreignPdf = startedForOther(pdfRemembered, identity);
+  const pdfId = foreignPdf ? null : pdfRemembered;
+  useEffect(() => {
+    if (foreignPdf && pdfRemembered) lastSession(`cc.pdf.${n}`).forget(pdfRemembered);
+  }, [foreignPdf, pdfRemembered, n]);
   const pdfStream = useSessionStream(pdfId);
   // The sessions list also backs the per-row tailored-CV guard: a pdf session for this row started from its Documents
   // tab (cc.application.<n>.documents) is not remembered under cc.pdf.<n>, so the guard reads it from the list, exactly
@@ -300,7 +347,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   // Until the sessions list answers (and when it cannot), a live pdf session for the row cannot be told apart from none,
   // so Generate stays off rather than starting a second paid CV write, as Today's Evaluate button guards oferta sessions.
   const sessionsChecking = sessions.isPending || sessions.isError;
-  const livePdf = n === null ? undefined : sessions.data?.find((s) => s.mode === 'pdf' && LIVE_PDF.has(s.status) && s.target.value === n);
+  const livePdf = n === null ? undefined : sessions.data?.find((s) => s.mode === 'pdf' && LIVE_PDF.has(s.status) && s.target.value === n && !startedForOther(s.id, identity));
   const { onStatus: pdfOnStatus, onStarting: pdfOnStarting, onSessionId: pdfOnSessionId, onStartFailed: pdfOnStartFailed } = pdfSession.panel;
   useEffect(() => {
     // A session waiting for the user's reply is still the row's CV run: the reply finishes it, so it stays live here.
@@ -322,6 +369,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
     pdfOnStarting();
     try {
       const m = await startTailoredCvSession(n);
+      if (identity) writeSessionRow(m.id, identity);
       pdfOnSessionId(m.id);
       if (mounted.current) await navigate({ to: '/sessions/$id', params: { id: m.id } });
     } catch (err) {

@@ -48,11 +48,11 @@ const ANSWERS = { fields: [{ id: 'name', label: 'Full name', type: 'text', requi
 const ROW_12 = { company: 'Acme Robotics', role: 'Robotics Engineer', report: 31 };
 const APPLIED_12 = { row: 12, state: 'Applied', expectCompany: 'Acme Robotics', expectRole: 'Robotics Engineer', expectReport: 31 };
 
-async function openApply(n: string | null = '12', status?: string) {
+async function openApply(n: string | null = '12', status?: string, identity: typeof ROW_12 = ROW_12) {
   const { ApplyBody } = await import('@web/features/apply/ApplyPage');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
-  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: 'Acme Robotics', postingUrl: 'https://jobs.example.com/acme/1', status, identity: ROW_12 } : { n: null, company: null, postingUrl: '' }) });
+  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: identity.company, postingUrl: 'https://jobs.example.com/acme/1', status, identity } : { n: null, company: null, postingUrl: '' }) });
   const elsewhere = createRoute({ getParentRoute: () => rootRoute, path: '/elsewhere', component: () => createElement('p', null, 'Elsewhere page') });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => createElement('p', null, 'Session page') });
   router = createRouter({ routeTree: rootRoute.addChildren([apply, elsewhere, session]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
@@ -754,6 +754,64 @@ describe('Apply starts over and follows the sessions it started', () => {
     sessionStorage.setItem('cc.pdf.12', 's-pdf-12');
     await openApply();
     await until(() => generate() && !generate()!.disabled, 'Generate CV PDF enabled');
+  });
+});
+
+// A tracker number moves to another application when it is reused: deleting the top row frees it for the next addition.
+describe('Given the row number now belongs to another application (R32-feat-a-L2-01)', () => {
+  const BETA_12 = { company: 'Beta Labs', role: 'Data Engineer', report: 44 };
+  const generate = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Generate CV PDF'));
+  const markApplied = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Mark applied');
+  beforeEach(() => vi.stubGlobal('EventSource', class { addEventListener() {} close() {} }));
+
+  it('When its Apply page opens, Then the earlier application\'s draft is not re-attached and Mark applied names the row shown', async () => {
+    await openApply();
+    await draftAnswers();
+    expect(fillButton()).toBeDefined();
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply('12', undefined, BETA_12);
+    expect(applyPanel()!.sessionId ?? null).toBeNull();
+    await until(() => draftButton(), 'the Draft answers button');
+    expect(fillButton()).toBeUndefined();
+    expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
+
+    await act(async () => markApplied()!.click());
+    await until(() => statusPosts.length > 0 || undefined, 'the Mark applied post');
+    expect(statusPosts).toEqual([{ row: 12, state: 'Applied', expectCompany: 'Beta Labs', expectRole: 'Data Engineer', expectReport: 44 }]);
+  });
+
+  it('When the earlier application\'s draft comes back for its own row, Then it is still re-attached', async () => {
+    await openApply();
+    await draftAnswers();
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply();
+    expect(applyPanel()).toMatchObject({ sessionId: 's-apply-12' });
+  });
+
+  it('When the earlier application\'s tailored CV session still runs, Then it does not hold Generate CV PDF off for the row shown', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    // The sessions list shows the CV session once it started.
+    let listed = false;
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && init?.method !== 'POST') {
+        return json(listed ? [{ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'running', target: { type: 'app', value: '12' } }] : []);
+      }
+      return inner(input, init);
+    });
+    await openApply();
+    await act(async () => (await until(() => generate() && !generate()!.disabled && generate(), 'Generate CV PDF on')).click());
+    listed = true;
+    await until(() => router.state.location.pathname === '/sessions/s-pdf-12', 'the session page');
+
+    await act(async () => root.unmount());
+    panels = [];
+    await openApply('12', undefined, BETA_12);
+    await until(() => generate() && !generate()!.disabled && generate(), 'Generate CV PDF on');
+    expect(host.querySelector('a[href="/sessions/s-pdf-12"]')).toBeNull();
   });
 });
 
