@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import '../../test-support/tmp.mjs';
 import { gitTestEnv } from '../../test-support/git-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

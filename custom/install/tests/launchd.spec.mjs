@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import '../../test-support/tmp.mjs';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
