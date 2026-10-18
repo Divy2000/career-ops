@@ -258,6 +258,35 @@ describe('summarizeDigest', () => {
     expect(lines(body)).toEqual([expected]);
   });
 
+  it.each([
+    ['an abbreviation', '- **The U.S. Dept.** of State paused H-1B stamping in India. More.', 'The U.S. Dept. of State paused H-1B stamping in India.'],
+    ['an abbreviation before a number', '- **Fee rises Oct.** 15 for all petitions. More.', 'Fee rises Oct. 15 for all petitions.'],
+    ['a period before a lowercase word', '- **Rule 5.** applies to cap-exempt employers. More.', 'Rule 5. applies to cap-exempt employers.'],
+    ['a middle initial', '- **Signed by Donald J.** Trump today. More.', 'Signed by Donald J. Trump today.'],
+  ])('reads a bold lead ending in %s on into the text after it, by the one sentence-end rule (R34-shared-comp-L2-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['emphasis', '- USCIS said the rule is *not final.* yet employers must prepare. Later text.', 'USCIS said the rule is not final. yet employers must prepare.'],
+    ['bold', '- USCIS said the rule is **not final.** yet employers must prepare. Later text.', 'USCIS said the rule is not final. yet employers must prepare.'],
+    ['inline code', '- Set `mode.` then restart the runner. Later text.', 'Set mode. then restart the runner.'],
+  ])('reads a period at the end of %s on before a lowercase word, as in plain text (R34-shared-comp-X-02)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['a bracket after a link', '- Fees rise ([see the notice.](https://u.test/n)) Posts will contact applicants once the review completes.', 'Fees rise (see the notice.)'],
+    ['a quote after a link', '- USCIS called it "[final.](https://u.test/f)" Posts will update.', 'USCIS called it "final."'],
+    ['a quote after emphasis', '- USCIS called it "*final.*" Posts will update.', 'USCIS called it "final."'],
+  ])('ends the first sentence at a label or emphasis ending in terminal punctuation closed by %s (R34-weblib-L2-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it('keeps the bracket after a link label that ends the sentence in the plain text that follows it (R34-weblib-L2-01)', () => {
+    expect(summarizeDigest('- Fees rise ([see the notice.](https://u.test/n)) Posts will contact applicants.')[0]).toEqual([{ text: 'Fees rise (' }, { text: 'see the notice.', href: 'https://u.test/n' }, { text: ')' }]);
+  });
+
   // Linear work: the quadratic scan took over 20 s on each of these, the linear one well under a second; the bound leaves room for a loaded machine.
   it('summarizes an abbreviation-heavy bullet in linear time (R34-feat-b-X-01)', () => {
     const body = `- ${'e.g. '.repeat(40000)}Final policy update. Later text.`;
