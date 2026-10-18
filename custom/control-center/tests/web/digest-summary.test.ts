@@ -108,4 +108,10 @@ describe('summarizeDigest', () => {
   it('drops footnote references and image references', () => {
     expect(lines('- Fee rises[^1] for all. ![pic][x] More.\n\n[^1]: a footnote\n[x]: https://x.example/p.png')).toEqual(['Fee rises for all.']);
   });
+
+  it('keeps a link labelled with its own mailto: address instead of collapsing it to an empty host (R33-feat-b-L2-01)', () => {
+    expect(summarizeDigest('- Contact <mailto:help@uscis.gov> today.')[0]).toEqual([{ text: 'Contact ' }, { text: 'help@uscis.gov', href: 'mailto:help@uscis.gov' }, { text: ' today.' }]);
+    expect(summarizeDigest('- Write [mailto:help@uscis.gov](mailto:help@uscis.gov) today.')[0]).toEqual([{ text: 'Write ' }, { text: 'help@uscis.gov', href: 'mailto:help@uscis.gov' }, { text: ' today.' }]);
+    expect(summarizeDigest('- Call [tel:+15551234](tel:+15551234) today.')[0]).toEqual([{ text: 'Call ' }, { text: '+15551234', href: 'tel:+15551234' }, { text: ' today.' }]);
+  });
 });

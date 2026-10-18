@@ -16,17 +16,22 @@ export const spansText = (spans: DigestSpan[]): string => spans.map((s) => s.tex
 
 const parser = unified().use(remarkParse).use(remarkGfm);
 
-function hostOf(url: string): string {
+/** What a link labelled with its own address shows: the host of a web address, the address alone for mailto:/tel:, else the label. */
+function addressLabel(url: string): string {
+  let parsed: URL;
   try {
-    return new URL(url).host;
+    parsed = new URL(url);
   } catch {
     return url;
   }
+  if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.host !== '') return parsed.host;
+  if (parsed.protocol === 'mailto:' || parsed.protocol === 'tel:') return url.slice(parsed.protocol.length) || url;
+  return url;
 }
 
 type Definitions = Map<string, string>;
 
-/** Phrasing nodes to spans. Images, footnote references and raw HTML are dropped; a link whose label is its own address shows only the host. */
+/** Phrasing nodes to spans. Images, footnote references and raw HTML are dropped; a link whose label is its own address shows it compactly. */
 function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string | undefined, out: DigestSpan[], defs: Definitions): void {
   for (const n of nodes) {
     switch (n.type) {
@@ -46,7 +51,7 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
         break;
       case 'link': {
         const label = n.children.length === 1 && n.children[0]!.type === 'text' ? (n.children[0] as { value: string }).value : null;
-        if (label !== null && label === n.url) out.push({ text: hostOf(n.url), ...(bold ? { bold } : {}), href: n.url });
+        if (label !== null && label === n.url) out.push({ text: addressLabel(n.url), ...(bold ? { bold } : {}), href: n.url });
         else flatten(n.children, bold, n.url, out, defs);
         break;
       }
