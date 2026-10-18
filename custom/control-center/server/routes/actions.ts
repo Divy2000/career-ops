@@ -32,7 +32,7 @@ export async function actionRoutes(app: FastifyInstance, opts: { cfg: ServerConf
     }
     const daily = opts.daily;
     const { rawTrackerPath } = await importCore<{ rawTrackerPath: (root: string) => string }>(cfg.codeRoot, 'path-resolver.mjs');
-    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined, policyPassRunning: opts.policyPass, onSettled: [] as Array<() => void> };
+    const ctx = { codeRoot: cfg.codeRoot, dataRoot: cfg.dataRoot, guardRoot: cfg.guardRoot, claudeBin: cfg.claudeBin, nodeBin, trackerPath: rawTrackerPath(cfg.dataRoot), tmpInputs: [] as string[], pluginsLocalDir: cfg.pluginsLocalDir, dailyRunning: daily ? () => daily.runningNow() : undefined, policyPassRunning: opts.policyPass, onSettled: [] as Array<() => void> };
     try {
       const problem = await action.check?.(parsed.data, ctx);
       if (problem) return typeof problem === 'string' ? reply.code(400).send({ error: problem }) : reply.code(problem.status).send({ error: problem.error });

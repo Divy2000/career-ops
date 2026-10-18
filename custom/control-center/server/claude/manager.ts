@@ -16,7 +16,7 @@ import type { RawLine, RunMeta } from '../runner/store.js';
 import type { EventBus } from '../watch/bus.js';
 import type { Exec } from '../routes/system.js';
 import { cliScriptPath, CONTRACT } from '../core/adapter.js';
-import { conversationStarted, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
+import { conversationStarted, HELD_REPORT_NUMS_FILE, readHeldRecords, readSentinelIdentity, SessionStore, type SessionMeta, type StoredEvent } from './sessions.js';
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import type { EnvelopeKind } from './envelopes.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
@@ -189,7 +189,7 @@ export function writeProgress(file: string, p: TurnProgress): void {
  * go. A number released, collected or reserved again is another reservation, so a hold on it no longer matches. With `since` (when
  * the session got the numbers), a sentinel written after it is another reservation's and is not recorded.
  */
-export const HELD_REPORT_NUMS_FILE = 'held-report-nums.log';
+export { HELD_REPORT_NUMS_FILE };
 
 export function recordHeldReportNums(sessionDir: string, nums: readonly number[], dataRoot: string, since?: number | null): void {
   const records = nums.flatMap((n) => {
@@ -217,50 +217,10 @@ export function restoreHeldReportNums(sessionDir: string, nums: readonly number[
  * between turns, while no release of the session's can be running. Records are read as guard-hook.mjs reads them.
  */
 export function reconcileHeldReportNums(sessionDir: string, dataRoot: string): void {
-  let text: string;
-  try {
-    text = fs.readFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw err;
-  }
-  const held = new Map<number, string>();
-  const letGo = new Map<number, { id: string | null; at: string | null }>();
-  for (const line of text.split('\n')) {
-    const m = HELD_RECORD.exec(line);
-    if (!m) continue;
-    const num = Number(m[2]);
-    if (m[1] === '-') {
-      letGo.set(num, { id: m[4] ?? null, at: held.get(num) ?? null });
-      held.delete(num);
-    } else if (m[3] !== undefined) {
-      held.set(num, m[3]);
-      letGo.delete(num);
-    } else if (m[4] !== undefined && letGo.get(num)?.id === m[4] && letGo.get(num)!.at !== null && !held.has(num)) {
-      held.set(num, letGo.get(num)!.at!);
-      letGo.delete(num);
-    }
-  }
-  const records = [...letGo].flatMap(([n, { at }]) => (at !== null && readSentinelIdentity(dataRoot, n)?.key === at ? [`\n+${n}=${at};`] : []));
-  if (records.length) fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), records.join(''));
-}
-
-const HELD_RECORD = /^([+-])(\d+)(?:=(\d+(?:~[A-Za-z0-9_-]{1,100})?)|@([A-Za-z0-9_-]{1,100}))?;$/;
-const SENTINEL_TOKEN = /^[A-Za-z0-9_-]{1,100}$/;
-
-/** Which reservation `num`'s sentinel is: its created_at, and the key a hold names it by (guard-hook.mjs sentinelIdentity). */
-function readSentinelIdentity(dataRoot: string, num: number): { at: number; key: string } | null {
-  const file = path.join(dataRoot, 'reports', `${String(num).padStart(3, '0')}-RESERVED.md`);
-  let sentinel: { created_at?: unknown; token?: unknown };
-  try {
-    sentinel = JSON.parse(fs.readFileSync(file, 'utf8')) as typeof sentinel;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT' && !(err instanceof SyntaxError)) throw err;
-    return null;
-  }
-  const at = typeof sentinel?.created_at === 'string' ? Date.parse(sentinel.created_at) : NaN;
-  if (Number.isNaN(at)) return null;
-  return { at, key: typeof sentinel.token === 'string' && SENTINEL_TOKEN.test(sentinel.token) ? `${at}~${sentinel.token}` : String(at) };
+  const records = readHeldRecords(sessionDir);
+  if (records === null) return;
+  const restored = [...records.letGo].flatMap(([n, { at }]) => (at !== null && readSentinelIdentity(dataRoot, n)?.key === at ? [`\n+${n}=${at};`] : []));
+  if (restored.length) fs.appendFileSync(path.join(sessionDir, HELD_REPORT_NUMS_FILE), restored.join(''));
 }
 
 /** The tool ids the CLI hands out (toolu_...); anything else is never written into a hold record. */

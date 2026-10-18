@@ -15,6 +15,7 @@ Every piece of shared state has exactly one owner at a time, and the owner is re
 | Starting an evaluation of a posting | the starting process | `posting-claims/*.claim` + `postingHolds` | before the duplicate check | once the session's turn runs (or the start fails) |
 | A fan-out starting a posting | the fan-out | `batchStarting` | with its posting claim | when the fan-out returns |
 | A session's report number | the session record | `meta.reportNum` | at reservation | `setReportNum(null)` before the first await of the release |
+| A report number a session reserved itself | the session | `{guard}/held-report-nums.log` (`+N=<sentinel key>;`) | when its `reserve-report-num.mjs` output is read | the session's own release (`-N`), or the sentinel no longer being that reservation |
 
 A process claim names a live process. One whose holder is dead or a reused PID is taken over; a live holder is never
 displaced, however long it takes.
@@ -38,6 +39,8 @@ wherever it finishes.
 - A session's `status` describes its last turn: ending turn n never changes `status`, `error` or `lastReason` once a
   later turn exists (`SessionStore.endTurn`). A turn ends once; its cost is counted once.
 - A report number is released once, ownership-checked against when the session got it.
+- Release report numbers (`pipeline.releaseReportNums`) refuses any number a session holds by either record above,
+  read through `heldReportNumsOf` (the guard-hook's record rules); without the guard root it refuses everything.
 
 ## Refusals
 

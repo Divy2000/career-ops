@@ -19,13 +19,15 @@ import { NETWORK_SCAN_SOURCES } from '../../shared/network-scan.js';
 import { STATUS_NOTE_MAX } from '../../shared/tracker-status.js';
 import { writeTmpInput } from './tmp-inputs.js';
 import { replyWatchRefused } from '../domains/replyCandidates.js';
-import { SessionStore, sessionsDir } from '../claude/sessions.js';
+import { heldReportNumsOf, SessionStore, sessionsDir } from '../claude/sessions.js';
 
 export type Resource = 'tracker' | 'pipeline' | 'portals' | 'profile' | 'followups' | 'cv' | 'blacklist' | 'launchd' | 'pdf-index' | `immigration:${string}`;
 
 export interface ActionContext {
   codeRoot: string;
   dataRoot: string;
+  /** The session guard root (CC_GUARD_DIR): each session's guard folder logs the report numbers it reserved itself. */
+  guardRoot?: string;
   /** The claude the app runs (CC_CLAUDE_BIN or the resolved one); the daily job gets it when it is absolute, as the plist does. */
   claudeBin?: string;
   /** The node the scheduled jobs are pinned to (pinnedNodeBin); the daily job gets it when it is absolute, as the plist does. */
@@ -199,12 +201,12 @@ function unrecordedReportNums(dataRoot: string): { taking: boolean; nums: number
 }
 
 /**
- * The reserved report numbers this data root's sessions hold (a session keeps its number until its turn settles and
- * clears it), or the session whose meta.json cannot be read: that one might hold any number.
+ * The reserved report numbers this data root's sessions hold: the one the app reserved for a session (it keeps it until
+ * its turn settles and clears it) and the ones its own reserve-report-num.mjs runs printed, logged in its guard folder.
+ * Or the session that cannot be read: that one might hold any number.
  */
-function heldReportNums(dataRoot: string): { held: Array<{ num: number; sessionId: string }> } | { unreadable: string; why: string } {
-  // The guard root only locates a session's policy files; reading a session's meta needs the data root alone.
-  const store = new SessionStore(dataRoot, '');
+function heldReportNums(dataRoot: string, guardRoot: string): { held: Array<{ num: number; sessionId: string }> } | { unreadable: string; why: string } {
+  const store = new SessionStore(dataRoot, guardRoot);
   const held: Array<{ num: number; sessionId: string }> = [];
   for (const entry of fs.readdirSync(sessionsDir(dataRoot), { withFileTypes: true })) {
     // Only session folders, as SessionStore.list takes them.
@@ -212,6 +214,8 @@ function heldReportNums(dataRoot: string): { held: Array<{ num: number; sessionI
     try {
       const meta = store.read(entry.name);
       if (meta && meta.reportNum !== null) held.push({ num: meta.reportNum, sessionId: meta.id });
+      // A guard folder outlives no session: delete removes it, so a log here is a session's (meta torn or not).
+      for (const num of heldReportNumsOf(store.guardDirOf(entry.name), dataRoot)) held.push({ num, sessionId: meta?.id ?? entry.name });
     } catch (err) {
       return { unreadable: entry.name, why: (err as Error).message };
     }
@@ -430,7 +434,9 @@ export const ACTIONS: ActionDef[] = [
       if (unrecorded.taking) return { status: 409, error: 'A session is reserving report numbers right now, so one of these may be about to be its own. Nothing was released; try again in a moment.' };
       const starting = unrecorded.nums.filter((n) => n >= first! && n <= last!);
       if (starting.length > 0) return { status: 409, error: `Report ${starting.join(', ')} is reserved for a session that is starting. Nothing was released; it releases its own number.` };
-      const sessions = heldReportNums(ctx.dataRoot);
+      // Without the guard root the numbers sessions reserved themselves cannot be read, so any might be held.
+      if (!ctx.guardRoot) return { status: 409, error: 'The session guard folder is not known here, so a session may hold one of these numbers. Nothing was released.' };
+      const sessions = heldReportNums(ctx.dataRoot, ctx.guardRoot);
       if ('unreadable' in sessions) return { status: 409, error: `Session ${sessions.unreadable} cannot be read (${sessions.why}), so it may hold one of these numbers. Nothing was released.` };
       const held = sessions.held.filter((h) => h.num >= first! && h.num <= last!);
       if (held.length === 0) {
