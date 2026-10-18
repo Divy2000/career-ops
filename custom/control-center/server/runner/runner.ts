@@ -137,6 +137,8 @@ export class Runner {
   private stopping = new Set<string>();
   /** SIGKILLs armed by cancel: they live in this process only, so close() drops them as its exit would. */
   private killTimers = new Set<NodeJS.Timeout>();
+  /** Retries to record a run that could not start; close() drops them too. */
+  private laterTimers = new Set<NodeJS.Timeout>();
   /** This process as claims and the schedule lock name it, read once. */
   private self: { pid: number; start: number | null } | null = null;
 
@@ -303,9 +305,7 @@ export class Runner {
       // A child PID now held by a process that started later is never recorded as the run's: nothing signals it.
       const childStartedAt = wrapper.childPid ? this.startRecordedBy(wrapper.childPid, recordedAt) : null;
       const running: RunMeta = { ...begun, status: 'running', wrapperStartedAt, childStartedAt: childStartedAt === false ? null : childStartedAt };
-      this.store.write(running);
-      this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
-      this.track(running);
+      this.recordRunning(running);
       return running;
     }
     fs.writeFileSync(path.join(this.store.dirOf(meta.id), TAKEOVER_FILE), new Date().toISOString());
@@ -439,7 +439,7 @@ export class Runner {
         this.queue.push({ meta: current, env });
         // First in, first out: an adopted run keeps its place ahead of runs queued here later.
         this.queue.sort((x, y) => (x.meta.createdAt < y.meta.createdAt ? -1 : x.meta.createdAt > y.meta.createdAt ? 1 : 0));
-        this.pump();
+        this.pumpFromTimer();
       },
       (err: unknown) => {
         this.adopting.delete(meta.id);
@@ -631,16 +631,40 @@ export class Runner {
       const entry = this.active.get(meta.id);
       if (entry) clearInterval(entry.timer);
       this.active.delete(meta.id);
-      this.guarded(`recording run ${meta.id} could not start`, () => this.failToStart(this.store.read(meta.id) ?? meta, err));
-      this.pumpFromTimer();
+      this.settleFailedStart(meta, err);
     });
     child.unref();
     const wrapperPid = child.pid ?? null;
     const running: RunMeta = { ...meta, status: 'running', startedAt: new Date().toISOString(), wrapperPid, wrapperStartedAt: wrapperPid ? this.recordStart(wrapperPid) : null };
-    this.store.write(running);
-    this.bus.publish('run.status', { runId: meta.id, status: 'running', actionId: meta.actionId });
-    this.track(running);
+    this.recordRunning(running);
     return 'started';
+  }
+
+  /**
+   * Records a run whose wrapper runs now and follows it. A write that fails leaves it queued on disk, held by this
+   * process's claim: it is followed all the same (never started again), and its tracking writes it running.
+   */
+  private recordRunning(running: RunMeta): void {
+    this.guarded(`recording run ${running.id} as running`, () => this.store.write(running));
+    this.bus.publish('run.status', { runId: running.id, status: 'running', actionId: running.actionId });
+    this.track(running);
+  }
+
+  /**
+   * failToStart from the spawn's 'error' event, where a throw is uncaught and ends the server. Nothing else follows the
+   * run by then, so a failure is tried again later until it is recorded.
+   */
+  private settleFailedStart(meta: RunMeta, err: unknown, log = true): void {
+    if (this.guarded(`recording that run ${meta.id} could not start`, () => this.failToStart(this.store.read(meta.id) ?? meta, err), log)) {
+      this.pumpFromTimer();
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.laterTimers.delete(timer);
+      this.settleFailedStart(meta, err, false);
+    }, (this.opts.pollMs ?? 250) * 4);
+    timer.unref();
+    this.laterTimers.add(timer);
   }
 
   /** A run whose wrapper could not be started ends failed with the reason; its inputs go and its resources are free. */
@@ -652,25 +676,34 @@ export class Runner {
     this.bus.publish('run.status', { runId: meta.id, status: 'failed', actionId: meta.actionId });
   }
 
-  /** failing: its last look threw, so the next failure is not logged again (one message per failing stretch). */
-  private track(meta: RunMeta, failing = false): void {
+  /**
+   * failing: its last look threw, so the next failure is not logged again (one message per failing stretch).
+   * killArmed: its SIGKILL is armed already, carried over when it is tracked again.
+   */
+  private track(meta: RunMeta, failing = false, killArmed?: boolean): void {
     const timer = setInterval(() => {
+      const armed = this.active.get(meta.id)?.killArmed;
       const ok = this.guarded(`tracking run ${meta.id}`, () => this.tick(meta, timer), !failing);
       failing = !ok;
       // Settling it threw once it was no longer tracked: tracked again, so a later look settles it.
       if (!ok && !this.active.has(meta.id)) {
         clearInterval(timer);
-        this.track(meta, true);
+        this.track(meta, true, armed);
       }
     }, this.opts.pollMs ?? 250);
     timer.unref();
     // Tracked already cancelled: reconcileRun arms its SIGKILL.
-    this.active.set(meta.id, { meta, timer, killArmed: meta.status === 'cancelled' });
+    this.active.set(meta.id, { meta, timer, killArmed: killArmed ?? meta.status === 'cancelled' });
   }
 
   /** One look at a tracked run: records its command, and settles it once it has exited or its wrapper is gone. */
   private tick(meta: RunMeta, timer: NodeJS.Timeout): void {
     let current = this.store.read(meta.id) ?? meta;
+    // Started here, but recording it running failed: written now, so every process reads it as running.
+    if (current.status === 'queued' && meta.status === 'running') {
+      current = { ...current, status: 'running', startedAt: meta.startedAt, wrapperPid: meta.wrapperPid, wrapperStartedAt: meta.wrapperStartedAt };
+      this.store.write(current);
+    }
     // Cancelled by another process, whose SIGKILL dies with it if it stops within the grace.
     const entry = this.active.get(meta.id);
     if (entry && current.status === 'cancelled' && !entry.killArmed) {
@@ -907,6 +940,8 @@ export class Runner {
     this.retryTimer = null;
     for (const timer of this.killTimers) clearTimeout(timer);
     this.killTimers.clear();
+    for (const timer of this.laterTimers) clearTimeout(timer);
+    this.laterTimers.clear();
     for (const { timer } of this.active.values()) clearInterval(timer);
     this.active.clear();
   }
