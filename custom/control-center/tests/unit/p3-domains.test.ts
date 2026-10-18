@@ -5,7 +5,7 @@ import { applyYamlOps, parseYamlDoc, YamlOpsError } from '../../server/domains/y
 import { parseBlacklist, renderBlacklist, DEFAULT_BLACKLIST_PREAMBLE } from '../../server/domains/blacklist.js';
 import { computeNextFire, parseLaunchctlPrint, parsePrintDisabled, pinnedNodeBin, renderPlist, SCHEDULE_JOBS } from '../../server/system/schedule.js';
 import { computeUsage } from '../../server/domains/usage.js';
-import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings, readSettings, SETTINGS_REL, writeSettings } from '../../server/domains/settings.js';
+import { appSettingsSchema, DEFAULT_SETTINGS, mergeSettings, readSettings, SETTINGS_REL, updateSettings } from '../../server/domains/settings.js';
 import { tempDir } from '../helpers/tmp.js';
 
 const PORTALS = `# Synthetic portals config for tests
@@ -487,13 +487,14 @@ describe('app settings', () => {
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, claudeConcurrency: 9 }).success).toBe(false);
     expect(appSettingsSchema.safeParse({ ...DEFAULT_SETTINGS, retention: 10 }).success).toBe(false);
   });
-  it('a one-field PUT over a file with one bad value keeps the other valid settings (R17-srv-dom-b-L1-01)', () => {
+  it('a one-field write that opts into replacing a file with one bad value keeps the other valid settings (R17-srv-dom-b-L1-01)', () => {
     const root = tempDir('cc-settings-');
     fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
     fs.writeFileSync(path.join(root, SETTINGS_REL), JSON.stringify({ logos: true, retention: 'not-a-number', claudeConcurrency: 3, modelDefault: 'claude-sonnet' }));
     expect(readSettings(root).problem).toMatch(/retention/);
-    const next = writeSettings(root, { modelDefault: 'claude-opus' });
-    expect(next).toMatchObject({ logos: true, claudeConcurrency: 3, modelDefault: 'claude-opus', retention: 500 });
+    const next = updateSettings(root, { modelDefault: 'claude-opus' }, { reset: true });
+    expect(next).toMatchObject({ ok: true });
+    expect(next.ok && next.settings).toMatchObject({ logos: true, claudeConcurrency: 3, modelDefault: 'claude-opus', retention: 500 });
     expect(readSettings(root).problem).toBeNull();
   });
   it('given the rename onto settings.json fails, when settings are written, then the error is thrown and no temp file is left (R27-srv-dom-b-L1-01)', () => {
@@ -503,7 +504,7 @@ describe('app settings', () => {
       throw Object.assign(new Error('EIO: injected rename failure'), { code: 'EIO' });
     });
     try {
-      expect(() => writeSettings(root, { logos: true })).toThrow(/injected rename failure/);
+      expect(() => updateSettings(root, { logos: true })).toThrow(/injected rename failure/);
     } finally {
       spy.mockRestore();
     }
@@ -519,7 +520,7 @@ describe('app settings', () => {
       throw Object.assign(new Error('EACCES: injected cleanup failure'), { code: 'EACCES' });
     });
     try {
-      expect(() => writeSettings(root, { logos: true })).toThrow(/injected rename failure/);
+      expect(() => updateSettings(root, { logos: true })).toThrow(/injected rename failure/);
     } finally {
       rename.mockRestore();
       rm.mockRestore();

@@ -1,6 +1,7 @@
 // App settings (spec 2.14 App and AI engine): a small JSON file under the
 // data root. Logos stay opt-in, retention and the Claude slot cap feed the
 // runner, the model default feeds new sessions, budgets feed the usage meter.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -30,16 +31,26 @@ export function mergeSettings(current: Partial<AppSettings>, patch: Partial<AppS
   };
 }
 
+export type SettingsRead = { settings: AppSettings; problem: string | null; etag: string };
+
+/** The version a write is checked against: the file's bytes, so a hand edit counts as a change too. */
+const ABSENT_ETAG = 'none';
+const etagOf = (raw: string) => crypto.createHash('sha256').update(raw).digest('hex').slice(0, 20);
+
 /** Missing or malformed settings fall back to the defaults; the problem is reported, never swallowed silently. */
-export function readSettings(dataRoot: string): { settings: AppSettings; problem: string | null } {
+export function readSettings(dataRoot: string): SettingsRead {
   const abs = path.join(dataRoot, SETTINGS_REL);
   let raw: string;
   try {
     raw = fs.readFileSync(abs, 'utf8');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { settings: DEFAULT_SETTINGS, problem: null };
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { settings: DEFAULT_SETTINGS, problem: null, etag: ABSENT_ETAG };
     throw err;
   }
+  return { ...parseSettings(raw), etag: etagOf(raw) };
+}
+
+function parseSettings(raw: string): { settings: AppSettings; problem: string | null } {
   try {
     const rawValue: unknown = JSON.parse(raw);
     const parsed = appSettingsSchema.partial().safeParse(rawValue);
@@ -79,13 +90,35 @@ export function sessionModel(dataRoot: string, requested: string | null | undefi
   return requested ?? (readSettings(dataRoot).settings.modelDefault || null);
 }
 
-export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): AppSettings {
-  const next = appSettingsSchema.parse(mergeSettings(readSettings(dataRoot).settings, patch));
+export type SettingsUpdate =
+  | { ok: true; settings: AppSettings; etag: string }
+  | { ok: false; code: 'settings-changed'; current: SettingsRead }
+  | { ok: false; code: 'settings-problem'; problem: string };
+
+/**
+ * A patch saved from the app. With `ifMatch` (the ETag of the caller's last read) it is refused when the file changed
+ * since, so a write from another browser or device is not silently overwritten; without it the patch merges as before.
+ * A settings.json that could not be read is only replaced when the caller opts in: the user's file would otherwise
+ * become the defaults (or its valid fields) plus one change without them knowing. Check and write are synchronous, so
+ * no other request of this server runs between them.
+ */
+export function updateSettings(dataRoot: string, patch: Partial<AppSettings>, opts: { reset?: boolean; ifMatch?: string } = {}): SettingsUpdate {
+  const current = readSettings(dataRoot);
+  const ifMatch = opts.ifMatch?.replace(/^(W\/)?"|"$/g, '');
+  if (ifMatch !== undefined && ifMatch !== '*' && ifMatch !== current.etag) return { ok: false, code: 'settings-changed', current };
+  if (current.problem && !opts.reset) return { ok: false, code: 'settings-problem', problem: current.problem };
+  const next = appSettingsSchema.parse(mergeSettings(current.settings, patch));
+  return { ok: true, settings: next, etag: persistSettings(dataRoot, next) };
+}
+
+/** Writes the settings atomically and answers the new ETag. */
+function persistSettings(dataRoot: string, next: AppSettings): string {
   const abs = path.join(dataRoot, SETTINGS_REL);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   const tmp = `${abs}.tmp-${process.pid}`;
+  const raw = JSON.stringify(next, null, 2) + '\n';
   try {
-    fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
+    fs.writeFileSync(tmp, raw);
     fs.renameSync(tmp, abs);
   } catch (err) {
     // A failed cleanup must not hide why the write failed.
@@ -96,5 +129,5 @@ export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): Ap
     }
     throw err;
   }
-  return next;
+  return etagOf(raw);
 }

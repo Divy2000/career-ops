@@ -1,47 +1,172 @@
-import { useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState, useSyncExternalStore } from 'react';
+import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { apiGet, apiSend } from '../../lib/api';
+import { ApiError, apiGet, apiSend } from '../../lib/api';
 import { describeError } from '../../lib/actions';
 import { DataState } from '../../components/ui';
 import { AppearanceSetting } from '../../components/AppearanceSetting';
 import { useUnsaved } from '../../lib/unsaved';
 import type { AppSettings, AppSettingsRead } from '@shared/api';
 
-export const useAppSettings = () => useQuery({ queryKey: ['system', 'settings'], queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
+const SETTINGS_KEY = ['system', 'settings'];
 
-// The server takes app-settings patches without an ETag, in the order they arrive, so two writes on their way at once
-// could land older last and undo the user's latest choice. Each write waits for the one before it to answer.
+/** The server's read carries the file's version (ETag); a write sends it so a change made elsewhere is refused, not overwritten. */
+type VersionedRead = AppSettingsRead & { etag?: string };
+type Written = AppSettings & { etag?: string };
+
+// Each write waits for the one before it to answer, in this tab through the queue and across the browser's tabs
+// through a Web Lock (granted in request order), so the user's latest choice lands last.
 let writeQueue: Promise<unknown> = Promise.resolve();
-const queueWrite = (patch: Partial<AppSettings>) => {
-  const write = writeQueue.then(() => apiSend('PUT', '/api/settings/app', patch));
+const WRITE_LOCK = 'career-ops-app-settings-write';
+const withWriteLock = <T,>(send: () => Promise<T>): Promise<T> => (typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request(WRITE_LOCK, send) : send());
+
+// Patches sent and not yet answered, oldest first. Every view of the settings shows them over the server's read, so a
+// control changed again before its save answers starts from the user's latest choice, not the last read.
+let unanswered: ReadonlyArray<Partial<AppSettings>> = [];
+const listeners = new Set<() => void>();
+const setUnanswered = (next: ReadonlyArray<Partial<AppSettings>>) => {
+  unanswered = next;
+  for (const l of listeners) l();
+};
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => listeners.delete(l);
+};
+
+const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
+
+// The version this browser's latest own write left the file at, and the versions its writes started from or left,
+// shared by its tabs. A tab whose last read is one of those is behind only its sibling tabs (the Web Lock already
+// ordered their writes), so it writes on top of the latest; a version no tab of this browser saw (another device, a
+// hand edit) is a conflict. Versions name the file's content and can repeat, so the latest is kept, never a chain.
+const OWN_KEY = 'career-ops-app-settings-versions';
+const OWN_MAX = 40;
+type OwnVersions = { latest: string; seen: string[] };
+// This tab's copy: what it uses when storage cannot be written (blocked, full), so its own saves still follow each other.
+let ownHere: OwnVersions | null = null;
+let storageWorks = true;
+const readOwn = (): OwnVersions | null => {
+  if (!storageWorks) return ownHere;
+  try {
+    const raw = JSON.parse(localStorage.getItem(OWN_KEY) ?? 'null') as Partial<OwnVersions> | null;
+    if (raw && typeof raw.latest === 'string' && Array.isArray(raw.seen)) return { latest: raw.latest, seen: raw.seen.filter((v): v is string => typeof v === 'string') };
+    return ownHere;
+  } catch {
+    return ownHere;
+  }
+};
+const recordWrite = (from: string, to: string) => {
+  const seen = [...(readOwn()?.seen ?? []).filter((v) => v !== from && v !== to), from, to].slice(-OWN_MAX);
+  ownHere = { latest: to, seen };
+  try {
+    localStorage.setItem(OWN_KEY, JSON.stringify(ownHere));
+  } catch {
+    storageWorks = false;
+  }
+};
+const writeBase = (read: string): string => {
+  const own = readOwn();
+  return own && own.seen.includes(read) ? own.latest : read;
+};
+
+const queueWrite = (patch: Partial<AppSettings>, reset: boolean, lastRead: () => string | undefined) => {
+  const url = reset ? '/api/settings/app?reset=1' : '/api/settings/app';
+  const send = async () => {
+    const read = lastRead();
+    const base = read === undefined ? undefined : writeBase(read);
+    const written = await apiSend<Written>('PUT', url, patch, base === undefined ? {} : { 'if-match': base });
+    if (base !== undefined && written.etag) recordWrite(base, written.etag);
+    return written;
+  };
+  const write = writeQueue.then(() => withWriteLock(send));
   writeQueue = write.catch(() => undefined);
   return write;
 };
 
+/** The settings as the user last chose them: the server's read with every unanswered save on top. */
+export function useAppSettings(): UseQueryResult<AppSettingsRead> {
+  const q = useQuery({ queryKey: SETTINGS_KEY, queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
+  const patches = useSyncExternalStore(subscribe, () => unanswered);
+  const data = useMemo(() => (q.data ? patches.reduce(applyPatch, q.data) : undefined), [q.data, patches]);
+  return { ...q, data } as UseQueryResult<AppSettingsRead>;
+}
+
 export function useSaveSettings() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
-  const save = async (patch: Partial<AppSettings>, okText: string) => {
+  // A write the server refused because settings.json could not be read: sent again only if the user asks to replace the file.
+  const [refused, setRefused] = useState<{ patch: Partial<AppSettings>; okText: string; onSaved?: () => void } | null>(null);
+  /** `onSaved` runs once the patch is taken, also when it is taken only after the user asks to replace the file. */
+  const save = async (patch: Partial<AppSettings>, okText: string, opts: { onSaved?: () => void; reset?: boolean } = {}) => {
+    const { onSaved, reset = false } = opts;
     setError(null);
+    setRefused(null);
+    setUnanswered([...unanswered, patch]);
     try {
-      await queueWrite(patch);
+      try {
+        const written = await queueWrite(patch, reset, () => qc.getQueryData<VersionedRead>(SETTINGS_KEY)?.etag);
+        // A read started before this write may answer after it: it is dropped, and the written settings shown until the refetch.
+        await qc.cancelQueries({ queryKey: SETTINGS_KEY });
+        qc.setQueryData<VersionedRead>(SETTINGS_KEY, { ...written, problem: null });
+      } finally {
+        setUnanswered(unanswered.filter((p) => p !== patch));
+      }
+      onSaved?.();
       toast.success(okText);
-      await Promise.all([qc.invalidateQueries({ queryKey: ['system', 'settings'] }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
+      await Promise.all([qc.invalidateQueries({ queryKey: SETTINGS_KEY }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
       return true;
     } catch (err) {
+      const refusal = err instanceof ApiError && err.status === 409 ? (err.body as { code?: unknown; current?: VersionedRead } | null) : null;
+      if (refusal?.code === 'settings-problem') setRefused({ patch, okText, onSaved });
+      // Changed elsewhere: the latest values are shown and the fields' drafts kept, for the user to check and save again.
+      if (refusal?.code === 'settings-changed') {
+        await qc.cancelQueries({ queryKey: SETTINGS_KEY });
+        if (refusal.current) qc.setQueryData<VersionedRead>(SETTINGS_KEY, refusal.current);
+        void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
+      }
       setError(`Could not save settings: ${describeError(err)}`);
       toast.error('Settings not saved');
       return false;
     }
   };
-  return { save, error };
+  const replace = refused ? () => save(refused.patch, refused.okText, { onSaved: refused.onSaved, reset: true }) : null;
+  return { save, error, replace };
+}
+
+function SaveError({ error, replace }: { error: string | null; replace: (() => Promise<boolean>) | null }) {
+  if (!error) return null;
+  return (
+    <div role="alert" className="danger-text row gap">
+      <p>{error}</p>
+      {replace && (
+        <button type="button" onClick={() => void replace()}>
+          Replace settings.json
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** After a save answers, its draft is cleared only if the user has not typed past what it sent. */
+const keepNewer =
+  (sent: string | null) =>
+  (current: string | null): string | null =>
+    current === sent ? null : current;
+
+/** Both settings tabs read and write the same file, so each says when it could not be read and shows defaults. */
+function SettingsProblem({ problem }: { problem: string | null }) {
+  if (!problem) return null;
+  return (
+    <p role="alert" className="danger-text small">
+      {problem} Defaults are in effect; a save asks before replacing the file.
+    </p>
+  );
 }
 
 /** App settings: logos opt-in and run retention (spec 2.14 App). */
 export function AppTab() {
   const q = useAppSettings();
-  const { save, error } = useSaveSettings();
+  const { save, error, replace } = useSaveSettings();
   const [retention, setRetention] = useState<string | null>(null);
   const s = q.data;
   useUnsaved('the run retention', retention !== null && s !== undefined && Number(retention) !== s.retention);
@@ -51,11 +176,7 @@ export function AppTab() {
       <DataState query={q}>
         {s && (
           <div className="fields">
-            {s.problem && (
-              <p role="alert" className="danger-text small">
-                {s.problem} Defaults are in effect until the next save.
-              </p>
-            )}
+            <SettingsProblem problem={s.problem} />
             <AppearanceSetting />
             <div className="fields__row">
               <label className="fields__label" htmlFor="setting-logos">
@@ -76,11 +197,10 @@ export function AppTab() {
                 <button
                   type="button"
                   disabled={retention === null || Number(retention) === s.retention}
-                  onClick={() =>
-                    void save({ retention: Number(retention) }, 'Retention saved').then((ok) => {
-                      if (ok) setRetention(null);
-                    })
-                  }
+                  onClick={() => {
+                    const sent = retention;
+                    void save({ retention: Number(sent) }, 'Retention saved', { onSaved: () => setRetention(keepNewer(sent)) });
+                  }}
                 >
                   Save
                 </button>
@@ -88,11 +208,7 @@ export function AppTab() {
             </div>
           </div>
         )}
-        {error && (
-          <p role="alert" className="danger-text">
-            {error}
-          </p>
-        )}
+        <SaveError error={error} replace={replace} />
       </DataState>
     </div>
   );
@@ -101,7 +217,7 @@ export function AppTab() {
 /** Claude engine knobs: concurrency, model default and usage budgets. */
 export function EngineSettings() {
   const q = useAppSettings();
-  const { save, error } = useSaveSettings();
+  const { save, error, replace } = useSaveSettings();
   const [model, setModel] = useState<string | null>(null);
   const [budget5, setBudget5] = useState<string | null>(null);
   const [budget7, setBudget7] = useState<string | null>(null);
@@ -113,6 +229,7 @@ export function EngineSettings() {
     <DataState query={q}>
       {s && (
         <div className="fields">
+          <SettingsProblem problem={s.problem} />
           <div className="fields__row">
             <label className="fields__label" htmlFor="setting-concurrency">
               Claude concurrency
@@ -135,7 +252,10 @@ export function EngineSettings() {
             </label>
             <div className="fields__value row gap">
               <input id="setting-model" value={model ?? s.modelDefault} placeholder="CLI default" onChange={(e) => setModel(e.target.value)} />
-              <button type="button" disabled={model === null || model === s.modelDefault} onClick={() => void save({ modelDefault: model ?? '' }, 'Model default saved').then((ok) => ok && setModel(null))}>
+              <button type="button" disabled={model === null || model === s.modelDefault} onClick={() => {
+                  const sent = model;
+                  void save({ modelDefault: sent ?? '' }, 'Model default saved', { onSaved: () => setModel(keepNewer(sent)) });
+                }}>
                 Save
               </button>
             </div>
@@ -151,24 +271,21 @@ export function EngineSettings() {
               <button
                 type="button"
                 disabled={budget5 === null && budget7 === null}
-                onClick={() =>
-                  void save({ usageBudgets: { fiveHourTokens: toBudget(budget5, s.usageBudgets.fiveHourTokens), sevenDayTokens: toBudget(budget7, s.usageBudgets.sevenDayTokens) } }, 'Budgets saved').then((ok) => {
-                    if (ok) {
-                      setBudget5(null);
-                      setBudget7(null);
-                    }
-                  })
-                }
+                onClick={() => {
+                  const [sent5, sent7] = [budget5, budget7];
+                  void save({ usageBudgets: { fiveHourTokens: toBudget(sent5, s.usageBudgets.fiveHourTokens), sevenDayTokens: toBudget(sent7, s.usageBudgets.sevenDayTokens) } }, 'Budgets saved', {
+                    onSaved: () => {
+                      setBudget5(keepNewer(sent5));
+                      setBudget7(keepNewer(sent7));
+                    },
+                  });
+                }}
               >
                 Save budgets
               </button>
             </div>
           </div>
-          {error && (
-            <p role="alert" className="danger-text">
-              {error}
-            </p>
-          )}
+          <SaveError error={error} replace={replace} />
         </div>
       )}
     </DataState>
