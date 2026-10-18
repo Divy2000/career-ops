@@ -1486,9 +1486,10 @@ test('a Keychain token with whitespace around it is passed on trimmed, as the Co
   const dir = mkdtempSync(path.join(tmpdir(), 'sync-token-'));
   stub(dir, 'security', 'printf " \\ttok-123 \\n"');
   try {
-    const r = spawnSync('bash', ['-c', `fail() { echo "!!! $1"; exit 1; }\n${block}\necho "[$TOKEN]"`], { encoding: 'utf8', env: { PATH: `${dir}:${process.env.PATH}` } });
+    const r = spawnSync('bash', ['-c', `fail() { echo "!!! $1"; exit 1; }\n${block}\necho "[$TOKEN]"`], { encoding: 'utf8', env: { PATH: `${dir}:${process.env.PATH}`, TMPDIR: dir } });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.equal(r.stdout.trim(), '[tok-123]');
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('career-ops-sync-security.')), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1577,7 +1578,7 @@ for (const value of ['0', 'soon', '3601', '4294967296']) {
   });
 }
 
-test('a sync stopped while the Keychain read waits (launchd stop, signal to the job group) stops the security it started too', async () => {
+test('a sync stopped while the Keychain read waits (launchd stop, signal to the job group) stops the security it started and removes its temporary file', async () => {
   const lines = readFileSync(SYNC, 'utf8').split('\n');
   const from = lines.findIndex((l) => l.startsWith('SECURITY_ERR="$(mktemp '));
   const to = lines.findIndex((l) => l.startsWith('SECURITY_RC=$?'));
@@ -1587,7 +1588,7 @@ test('a sync stopped while the Keychain read waits (launchd stop, signal to the 
   stub(dir, 'security', `echo $$ > "${securityPid}"\nexec /bin/sleep 100000`);
   const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   try {
-    const child = spawn('bash', ['-c', `fail() { echo "!!! $1"; exit 1; }\n${block}`], { env: { PATH: `${dir}:${process.env.PATH}` }, stdio: 'ignore', detached: true });
+    const child = spawn('bash', ['-c', `fail() { echo "!!! $1"; exit 1; }\n${block}`], { env: { PATH: `${dir}:${process.env.PATH}`, TMPDIR: dir }, stdio: 'ignore', detached: true });
     const exited = new Promise((resolve) => child.on('exit', resolve));
     for (let i = 0; i < 600 && !existsSync(securityPid); i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.ok(existsSync(securityPid), 'the Keychain read never started');
@@ -1598,6 +1599,7 @@ test('a sync stopped while the Keychain read waits (launchd stop, signal to the 
     const left = alive(pid);
     if (left) process.kill(pid, 'SIGKILL');
     assert.equal(left, false, 'the security the stopped sync started is still running');
+    assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith('career-ops-sync-security.')), [], 'the stopped sync left its Keychain stderr file behind');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -94,6 +94,11 @@ echo "fork is $BEHIND commit(s) behind upstream/main"
 # other failure (a locked keychain, no UI to prompt) leaves a stored token that is fine, so it never asks for a new one.
 # No double quotes in these messages: notify passes them to osascript inside a quoted string.
 SECURITY_ERR="$(mktemp "${TMPDIR:-/tmp}/career-ops-sync-security.XXXXXX")" || fail "cannot create a temporary file for the Keychain read"
+# A run stopped during the read (launchd stop, Ctrl-C) exits through the EXIT trap, which removes the file.
+trap 'rm -f "$SECURITY_ERR"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 # A locked login keychain can make security wait on an unlock dialog that an unattended run never answers, holding the
 # sync lock all the while: the read gets CC_KEYCHAIN_TIMEOUT seconds (default 60). Stock macOS has no timeout(1), so
 # perl runs security and kills it when the alarm fires, exiting 124 as timeout(1) does. security stays in the job's
@@ -131,6 +136,7 @@ TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
 TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
 SECURITY_WHY="$(tail -c 200 "$SECURITY_ERR" | tr '\n"\\' "  '" | sed 's/ *$//')"
 rm -f "$SECURITY_ERR"
+trap - EXIT HUP INT TERM
 if [ "$SECURITY_RC" = 44 ] || { [ "$SECURITY_RC" = 0 ] && [ -z "$TOKEN" ]; }; then
   fail "Keychain item career-ops-claude-token not found. Run: claude setup-token, then security add-generic-password -U -a \$USER -s career-ops-claude-token -w"
 elif [ "$SECURITY_RC" = 124 ]; then
