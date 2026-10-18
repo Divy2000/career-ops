@@ -27,7 +27,7 @@ import { configRoutes } from './routes/config.js';
 import { settingsRoutes } from './routes/settings.js';
 import { pinnedNodeBin, ScheduleService } from './system/schedule.js';
 import { maybeFakeLaunchd } from './system/fake-launchd.js';
-import { readSettings, type AppSettings } from './domains/settings.js';
+import { readSettings, type SettingsRead } from './domains/settings.js';
 
 /** Action input files a crash or restart left behind are removed after a day, and CV uploads too once no session names them. */
 const STALE_INPUT_MS = 24 * 3_600_000;
@@ -72,15 +72,23 @@ export async function buildApp(cfg: ServerConfig, deps: AppDeps = {}): Promise<B
   });
   const closers: Array<() => Promise<void>> = [];
   const bus = new EventBus();
-  // The runner reads this object live, so a settings save changes the slot cap without a restart.
-  const initial = readSettings(cfg.dataRoot).settings;
+  // The runner reads this object live, so a settings save or a hand edit changes the slot cap without a restart.
+  const initialRead = readSettings(cfg.dataRoot);
+  const initial = initialRead.settings;
   const readToken = deps.readToken ?? keychainTokenReader(exec);
   // readToken: a session run another server left queued (a blue/green reload) starts here with the token read anew.
   const runnerOpts = { claudeSlots: initial.claudeConcurrency, retention: initial.retention, readToken };
   const runner = new Runner(cfg.dataRoot, bus, runnerOpts);
-  const applySettings = (s: AppSettings) => {
-    runnerOpts.claudeSlots = s.claudeConcurrency;
-    runner.store.setRetention(s.retention);
+  // The version of settings.json the runner runs on. Any read that sees another version applies it, so the settings
+  // page never shows values the runner is not using. Only values the file supplies are applied: a slot cap or retention
+  // that is invalid or missing from a file with a problem (half-typed JSON, a typo) keeps the last good value, so a
+  // bad edit never drops retention to the default and prunes runs.
+  let appliedEtag = initialRead.etag;
+  const applySettings = (read: SettingsRead) => {
+    if (read.etag === appliedEtag) return;
+    appliedEtag = read.etag;
+    if (read.kept.has('claudeConcurrency')) runnerOpts.claudeSlots = read.settings.claudeConcurrency;
+    if (read.kept.has('retention')) runner.store.setRetention(read.settings.retention);
     // A raised cap frees slots now, not at the next run event.
     runner.reschedule();
   };

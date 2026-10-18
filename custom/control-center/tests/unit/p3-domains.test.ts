@@ -526,6 +526,25 @@ describe('app settings', () => {
       rm.mockRestore();
     }
   });
+  const ALL = ['logos', 'retention', 'claudeConcurrency', 'modelDefault', 'usageBudgets'];
+  it.each([
+    ['no file', null, ALL],
+    ['a valid file missing settings', JSON.stringify({ claudeConcurrency: 4 }), ALL],
+    ['one bad value whose valid neighbors equal the defaults', JSON.stringify({ claudeConcurrency: 2, retention: 10 }), ['claudeConcurrency']],
+    ['a bad retention and a valid logos value', JSON.stringify({ logos: true, retention: 'x' }), ['logos']],
+    ['one bad budget with a valid sibling budget', JSON.stringify({ usageBudgets: { fiveHourTokens: -1, sevenDayTokens: 900000 } }), ['usageBudgets']],
+    ['half-typed JSON', '{"claudeConcurrency": 1,', []],
+    ['JSON that is not an object', '[1, 2]', []],
+    ['only invalid and unknown fields', JSON.stringify({ claudeConcurrency: 9, retention: 'x', future: true }), []],
+    ['only invalid budgets', JSON.stringify({ usageBudgets: { fiveHourTokens: -1, sevenDayTokens: 'many' } }), []],
+  ])('given settings.json with %s, when it is read, then it keeps %j from the file (R34-setwatch-FC-01)', (_shape, content, kept) => {
+    const root = tempDir('cc-settings-');
+    if (content !== null) {
+      fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
+      fs.writeFileSync(path.join(root, SETTINGS_REL), content);
+    }
+    expect([...readSettings(root).kept].sort()).toEqual([...kept].sort());
+  });
   it('one bad usage budget keeps its valid sibling budget (R17-srv-dom-b-L1-01)', () => {
     const root = tempDir('cc-settings-');
     fs.mkdirSync(path.join(root, 'data', 'control-center'), { recursive: true });
