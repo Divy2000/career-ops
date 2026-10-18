@@ -63,6 +63,9 @@ describe('summarizeDigest', () => {
     ['a middle initial before bold', '- Signed by President Donald J. **Trump** today. Later text.', 'Signed by President Donald J. Trump today.'],
     ['a number before a lowercase link', '- Stamping paused until Oct. 15. [source](https://state.gov/x)', 'Stamping paused until Oct. 15.'],
     ['a sentence end before a capitalized link', '- USCIS updated the fee page. [Read more](https://www.uscis.gov/x) for details.', 'USCIS updated the fee page.'],
+    ['a citation inside emphasis', '- Published at 90 *Fed. Reg.* 45678 today. Later text.', 'Published at 90 Fed. Reg. 45678 today.'],
+    ['a citation inside bold', '- Funded under **Pub. L.** 117-328 for FY2026. Later text.', 'Funded under Pub. L. 117-328 for FY2026.'],
+    ['a middle initial before a dropped html comment', '- Signed by Donald J.<!-- n --> Trump today. Later text.', 'Signed by Donald J. Trump today.'],
   ])('judges a period at the end of a plain span with the following spans in view: %s (R34-feat-a-L2-01)', (_shape, body, expected) => {
     expect(lines(body)).toEqual([expected]);
   });
