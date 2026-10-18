@@ -72,6 +72,7 @@ wherever it finishes.
 
 ## Resources
 
-- A turn of a mode whose own file runs a `data/pdf-index.tsv` writer (pdf, cover) holds the runner's `pdf-index`
-  resource, as `docs.renderPdf` and `docs.coverPdf` do, so no two of them rewrite the manifest at once. Other turns
-  hold no resource, so a fan-out's evaluations run side by side.
+- A documents-class turn (pdf, cover, latex, ...), or one whose mode file runs a `data/pdf-index.tsv` writer, holds
+  the runner's `pdf-index` resource, as `docs.renderPdf` and `docs.coverPdf` do, so no two of them rewrite the manifest
+  at once. Other turns hold no resource, so a fan-out's evaluations run side by side; an evaluation that runs
+  generate-pdf.mjs can still overlap a re-render (generate-pdf.mjs takes no manifest lock).

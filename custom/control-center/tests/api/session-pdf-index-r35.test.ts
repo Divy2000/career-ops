@@ -65,7 +65,7 @@ function startPdfIndexAction(app: TestApp): string {
 }
 
 describe('session turns and the pdf-index resource (R35-srv-core-L1-01)', () => {
-  it.each(['pdf', 'cover'])('given a running %s session turn, when a PDF re-render starts, then it waits until the turn ends', async (mode) => {
+  it.each(['pdf', 'cover', 'latex', 'pdf/hm-audit'])('given a running %s session turn, when a PDF re-render starts, then it waits until the turn ends', async (mode) => {
     let action = '';
     await withRunningTurn(mode, async (app, runId) => {
       expect(app.runner.store.read(runId)!.resources).toEqual(['pdf-index']);
@@ -75,6 +75,7 @@ describe('session turns and the pdf-index resource (R35-srv-core-L1-01)', () => 
     });
   }, 60_000);
 
+  // Guards against over-holding, not the bug: holding it on evaluations would run a fan-out's evaluations one at a time.
   it('given a running evaluation (oferta) session turn, when a PDF re-render starts, then it is not held back', async () => {
     await withRunningTurn('oferta', async (app, runId) => {
       expect(app.runner.store.read(runId)!.resources).toEqual([]);

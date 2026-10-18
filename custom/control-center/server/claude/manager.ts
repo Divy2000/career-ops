@@ -331,14 +331,13 @@ function isBareDateFile(name: string): boolean {
 const PDF_INDEX_WRITERS = ['generate-pdf.mjs', 'generate-cover-letter.mjs', 'sync-pdf-flags.mjs'];
 
 /**
- * The runner resources a turn of `mode` holds. A mode whose own file runs a pdf-index writer (pdf, cover) holds
- * 'pdf-index', as docs.renderPdf and docs.coverPdf do, so the two never rewrite the manifest at once. Keyed on the mode
- * file rather than the class allowlist: every evaluation may run generate-pdf.mjs, and holding it there would make the
- * evaluations of a fan-out run one at a time.
+ * The runner resources a turn holds. A documents-class turn, or one whose mode file runs a pdf-index writer, holds
+ * 'pdf-index', as docs.renderPdf and docs.coverPdf do, so the two never rewrite the manifest at once. Evaluations may run
+ * generate-pdf.mjs too but hold nothing: holding it there would make the evaluations of a fan-out run one at a time.
  */
-function turnResources(mode: string): string[] {
-  const scripts = MODES.find((m) => m.id === mode)?.scripts ?? [];
-  return scripts.some((s) => PDF_INDEX_WRITERS.includes(s)) ? ['pdf-index'] : [];
+function turnResources(policy: ModePolicy): string[] {
+  const scripts = MODES.find((m) => m.id === policy.id)?.scripts ?? [];
+  return policy.policyClass === 'documents' || scripts.some((s) => PDF_INDEX_WRITERS.includes(s)) ? ['pdf-index'] : [];
 }
 
 export class SessionManager {
@@ -1481,7 +1480,7 @@ export class SessionManager {
         actionId: `session.${meta.mode}`,
         label: `${policy.title}: turn ${n}`,
         cost: 'tokens',
-        resources: turnResources(meta.mode),
+        resources: turnResources(policy),
         claude: true,
         params: { sessionId: meta.id, turn: n },
         cmd: { bin: this.cfg.claudeBin, args: argv, cwd: this.cfg.codeRoot },
