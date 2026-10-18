@@ -994,6 +994,59 @@ describe('installTutorial safety', () => {
     expect(fs.readdirSync(tutorialsDir)).toEqual(['my-tour']);
   });
 
+  describe('leftovers of an install that was killed', () => {
+    const tutorialsDir = () => path.dirname(dest('my-tour'));
+    const deadPid = () => spawnSync(process.execPath, ['-e', '0']).pid!;
+    const leftover = (name: string, files: Record<string, string>) => {
+      for (const [f, content] of Object.entries(files)) write(f, content, path.join(tutorialsDir(), name));
+    };
+
+    it('given a dead install left a partial staging copy, when installing again, then the copy is removed', () => {
+      recordingFolder();
+      leftover(`.my-tour.tmp-${deadPid()}`, { 'my-recording.mp4': 'PARTIAL' });
+      installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'First' });
+      expect(fs.readdirSync(tutorialsDir())).toEqual(['my-tour']);
+    });
+
+    it('given another tutorial or a running install left staging folders, when installing, then they are kept', () => {
+      recordingFolder();
+      const other = `.other.tmp-${deadPid()}`;
+      const running = `.my-tour.tmp-${process.ppid}`;
+      leftover(other, { 'a.mp4': 'x' });
+      leftover(running, { 'a.mp4': 'x' });
+      installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'First' });
+      expect(fs.readdirSync(tutorialsDir()).sort()).toEqual([other, running, 'my-tour'].sort());
+    });
+
+    it('given a dead install moved the installed tutorial aside and never promoted the new one, when installing again, then it is restored first', () => {
+      recordingFolder();
+      leftover(`.my-tour.old-${deadPid()}-1700000000000`, { 'tutorial.json': JSON.stringify({ id: 'my-tour', title: 'Before', video: 'v.mp4' }), 'v.mp4': 'x' });
+      leftover(`.my-tour.tmp-${deadPid()}`, { 'my-recording.mp4': 'PARTIAL' });
+      expect(() => installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'After' })).toThrow(/already installed.*--force/);
+      expect(JSON.parse(fs.readFileSync(path.join(dest('my-tour'), 'tutorial.json'), 'utf8')).title).toBe('Before');
+      expect(fs.readdirSync(tutorialsDir())).toEqual(['my-tour']);
+      installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'After', force: true });
+      expect(JSON.parse(fs.readFileSync(path.join(dest('my-tour'), 'tutorial.json'), 'utf8')).title).toBe('After');
+    });
+
+    it('given a dead install left an old copy, when doing a dry run, then it reports the tutorial as installed and changes nothing', () => {
+      recordingFolder();
+      const old = `.my-tour.old-${deadPid()}-1700000000000`;
+      leftover(old, { 'tutorial.json': '{}' });
+      expect(() => installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'After', dryRun: true })).toThrow(/already installed.*--force/);
+      expect(fs.readdirSync(tutorialsDir())).toEqual([old]);
+    });
+
+    it('given a dead install left an old copy while the tutorial is installed, when installing with force, then the old copy is removed', () => {
+      recordingFolder();
+      installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'First' });
+      leftover(`.my-tour.old-${deadPid()}-1700000000000`, { 'tutorial.json': '{}' });
+      installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'Second', force: true });
+      expect(fs.readdirSync(tutorialsDir())).toEqual(['my-tour']);
+      expect(JSON.parse(fs.readFileSync(path.join(dest('my-tour'), 'tutorial.json'), 'utf8')).title).toBe('Second');
+    });
+  });
+
   it('a dry run reports the plan and writes nothing', () => {
     recordingFolder();
     const r = installTutorial({ source: src(), dataRoot, id: 'my-tour', title: 'T', dryRun: true });
