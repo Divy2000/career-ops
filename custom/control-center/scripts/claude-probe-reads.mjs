@@ -23,38 +23,14 @@ import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { childEnv } from '../server/system/child-env.ts';
+import { claudeBinFromEnv, probeInherited, readKeychainToken } from './probe-cli.mjs';
 import { recordReadProbe, writeContract } from './probe-reads-record.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..');
 const GUARD_HOOK = path.join(PACKAGE_ROOT, 'server', 'claude', 'guard-hook.mjs');
 const CONTRACT_FILE = path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json');
-/**
- * The claude binary, resolved as supervisor/preflight.ts resolveClaudeBin does so the probe tests the one the app runs:
- * an absolute path as given, a relative one with a slash joined textually to the folder npm was started in (INIT_CWD,
- * else the cwd), a bare name looked up on PATH, then ~/.local/bin, then (for `claude` only) Homebrew and /usr/local.
- * A bare name found nowhere stays as it is, so the spawn reports ENOENT.
- */
-function resolveClaudeBin(bin) {
-  if (path.isAbsolute(bin)) return bin;
-  if (bin.includes('/')) {
-    const from = process.env.INIT_CWD;
-    const base = from && path.isAbsolute(from) ? from : process.cwd();
-    return [base.replace(/\/+$/, ''), ...bin.split('/').filter((seg) => seg !== '.' && seg !== '')].join('/');
-  }
-  const dirs = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
-  const fallbacks = bin === 'claude' ? ['/opt/homebrew/bin/claude', '/usr/local/bin/claude'] : [];
-  const executable = (file) => {
-    try {
-      fs.accessSync(file, fs.constants.X_OK);
-      return fs.statSync(file).isFile();
-    } catch {
-      return false;
-    }
-  };
-  return [...dirs.map((d) => path.join(d, bin)), path.join(os.homedir(), '.local', 'bin', bin), ...fallbacks].find((c) => path.isAbsolute(c) && executable(c)) ?? bin;
-}
-const claudeBin = resolveClaudeBin(process.env.CC_CLAUDE_BIN?.trim() || 'claude');
+const claudeBin = claudeBinFromEnv();
 const args = process.argv.slice(2);
 const only = (() => {
   const i = args.indexOf('--only');
@@ -81,31 +57,6 @@ const SHAPE = {
 };
 
 // ---- token: Keychain -> child env only ----
-/**
- * The OAuth token, read as supervisor/preflight.ts reads it: bounded, because a locked keychain waits at an unlock
- * prompt nobody may answer (over SSH, before login), and missing only on exit 44 (errSecItemNotFound) or a blank value.
- * Any other failure leaves the item where it is, so the probe says it could not be read rather than send the user to
- * recreate a token that is fine. Exits 1 with the reason; never prints the token.
- */
-function readKeychainToken() {
-  const KEYCHAIN_TIMEOUT_MS = 8000;
-  const r = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8', timeout: KEYCHAIN_TIMEOUT_MS, killSignal: 'SIGKILL' });
-  const unreadable = (why) => `Could not read Keychain item career-ops-claude-token: ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
-  let problem = null;
-  if (r.error?.code === 'ETIMEDOUT') problem = unreadable(`security timed out after ${KEYCHAIN_TIMEOUT_MS / 1000}s`);
-  else if (r.error?.code === 'ENOENT') problem = 'Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin).';
-  else if (r.error) problem = unreadable(`security could not be run (${r.error.message})`);
-  else if (r.status === 44 || (r.status === 0 && !r.stdout.trim())) problem = 'Keychain item career-ops-claude-token not found';
-  else if (r.status !== 0) {
-    const tail = String(r.stderr ?? '').trim().slice(-200);
-    problem = unreadable(`security failed (${r.status === null ? `signal ${r.signal}` : `exit ${r.status}`}${tail ? `: ${tail}` : ''})`);
-  }
-  if (problem) {
-    console.error(problem);
-    process.exit(1);
-  }
-  return r.stdout.trim();
-}
 const TOKEN = readKeychainToken();
 const redact = (s) => String(s ?? '').split(TOKEN).join('[redacted]');
 
@@ -264,7 +215,7 @@ const incomplete = [];
 // What the app gives a Claude session (server/system/child-env.ts over server/claude/invocation.ts buildEnv), with every
 // CLAUDE* nested-session variable dropped as well. The Keychain token is the only Claude or Anthropic credential a call
 // gets; other variables the shell exports pass, as they do to the app's sessions.
-const INHERITED = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
+const INHERITED = probeInherited();
 
 function runClaude(name, opts) {
   const sessionId = crypto.randomUUID();
