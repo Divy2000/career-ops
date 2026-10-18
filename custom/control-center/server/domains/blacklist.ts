@@ -11,6 +11,7 @@
 // blocks every `|` line in the file, wherever it is, so a row the table does
 // not hold (after a blank line, in a second table) is listed too, read as the
 // scanner reads it, and a save moves it into the table.
+// What must always hold: blacklist.invariants.md next to this file.
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
@@ -88,53 +89,34 @@ export function blacklistScannerKey(row: Pick<BlacklistRow, 'company' | 'scope'>
 }
 
 /**
- * The first row of `rows` the scanner would never read: one whose key is empty, or a second row under a key (the
- * scanner keeps the first). Rows like these the file already holds pass, so a save that leaves them as they are (in any
- * order) is not refused: each row of the file excuses one saved row with the same company and scope, and a key keeps
- * no more rows than the file has under it. Every row of a key with more than one row needs its excuse, the first one
- * too, since any order of them is savable and the scanner then reads only whichever comes first. Null when none.
+ * The first row of `rows` the scanner would never read: one whose key is empty, or one of several rows under a key (the
+ * scanner keeps only the first, and any order of them is savable). Such a row is let through only when the file holds a
+ * row with the same company and scope, one for one, so a save never adds a dead row but keeps the ones the file has. A
+ * key with a single row is always read. Null when none.
  */
 export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[], norm: NormalizeTextKey): string | null {
   const id = (r: Pick<BlacklistRow, 'company' | 'scope'>) => `${r.scope}\0${r.company}`;
   const held = new Map<string, number>();
-  const heldIds = new Map<string, number>();
-  for (const r of existing) {
-    const { key } = blacklistScannerKey(r, norm);
-    held.set(key, (held.get(key) ?? 0) + 1);
-    heldIds.set(id(r), (heldIds.get(id(r)) ?? 0) + 1);
-  }
-  // Uses up one row of the file with this company and scope; false when none is left.
-  const excuse = (r: BlacklistRow) => {
-    const left = heldIds.get(id(r)) ?? 0;
-    if (left > 0) heldIds.set(id(r), left - 1);
-    return left > 0;
-  };
+  for (const r of existing) held.set(id(r), (held.get(id(r)) ?? 0) + 1);
+  const keyed = rows.map((r) => ({ r, ...blacklistScannerKey(r, norm) }));
   const group = new Map<string, BlacklistRow[]>();
-  for (const r of rows) {
-    const k = blacklistScannerKey(r, norm);
-    if (!k.empty) group.set(k.key, [...(group.get(k.key) ?? []), r]);
-  }
-  const count = new Map<string, number>();
-  for (const r of rows) {
-    const k = blacklistScannerKey(r, norm);
-    if (k.empty) {
-      if (excuse(r)) continue;
-      return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
-    }
-    const members = group.get(k.key)!;
-    if (members.length === 1) continue;
-    const n = (count.get(k.key) ?? 0) + 1;
-    count.set(k.key, n);
-    const cap = Math.max(1, held.get(k.key) ?? 0);
-    const same = (other: BlacklistRow) => `the scanner reads ${r.company} as the same ${r.scope} as ${other.company}, and keeps only the first; remove one of them`;
-    // A key over its cap is refused at the row past it, naming the first; the first row is refused only when it fits.
-    if (n === 1) {
-      if (!excuse(r) && members.length <= cap) return same(members[1]!);
-      continue;
-    }
-    if (n > cap || !excuse(r)) return same(members[0]!);
-  }
-  return null;
+  for (const k of keyed) if (!k.empty) group.set(k.key, [...(group.get(k.key) ?? []), k.r]);
+  // Each dead row uses up one row of the file with its company and scope; the ones left over are new.
+  const fresh = keyed.filter((k) => {
+    if (!k.empty && group.get(k.key)!.length === 1) return false;
+    const left = held.get(id(k.r)) ?? 0;
+    held.set(id(k.r), left - 1);
+    return left <= 0;
+  });
+  if (!fresh.length) return null;
+  // A duplicate is named at its last new row, against another row of its key: the first one, or the second when it is the first.
+  const last = new Map(fresh.map((k) => [k.key, k]));
+  const blamed = fresh.find((k) => k.empty || last.get(k.key) === k)!;
+  const { r } = blamed;
+  if (blamed.empty) return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
+  const members = group.get(blamed.key)!;
+  const other = members[0] === r ? members[1]! : members[0]!;
+  return `the scanner reads ${r.company} as the same ${r.scope} as ${other.company}, and keeps only the first; remove one of them`;
 }
 
 export interface BlacklistParsed {
@@ -169,31 +151,73 @@ const splitCells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$
 const TABLE_LINE = /^\s*\|/;
 const SEPARATOR = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*(?::?-+:?\s*)?$/;
 
-/**
- * A `|` line read as scan.mjs parseBlacklist reads every one: Company, Since, Scope, Reason by position. Null for what
- * it skips: a separator, a header (first cell Company), a line with no company.
- */
-function scannerRow(line: string, extra: string[] = []): BlacklistRow | null {
-  const cells = splitCells(line);
-  const company = cells[0] ?? '';
-  if (!scannerReadsCompany(company)) return null;
-  return {
-    company,
-    since: cells[1] ?? '',
-    scope: (cells[2] || 'company').toLowerCase() === 'domain' ? 'domain' : 'company',
-    reason: cells[3] ?? '',
-    ...(extra.length ? { extra } : {}),
-  };
-}
-
-// The header names each position the scanner reads may have (the first only has to mention Company).
+// The columns the scanner reads, by position, and the header names each may have in a file (the first only has to
+// mention Company). A save writes them under these labels, in this order.
 const POSITIONS: Array<{ label: string; fits: (h: string) => boolean }> = [
   { label: 'Company', fits: (h) => h.includes('company') },
   { label: 'Since', fits: (h) => ['since', 'added', 'date'].includes(h) },
   { label: 'Scope', fits: (h) => h === 'scope' },
   { label: 'Reason', fits: (h) => ['reason', 'notes', 'why'].includes(h) },
 ];
-const MANAGED = new Set(['company', 'since', 'scope', 'reason']);
+const SCOPE_AT = 2;
+const SCOPES = ['company', 'domain'];
+
+/**
+ * The one table model parse reads and render writes: the managed columns at positions 0 to 3, then the file's other
+ * columns, each read from its own position of a `|` line (`extraAt`, parallel to `extraColumns`). A cell is kept on
+ * save only when this layout gives it a place; every other non-empty cell is unkept.
+ */
+interface Layout {
+  extraColumns: string[];
+  extraAt: number[];
+}
+const NO_TABLE: Layout = { extraColumns: [], extraAt: [] };
+
+/**
+ * The layout of a table with this header. The scanner reads the third column only as a scope (anything but domain is
+ * company): any other column there is kept, under its own name, beside the ones the editor manages.
+ */
+function layoutOf(headerCells: string[]): Layout {
+  const header = headerCells.map((h) => h.toLowerCase());
+  const keepThird = header.length > SCOPE_AT && header[SCOPE_AT] !== 'scope';
+  const managed = POSITIONS.some((p) => p.label.toLowerCase() === header[SCOPE_AT]);
+  const third = keepThird ? [{ name: managed ? `${headerCells[SCOPE_AT]} (old column 3)` : headerCells[SCOPE_AT]!, at: SCOPE_AT }] : [];
+  const rest = headerCells.slice(POSITIONS.length).map((name, i) => ({ name, at: POSITIONS.length + i }));
+  const extras = [...third, ...rest];
+  return { extraColumns: extras.map((e) => e.name), extraAt: extras.map((e) => e.at) };
+}
+
+/** Whether a save writes this cell of a listed row back: into its managed column, or into one of the file's own columns. */
+function keptCell(layout: Layout, cell: string, at: number): boolean {
+  if (cell === '' || at === 0 || at === 1 || at === 3 || layout.extraAt.includes(at)) return true;
+  return at === SCOPE_AT && SCOPES.includes(cell.toLowerCase());
+}
+
+/**
+ * A `|` line read as scan.mjs parseBlacklist reads every one: Company, Since, Scope, Reason by position, and the cells
+ * of the layout's other columns. Null for what the scanner skips: a separator, a header (first cell Company), a line
+ * with no company. Cells a save would drop go to `unkept`: those of a listed row the layout has no place for, and those
+ * of a line with no company. A header line's own labels are no data, so nothing of it is unkept.
+ */
+function readLine(line: string, layout: Layout, unkept: string[], isHeader = false): BlacklistRow | null {
+  const cells = splitCells(line);
+  const company = cells[0] ?? '';
+  if (!scannerReadsCompany(company)) {
+    const lost = cells.slice(1).filter((c) => c !== '');
+    if (!isHeader && !SEPARATOR.test(line) && company.toLowerCase() !== 'company' && lost.length) unkept.push(`(no company) (${lost.join(', ')})`);
+    return null;
+  }
+  const lost = isHeader ? [] : cells.filter((c, i) => !keptCell(layout, c, i));
+  if (lost.length) unkept.push(`${company} (${lost.join(', ')})`);
+  const extra = layout.extraAt.map((at) => cells[at] ?? '');
+  return {
+    company,
+    since: cells[1] ?? '',
+    scope: (cells[SCOPE_AT] || 'company').toLowerCase() === 'domain' ? 'domain' : 'company',
+    reason: cells[3] ?? '',
+    ...(extra.length ? { extra } : {}),
+  };
+}
 
 /**
  * Text around the table without its `|` lines, and the rows the scanner reads from them. Untouched when it has none.
@@ -222,78 +246,43 @@ function outsideTable(lines: string[], read: (line: string) => BlacklistRow | nu
   return { text: kept.join('\n'), rows };
 }
 
-/** Records a row's cells a save has no column for: past the table's last column, or a scope that is neither company nor domain. */
-function noteLost(cells: string[], company: string, width: number, keepThird: boolean, unkept: string[]): void {
-  const lost = cells.filter((c, i) => c !== '' && (i >= width || (i === 2 && !keepThird && !['company', 'domain'].includes(c.toLowerCase()))));
-  if (lost.length) unkept.push(`${company} (${lost.join(', ')})`);
-}
-
-/**
- * Records the cells of a `|` line the scanner skips for having no company (an empty or dash first cell): a save writes
- * back only the rows it lists, so they would go. A separator or a header (first cell Company) holds no data.
- */
-function noteCompanyless(line: string, unkept: string[]): void {
-  if (SEPARATOR.test(line)) return;
-  const [first = '', ...rest] = splitCells(line);
-  if (first.toLowerCase() === 'company') return;
-  const lost = rest.filter((c) => c !== '');
-  if (lost.length) unkept.push(`(no company) (${lost.join(', ')})`);
-}
-
 export function parseBlacklist(md: string): BlacklistParsed {
   const lines = md.split(/\r?\n/);
+  const unkept: string[] = [];
   // The table's header: a `|` line naming a Company column, with the markdown separator row under it.
   const headerIdx = lines.findIndex((l, i) => TABLE_LINE.test(l) && /company/i.test(l) && SEPARATOR.test(lines[i + 1] ?? ''));
   if (headerIdx === -1) {
     // No table, but the scanner still blocks every `|` line: they are listed, and a save moves them into a new table.
-    const unkept: string[] = [];
-    const loose = outsideTable(lines, (l) => {
-      const row = scannerRow(l);
-      if (row) noteLost(splitCells(l), row.company, 4, false, unkept);
-      else noteCompanyless(l, unkept);
-      return row;
-    });
+    const loose = outsideTable(lines, (l) => readLine(l, NO_TABLE, unkept));
     return { rows: loose.rows, preamble: loose.text.trim() ? loose.text : null, postamble: '', extraColumns: [], columnWarning: null, unkept };
   }
   const headerCells = splitCells(lines[headerIdx]!);
-  const header = headerCells.map((h) => h.toLowerCase());
-  const misplaced = POSITIONS.some((p, i) => i < header.length && !p.fits(header[i]!));
+  const misplaced = POSITIONS.some((p, i) => i < headerCells.length && !p.fits(headerCells[i]!.toLowerCase()));
   const columnWarning = misplaced
     ? `The table's header is "${headerCells.join(' | ')}", but the scanner reads every row by position as Company, Since, Scope, Reason. The rows are shown as it reads them; saving rewrites the header in that order.`
     : null;
-  // The scanner reads the third column only as a scope (anything but domain is company): any other column there is
-  // kept, under its own name, beside the ones the editor manages.
-  const keepThird = header.length > 2 && header[2] !== 'scope';
-  const thirdName = keepThird ? (MANAGED.has(header[2]!) ? `${headerCells[2]} (old column 3)` : headerCells[2]!) : null;
-  const extraColumns = [...(thirdName !== null ? [thirdName] : []), ...headerCells.slice(4)];
-  // Every listed row, in the table or not, is read by position: its cells after Reason fill the table's own columns.
-  const unkept: string[] = [];
-  const read = (line: string, isHeader = false): BlacklistRow | null => {
-    const cells = splitCells(line);
-    const row = scannerRow(line, [...(keepThird ? [cells[2] ?? ''] : []), ...headerCells.slice(4).map((_, i) => cells[4 + i] ?? '')]);
-    if (!row && !isHeader) noteCompanyless(line, unkept);
-    if (!row || isHeader) return row;
-    noteLost(cells, row.company, Math.max(4, headerCells.length), keepThird, unkept);
-    return row;
-  };
+  // Every listed row, in the table or not, is read by position into the table's own columns.
+  const layout = layoutOf(headerCells);
+  const read = (l: string) => readLine(l, layout, unkept);
   // A markdown table ends at its first line that is not a row (a blank line included).
   let end = headerIdx + 1;
-  while (end < lines.length && /^\s*\|/.test(lines[end]!)) end++;
-  const before = outsideTable(lines.slice(0, headerIdx), (l) => read(l));
+  while (end < lines.length && TABLE_LINE.test(lines[end]!)) end++;
+  const before = outsideTable(lines.slice(0, headerIdx), read);
   // The scanner skips a header only when its first cell is exactly Company: "| Company Name | ... |" is an entry it
   // blocks, so it is listed (a save writes the column names again above it; its own labels are no data to keep).
-  const headerRow = read(lines[headerIdx]!, true);
-  const rows = [...(headerRow ? [headerRow] : []), ...lines.slice(headerIdx + 1, end).map((l) => read(l))].filter((r): r is BlacklistRow => r !== null);
-  const after = outsideTable(lines.slice(end), (l) => read(l));
-  return { rows: [...before.rows, ...rows, ...after.rows], preamble: before.text.trim() ? before.text : null, postamble: after.text, extraColumns, columnWarning, unkept };
+  const headerRow = readLine(lines[headerIdx]!, layout, unkept, true);
+  const rows = [...(headerRow ? [headerRow] : []), ...lines.slice(headerIdx + 1, end).map(read)].filter((r): r is BlacklistRow => r !== null);
+  const after = outsideTable(lines.slice(end), read);
+  return { rows: [...before.rows, ...rows, ...after.rows], preamble: before.text.trim() ? before.text : null, postamble: after.text, extraColumns: layout.extraColumns, columnWarning, unkept };
 }
 
+/** The file with `rows` as its one table, in the layout parseBlacklist reads: the managed columns, then `extraColumns`. */
 export function renderBlacklist(rows: BlacklistRow[], preamble: string | null, postamble = '', extraColumns: string[] = []): string {
   const head = (preamble ?? DEFAULT_BLACKLIST_PREAMBLE).trimEnd();
-  const extraHead = extraColumns.map((c) => ` ${c} |`).join('');
-  const extraRule = extraColumns.map(() => '---|').join('');
-  const extraCells = (r: BlacklistRow) => extraColumns.map((_, i) => ` ${r.extra?.[i] ?? ''} |`).join('');
-  const table = [`| Company | Since | Scope | Reason |${extraHead}`, `|---------|-------|-------|--------|${extraRule}`, ...rows.map((r) => `| ${r.company} | ${r.since} | ${r.scope} | ${r.reason} |${extraCells(r)}`)];
+  const line = (cells: string[]) => `| ${cells.join(' | ')} |`;
+  const rule = `|${[...POSITIONS.map((p) => '-'.repeat(p.label.length + 2)), ...extraColumns.map(() => '---')].join('|')}|`;
+  const cellsOf = (r: BlacklistRow) => [r.company, r.since, r.scope, r.reason, ...extraColumns.map((_, i) => r.extra?.[i] ?? '')];
+  const table = [line([...POSITIONS.map((p) => p.label), ...extraColumns]), rule, ...rows.map((r) => line(cellsOf(r)))];
   return `${head}\n\n${table.join('\n')}\n${postamble}`;
 }
 
