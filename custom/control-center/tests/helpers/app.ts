@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp, type AppDeps, type BuiltApp } from '../../server/app.js';
-import { SESSION_COOKIE } from '../../server/auth/plugin.js';
+import { sessionCookieName } from '../../server/auth/plugin.js';
 import { DEFAULT_CODE_ROOT, type ServerConfig } from '../../server/config.js';
 import { tempDir } from './tmp.js';
 
@@ -62,7 +62,7 @@ export async function makeTestApp(overrides: Partial<ServerConfig> = {}, deps: A
   // The fake Claude picks its scenario by mode; the token never comes from the Keychain in tests.
   process.env.FAKE_CLAUDE_SCENARIO_DIR = SCENARIO_DIR;
   const built = await buildApp(cfg, { readToken: async () => FAKE_TOKEN, sessionPollMs: 50, ...deps });
-  const authed = { host: TEST_HOST, cookie: `${SESSION_COOKIE}=${TEST_SECRET}` };
+  const authed = { host: TEST_HOST, cookie: `${sessionCookieName(cfg.publicPort)}=${cfg.sessionSecret}` };
   return {
     ...built,
     cfg,

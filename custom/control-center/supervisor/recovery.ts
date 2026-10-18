@@ -581,7 +581,7 @@ function finalizeTurn(sessionDir: string, n: number): void {
 }
 
 /** POST /__recovery/revert after the request checks: the same rules as POST /api/dev/revert. */
-export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null; serverRunning?: boolean }): { status: number; text: string } {
+export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; ctx: RevertContext; sessionId: string; turn: number; abs?: string | null; serverRunning?: boolean }): { status: number; text: string; partial?: true } {
   const meta = listDevSessions(opts.sessionsDir).find((m) => m.id === opts.sessionId);
   if (!meta || !Number.isInteger(opts.turn) || !(Array.isArray(meta.turns) && meta.turns.some((t) => t.n === opts.turn))) return { status: 404, text: 'unknown session or turn' };
   const sessionDir = guardSessionDir(opts.guardRoot, meta.id);
@@ -638,7 +638,8 @@ export function recoveryRevert(opts: { sessionsDir: string; guardRoot: string; c
     return { status: 200, text: resultLines(results) || 'nothing to revert' };
   } catch (err) {
     if (err instanceof RevertRefused) return { status: err.status, text: err.message };
-    if (err instanceof Error && annotated.has(err)) return { status: 500, text: err.message };
+    // Half applied (some files written before the failure): the page reloads to show them reverted.
+    if (err instanceof Error && annotated.has(err)) return { status: 500, text: err.message, ...(nothingReverted.has(err) ? {} : { partial: true as const }) };
     return { status: 500, text: `revert failed: ${(err as Error).message}` };
   }
 }

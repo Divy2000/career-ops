@@ -393,6 +393,8 @@ describe('change sets the disk no longer matches', () => {
       });
       const failed = t.revert(1);
       expect(failed.status).toBe(500);
+      // Half applied: the page reloads to show the files already reverted (R32-supervisor-L2-02).
+      expect(failed.partial).toBe(true);
       expect(failed.text).toMatch(/^revert failed at new\.md: ENOSPC/);
       expect(failed.text).toMatch(/notes\.md: restored/);
       expect(failed.text).not.toMatch(/new\.md: deleted/);
@@ -401,7 +403,9 @@ describe('change sets the disk no longer matches', () => {
       vi.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
         throw enospc();
       });
-      expect(t.revert(1)).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at new\.md: ENOSPC.*\nnothing was reverted$/) });
+      const retried = t.revert(1);
+      expect(retried).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at new\.md: ENOSPC.*\nnothing was reverted$/) });
+      expect(retried.partial).toBeUndefined();
       vi.restoreAllMocks();
       expect(t.revert(1)).toMatchObject({ status: 200, text: 'notes.md: unchanged\nnew.md: deleted' });
       expect(fs.existsSync(t.created)).toBe(false);

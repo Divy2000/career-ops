@@ -418,7 +418,7 @@ describe('one Control Center per data root (SW-claude-02)', () => {
       expect(landing.status).toBe(503);
       expect(landing.body).toContain('href="/__recovery"');
       const cookie = landing.setCookie.split(';')[0]!;
-      expect(cookie).toMatch(/^cc_session=./);
+      expect(cookie).toMatch(new RegExp(`^cc_session_${port}=.`));
       expect(landing.setCookie).toMatch(/HttpOnly; SameSite=Strict; Path=\//);
       expect((await request(port, 'GET', '/__recovery', { cookie })).status).toBe(200);
       // A wrong token signs nobody in.

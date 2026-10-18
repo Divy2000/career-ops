@@ -34,7 +34,8 @@ const PORT_TEXT = process.env.CC_PORT ?? '4317';
 const PORT = /^\d+$/.test(PORT_TEXT) ? Number(PORT_TEXT) : NaN;
 const BUILT = process.argv.includes('--built') || process.env.CC_SERVE_BUILT === '1';
 const NODE_ENV = process.env.NODE_ENV ?? 'development';
-const SESSION_COOKIE = 'cc_session';
+// Per port, as server/auth/plugin.ts names it: cookies ignore the port, so another instance's sign-in would replace ours.
+const SESSION_COOKIE = `cc_session_${PORT}`;
 // Read anew on every use: Dev Chat may add a server module that imports one more file outside the package.
 const CORE_ENTRIES = () => serverEntries(CODE_ROOT, PACKAGE_ROOT, CONTRACT.exports.map((e) => e.module));
 
@@ -362,7 +363,7 @@ async function main(): Promise<void> {
       }
       const form = new URLSearchParams(await readBody(req));
       const r = recoveryRevert({ sessionsDir, guardRoot, ctx: { codeRoot: CODE_ROOT, dataRoot }, sessionId: form.get('sessionId') ?? '', turn: Number(form.get('turn')), abs: form.get('abs'), serverRunning: bg.active !== null });
-      res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff' }).end(r.text);
+      res.writeHead(r.status, { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff', ...(r.partial ? { 'x-cc-revert': 'partial' } : {}) }).end(r.text);
       return true;
     }
     if (url.pathname === '/__recovery/restart' && req.method === 'POST') {
