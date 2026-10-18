@@ -677,6 +677,8 @@ export class SessionManager {
   /** Parallel evaluations: reserve N report numbers first, hand each session its number in the preamble. */
   async fanOut(input: { mode: string; urls: string[]; model?: string | null }): Promise<{ sessions: SessionMeta[]; reserved: number[] }> {
     this.turnPolicy(input.mode);
+    // Each session gets a reserved report number for its posting's evaluation, which only a posting evaluation writes.
+    if (!isReportGated(input.mode)) throw new ModeRefusedError(`a fan-out only evaluates postings; ${input.mode} is not a posting evaluation mode`);
     // A second evaluation of a posting a live session of the mode's class evaluates (one waiting for the user's reply
     // too: the reply finishes it), or another fan-out is starting, would write a second report and tracker row for it.
     const cls = evaluationClass(input.mode);
