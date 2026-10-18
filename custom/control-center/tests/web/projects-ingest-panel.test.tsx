@@ -28,6 +28,7 @@ vi.mock('@web/components/SessionPanel', () => ({
 
 let host: HTMLElement;
 let root: Root;
+let qc: QueryClient;
 let sent: Array<{ url: string; body: unknown; headers: Record<string, string> }>;
 // The library on disk as the server holds it: an append whose If-Match is not its ETag gets the real 409.
 let diskEtag: string;
@@ -61,7 +62,7 @@ async function mount() {
         const body = JSON.parse(String(init?.body)) as { source?: string };
         return json(200, { ok: true, etag: `${diskEtag}-saved`, warnings: [], ...(body.source ? recordOutcome : {}) });
       }
-      if (url === '/api/projects' && (init?.method ?? 'GET') === 'GET') return json(200, { path: 'article-digest.md', kind: 'ok', etag: 'e1', validation: { ok: true, errors: [], warnings: [] }, entries: [] });
+      if (url === '/api/projects' && (init?.method ?? 'GET') === 'GET') return json(200, { path: 'article-digest.md', kind: 'ok', etag: diskEtag, validation: { ok: true, errors: [], warnings: [] }, entries: [] });
       const upload = url.match(/^\/api\/projects\/upload\?name=(.+)$/);
       // As server/routes/projects.ts: the Content-Type decides, never the file name.
       const type = String(new Headers(init?.headers).get('content-type') ?? '').split(';')[0]!.trim();
@@ -75,7 +76,7 @@ async function mount() {
   );
   const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -278,6 +279,38 @@ describe('Import projects: parser sessions per uploaded document', () => {
     expect(importText()).toBe('## From Second\n- fresh.');
     expect(appendButton('Append')).toBeDefined();
     expect(toasts).toEqual([]);
+  });
+
+  it('given another writer changed the library after the preview, when the page reloads it, then Append is refused until a fresh preview (R32-feat-b-X-02)', async () => {
+    await previewUpload();
+    // Another tab or custom/projects/import.mjs appends the same project; the watcher reloads the library.
+    diskEtag = 'e2';
+    await act(async () => qc.invalidateQueries({ queryKey: ['config', 'projects'] }));
+    await until(() => host.textContent?.includes('The library changed since this preview'), 'the stale-preview note');
+    expect(appendButton('Append').disabled).toBe(true);
+    await act(async () => appendButton('Append').click());
+    await drain();
+    expect(sentTo('/api/projects/append')).toBe(0);
+    // A fresh preview is checked against the library as it is now, so its Append goes out on the new ETag.
+    await act(async () => appendButton('Preview').click());
+    await until(() => appendButton('Append') && !appendButton('Append').disabled, 'the fresh preview');
+    await act(async () => appendButton('Append').click());
+    await until(() => sentTo('/api/projects/append') === 1, 'the append');
+    expect(sent.find((c) => c.url === '/api/projects/append')!.headers['If-Match']).toBe('e2');
+  });
+
+  it('a preview whose answer lands after a library reload is bound to the library it was asked against, not the reloaded one (R32-feat-b-X-02)', async () => {
+    await mount();
+    await choose('second.pdf', 'application/pdf');
+    await act(async () => panels.onEnvelope.get('projects/second.pdf')!('projects', { markdown: '## From Second\n- fresh.' }, 1));
+    hold.convert = true;
+    await act(async () => appendButton('Preview').click());
+    await until(() => held.some((h) => h.kind === 'convert'), 'the convert request');
+    diskEtag = 'e2';
+    await act(async () => qc.invalidateQueries({ queryKey: ['config', 'projects'] }));
+    await act(async () => held.find((h) => h.kind === 'convert')!.release());
+    await until(() => host.textContent?.includes('The library changed since this preview'), 'the stale-preview note');
+    expect(appendButton('Append').disabled).toBe(true);
   });
 
   it('an append intake could not record still imports, and says the document was not recorded', async () => {
