@@ -1,3 +1,4 @@
+// What must always hold on this page (state ownership, row identity, cleanup): ApplyPage.invariants.md beside this file.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, getRouteApi, useNavigate } from '@tanstack/react-router';
@@ -94,15 +95,20 @@ type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: st
 /** Statuses a row reaches only after it was applied to: Mark applied would move it back. */
 const PAST_APPLIED = ['Responded', 'Interview', 'Offer', 'Hired', 'Rejected'];
 
+/** The application a form instance is for: its row identity, or none on /apply with no row. */
+const ownerKey = (identity: RowIdentity | undefined) => (identity ? JSON.stringify(rowIdentity(identity)) : '');
+
 /** Leaving the page with edited answers asks first: the session keeps only the answers as it drafted them. */
 export function ApplyBody(props: ApplyBodyProps) {
   // New draft remounts the form, so the URL, the answers and the panel start clean.
   const [draft, setDraft] = useState(0);
   // Stable, so the form's status callback (which the panel's effect depends on) does not change on every render.
   const onNewDraft = useCallback(() => setDraft((d) => d + 1), []);
+  // The form holds every value typed, picked or drafted for one application: when a reindex moves another one under the
+  // number, it starts clean for that one (ApplyPage.invariants.md, 1).
   return (
     <UnsavedProvider>
-      <ApplyForm key={draft} {...props} onNewDraft={onNewDraft} />
+      <ApplyForm key={`${ownerKey(props.identity)}#${draft}`} {...props} onNewDraft={onNewDraft} />
     </UnsavedProvider>
   );
 }
@@ -116,17 +122,15 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   // page comes back, and its answers envelope (replayed by the panel) rebuilds the form.
   const remembered = useRememberedSession(applyKey(n));
   const rememberedId = remembered.panel.sessionId;
-  // Another application's draft under a reused number is not this row's: it is let go, and the form starts clean, as New
-  // draft's does. The number can change owner while the page is open (a delete elsewhere reindexes the tracker), and the
-  // answers drafted for the earlier application must not stay for Fill to send to the new owner's session.
+  // Another application's draft under a reused number is not this row's: it is never attached, and is let go. This form
+  // is the shown application's alone (ApplyBody keys it by the identity), so nothing drafted for the earlier one is here.
   const foreignDraft = n !== null && startedForOther(rememberedId, identity);
   const sessionId = foreignDraft ? null : rememberedId;
   useEffect(() => {
     if (!foreignDraft || !rememberedId) return;
     lastSession(applyKey(n)).forget(rememberedId);
     forgetDraft(rememberedId);
-    onNewDraft();
-  }, [foreignDraft, rememberedId, n, onNewDraft]);
+  }, [foreignDraft, rememberedId, n]);
   // Every way this page lets go of its draft (New draft, the session gone) releases the draft's kept keys the same way.
   const dropDraft = useCallback(() => {
     if (sessionId) forgetDraft(sessionId);
@@ -178,7 +182,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
       marking.current = false;
     }
   };
-  const docs = useQuery({ queryKey: ['apply', 'documents', n], queryFn: () => apiGet<ApplyDocuments>(n ? `/api/apply/documents?n=${n}` : '/api/apply/documents') });
+  const docs = useQuery({ queryKey: ['apply', 'documents', n, ownerKey(identity)], queryFn: () => apiGet<ApplyDocuments>(n ? `/api/apply/documents?n=${n}` : '/api/apply/documents') });
   // null until the user picks, so the row's tailored CV and cover letter are preselected once the listing arrives.
   const [pickedPdf, setPickedPdf] = useState<string | null>(null);
   const [pickedCover, setPickedCover] = useState<string | null>(null);
