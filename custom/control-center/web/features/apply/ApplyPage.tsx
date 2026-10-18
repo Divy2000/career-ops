@@ -13,6 +13,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { CostPill, Message } from '../../components/ActionBar';
 import { DataState, Pill } from '../../components/ui';
 import { prefillBlockers } from './prefill';
+import { rowIdentity, type RowIdentity } from '../tracker/StatusControl';
 import type { ApplyDocuments } from '@shared/api';
 
 const rowRoute = getRouteApi('/apply/$n');
@@ -86,7 +87,8 @@ export function AnswersForm({ fields, onChange }: { fields: AnswerField[]; onCha
 
 // The row's tracker status: Mark applied is not offered once the row is Applied, and asks before it moves a row back
 // from a later stage.
-type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: string; status?: string };
+// identity: the row shown under n, which Mark applied names so a different row a reindex moved under n is refused.
+type ApplyBodyProps = { n: string | null; company: string | null; postingUrl: string; status?: string; identity?: RowIdentity };
 
 /** Statuses a row reaches only after it was applied to: Mark applied would move it back. */
 const PAST_APPLIED = ['Responded', 'Interview', 'Offer', 'Hired', 'Rejected'];
@@ -152,7 +154,7 @@ function writeDraftDocs(sid: string, docs: DraftDocs | null): void {
   }
 }
 
-function ApplyForm({ n, company, postingUrl, status: rowStatus, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
+function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
   const navigate = useNavigate();
   const engine = useEngine();
   // The draft is a paid session and Fill is reachable only here: the row's last apply session is re-attached when the
@@ -203,7 +205,8 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, onNewDraft }: Ap
     marking.current = true;
     try {
       if (rowStatus && PAST_APPLIED.includes(rowStatus) && !(await confirm({ title: 'Move this row back to Applied?', body: `The row is at ${rowStatus}. Marking it applied replaces that status, and follow-ups count from Applied again.`, confirmLabel: 'Mark applied', danger: true }))) return;
-      await actions.run('tracker.setStatus', { row: Number(n), state: 'Applied' }, 'Marked as Applied');
+      if (!identity) return;
+      await actions.run('tracker.setStatus', { row: Number(n), state: 'Applied', expectCompany: identity.company, expectRole: identity.role, expectReport: identity.report }, 'Marked as Applied');
     } finally {
       marking.current = false;
     }
@@ -416,7 +419,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, onNewDraft }: Ap
               <button type="button" disabled={!docs.data || blockers.reasons.length > 0 || actions.busy !== null} aria-describedby={docs.data && blockers.reasons.length > 0 ? 'prefill-blockers' : undefined} onClick={() => void prefill()}>
                 Zero-token prefill <Pill tone="info">Network</Pill>
               </button>
-              {n && rowStatus !== 'Applied' && (
+              {n && identity && rowStatus !== 'Applied' && (
                 <button type="button" disabled={actions.busy !== null} onClick={() => void markApplied()}>
                   Mark applied
                 </button>
@@ -554,7 +557,7 @@ export function ApplyRowPage() {
         <h1 id="page-title">Apply: {q.data?.row.company ?? `row #${n}`}</h1>
         {q.data && <span className="muted">{q.data.row.role}</span>}
       </div>
-      <DataState query={q}>{q.data && <ApplyBody key={n} n={n} company={q.data.row.company} postingUrl={q.data.row.url ?? ''} status={q.data.row.status} />}</DataState>
+      <DataState query={q}>{q.data && <ApplyBody key={n} n={n} company={q.data.row.company} postingUrl={q.data.row.url ?? ''} status={q.data.row.status} identity={rowIdentity(q.data.row)} />}</DataState>
     </section>
   );
 }
