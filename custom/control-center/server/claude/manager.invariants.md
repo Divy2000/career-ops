@@ -10,7 +10,7 @@ Every piece of shared state has exactly one owner at a time, and the owner is re
 
 | State | Owner | Recorded in | Taken | Released |
 |-------|-------|-------------|-------|----------|
-| Preparing a session's next turn | the process starting it | `{guard}/turn.claim` | before the idle check is trusted | in the `finally` of send / fork / delete |
+| Preparing a session's next turn | the process starting it | `{guard}/turn.claim` | before the idle check is trusted | in the `finally` of send / fork / delete / `whileIdle` |
 | Following and settling a session's latest turn | the one tracker | `{guard}/track.claim` + `active` | when `track()` starts or a standby takes over a gone holder | `untrack()`, the single exit of every settle path; `close()` |
 | Starting an evaluation of a posting | the starting process | `posting-claims/*.claim` + `postingHolds` | before the duplicate check | once the session's turn runs (or the start fails) |
 | A fan-out starting a posting | the fan-out | `batchStarting` | with its posting claim | when the fan-out returns |
@@ -22,11 +22,14 @@ displaced, however long it takes.
 
 ## Idle
 
-A session may start a turn, be forked from, or be deleted only when all of these hold:
+A session may start a turn, be forked from, be deleted, or have a Dev Chat turn reverted only when all of these hold:
 
 - no process holds its turn claim or its track claim (a holder may be this process or a peer);
 - its status is not `running` or `queued`;
 - its last turn's run is not still stopping (a cancelled Claude process lives until SIGKILL).
+
+A Dev Chat revert runs through `SessionManager.whileIdle`: the check and the revert run under the turn claim, on the
+record read under it, with no await between them, and a busy session is refused (409).
 
 A tracker holds the track claim from the moment it starts following the turn until the turn's outcome, report number,
 policy ack and kept reservation are all settled, so a run that ended while its turn is not yet settled is never idle.
