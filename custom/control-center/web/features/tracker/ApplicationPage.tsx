@@ -24,10 +24,14 @@ import { postingHref } from '../today/evaluate';
 export const applicationLauncherKey = (row: Pick<TrackerRow, 'num' | 'company' | 'role' | 'report'>, slot: string) =>
   `cc.application.${row.num}.${slot}:${JSON.stringify([row.company, row.role, row.report])}`;
 
-/** Every session whose target is this application (spec 2.4). */
-function ApplicationSessions({ n }: { n: number }) {
+/**
+ * Every session whose target is this application (spec 2.4): its row number, and the row it was started on when the
+ * session recorded one, since a deleted row's number can be handed to another application.
+ */
+function ApplicationSessions({ row }: { row: Pick<TrackerRow, 'num' | 'company' | 'role' | 'report'> }) {
   const q = useSessions();
-  const mine = (q.data ?? []).filter((s) => s.target.type === 'app' && s.target.value === String(n));
+  const startedHere = (r: { company: string; role: string; report: number | null } | undefined) => !r || (r.company === row.company && r.role === row.role && r.report === row.report);
+  const mine = (q.data ?? []).filter((s) => s.target.type === 'app' && s.target.value === String(row.num) && startedHere(s.target.row));
   return (
     <div className="card">
       <h2>Sessions for this application</h2>
@@ -279,7 +283,7 @@ export function ApplicationPage() {
               />
             )}
 
-            {tab === 'sessions' && <ApplicationSessions n={q.data.row.num} />}
+            {tab === 'sessions' && <ApplicationSessions row={q.data.row} />}
 
             {tab === 'documents' && (
               <div className="stack">

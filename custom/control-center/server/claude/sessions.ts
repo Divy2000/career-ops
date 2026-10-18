@@ -12,6 +12,7 @@ import { guardSessionDir, replaceFile } from '../../supervisor/recovery.js';
 
 export type SessionStatus = 'queued' | 'running' | 'awaiting_user' | 'done' | 'error' | 'cancelled';
 export type TargetType = 'app' | 'url' | 'company' | 'text' | 'none';
+export type AppRowIdentity = { company: string; role: string; report: number | null };
 
 export interface SessionTurn {
   n: number;
@@ -29,7 +30,11 @@ export interface SessionMeta {
   claudeSessionId: string;
   mode: string;
   policyClass: PolicyClass;
-  target: { type: TargetType; value: string | null };
+  /**
+   * row: for an app target, the tracker row under that number when the session started. A deleted row's number can be
+   * handed to a later addition, so the number alone does not say which application a session belongs to.
+   */
+  target: { type: TargetType; value: string | null; row?: AppRowIdentity };
   model: string | null;
   status: SessionStatus;
   createdAt: string;
