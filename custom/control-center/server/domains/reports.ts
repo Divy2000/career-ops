@@ -61,12 +61,23 @@ export function reportNumberOf(name: string): number | null {
   return m ? parseInt(m[1]!, 10) : null;
 }
 
-/** Names of the files under reports/: a folder named like a report (a session that wrote reports/099-acme.md/jd.txt) is no report. */
+/**
+ * Names of the files under reports/, a symlink to a file included: a folder named like a report (a session that wrote
+ * reports/099-acme.md/jd.txt) is no report.
+ */
 function reportDirFiles(dataRoot: string): string[] {
+  const dir = path.join(dataRoot, 'reports');
+  const linkedFile = (name: string) => {
+    try {
+      return fs.statSync(path.join(dir, name)).isFile();
+    } catch {
+      return false;
+    }
+  };
   try {
     return fs
-      .readdirSync(path.join(dataRoot, 'reports'), { withFileTypes: true })
-      .filter((e) => e.isFile())
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile() || (e.isSymbolicLink() && linkedFile(e.name)))
       .map((e) => e.name);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];

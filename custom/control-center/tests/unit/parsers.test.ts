@@ -52,6 +52,19 @@ describe('reports', () => {
     expect(t.rows.find((row) => row.num === 2)).toMatchObject({ reportState: 'ok' });
   });
 
+  it('still reads a report that is a symlink to a file, and skips one that links to a folder (R34-srv-dom-b-L1-01)', () => {
+    const r = copyFixtureRoot();
+    fs.mkdirSync(path.join(r, 'archive'));
+    fs.renameSync(path.join(r, 'reports', '002-northwind-analytics.md'), path.join(r, 'archive', '002-northwind-analytics.md'));
+    fs.symlinkSync('../archive/002-northwind-analytics.md', path.join(r, 'reports', '002-northwind-analytics.md'));
+    fs.writeFileSync(path.join(r, 'archive', '009-RESERVED.md'), '');
+    fs.symlinkSync('../archive/009-RESERVED.md', path.join(r, 'reports', '009-RESERVED.md'));
+    fs.symlinkSync('../archive', path.join(r, 'reports', '010-folder.md'));
+    expect(readReport(r, 2)).toMatchObject({ kind: 'ok', report: { file: '002-northwind-analytics.md' } });
+    expect(readReport(r, 9)).toMatchObject({ kind: 'reserved', file: '009-RESERVED.md' });
+    expect(readReport(r, 10)).toEqual({ kind: 'missing', num: 10 });
+  });
+
   it('does not read a bare-date digest such as reports/2026-10-17.md as report #2026 (R28-mgr-rev-05)', () => {
     const dated = copyFixtureRoot();
     fs.writeFileSync(path.join(dated, 'reports', '2026-10-17.md'), '# Scan digest 2026-10-17\n');
