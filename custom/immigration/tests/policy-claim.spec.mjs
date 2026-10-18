@@ -520,3 +520,82 @@ test('given server secrets in the environment, when a claim owner is checked, th
     assert.deepEqual(Object.keys(call.env).sort(), ['LC_ALL', 'PATH', 'TZ'], call.args.join(' '));
   }
 });
+
+test('given a start claim with no start time recorded, when its pid is checked, then it holds only while ps cannot tell or the pid may still be its writer, for at most a day (R36-scripts-a-X-01)', () => {
+  const r = root();
+  // ownerLive's own clock (its now argument) ages the claim; the claim's pid is the checking process, so ps always
+  // finds it, and a claim written before that process started can only name an earlier holder of the pid.
+  const body = `async (c) => {
+    const r = ${JSON.stringify(r)};
+    const HOUR = 60 * 60_000;
+    c.tryClaim(r, { owner: 'starting:me', batch: null });
+    const start = c.readClaim(r).pidStart;
+    if (typeof start !== 'number') throw new Error('no numeric start time for this process: ' + JSON.stringify(start));
+    c.releaseClaim(r, 'starting:me');
+    const written = Date.now();
+    const before = new Date(start * 1000 - 60_000).toISOString();
+    const after = new Date(written).toISOString();
+    const rows = [];
+    for (const [label, extra] of [['null', { pidStart: null }], ['absent', {}], ['object', { pidStart: {} }]]) {
+      const claim = (at) => ({ owner: 'starting:x', batch: null, at, pid: process.pid, ...extra });
+      rows.push([label + ' fresh', c.ownerLive(r, claim(after), written)]);
+      rows.push([label + ' an hour old', c.ownerLive(r, claim(after), written + HOUR)]);
+      rows.push([label + ' a day old', c.ownerLive(r, claim(after), written + 25 * HOUR)]);
+      rows.push([label + ' written before its pid started', c.ownerLive(r, claim(before), written)]);
+      rows.push([label + ' unparsable at', c.ownerLive(r, claim('soon'), written)]);
+    }
+    const n = (at) => ({ owner: 'starting:x', batch: null, at, pid: process.pid, pidStart: start });
+    rows.push(['number matching, a day old', c.ownerLive(r, n(after), written + 25 * HOUR)]);
+    rows.push(['number not matching', c.ownerLive(r, { ...n(after), pidStart: start - 1 }, written)]);
+    return Object.fromEntries(rows);
+  }`;
+  const expected = {};
+  for (const label of ['null', 'absent', 'object']) {
+    Object.assign(expected, {
+      [`${label} fresh`]: true,
+      [`${label} an hour old`]: true,
+      [`${label} a day old`]: false,
+      [`${label} written before its pid started`]: false,
+      [`${label} unparsable at`]: false,
+    });
+  }
+  Object.assign(expected, { 'number matching, a day old': true, 'number not matching': false });
+  assert.deepEqual(withRecordedSpawns(body).out, expected);
+});
+
+test('given ps cannot run, when a start claim with no start time recorded is checked, then it holds however old (R36-scripts-a-X-01)', () => {
+  const r = root();
+  const old = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+  const body = `async (c) => [null, undefined].map((pidStart) => c.ownerLive(${JSON.stringify(r)}, { owner: 'starting:x', batch: null, at: ${JSON.stringify(old)}, pid: process.pid, ...(pidStart === null ? { pidStart } : {}) }))`;
+  const { calls, out } = withRecordedSpawns(body, { fake: PS_FAILS });
+  assert.deepEqual(out, [true, true]);
+  assert.ok(calls.some((call) => call.file === '/bin/ps'), 'the check never reached ps');
+});
+
+test('given ps failed once, when the same process takes a start claim again, then the claim records its start time (R36-scripts-a-X-01)', () => {
+  const r = root();
+  const failOnce = `if (/(^|\\/)ps$/.test(file) && !globalThis.psFailed) { globalThis.psFailed = true; throw Object.assign(new Error('spawn ps EAGAIN'), { code: 'EAGAIN' }); }`;
+  const body = `async (c) => {
+    const r = ${JSON.stringify(r)};
+    c.tryClaim(r, { owner: 'starting:a', batch: null });
+    const first = c.readClaim(r).pidStart;
+    c.releaseClaim(r, 'starting:a');
+    c.tryClaim(r, { owner: 'starting:b', batch: null });
+    return [first, typeof c.readClaim(r).pidStart];
+  }`;
+  assert.deepEqual(withRecordedSpawns(body, { fake: failOnce }).out, [null, 'number']);
+});
+
+test('given a start claim retagged by a later process that could not read its own start time, when it is checked, then it holds while that process runs (R36-scripts-a-X-01 fix check)', () => {
+  const r = root();
+  const failOnce = `if (/(^|\\/)ps$/.test(file) && !globalThis.psFailed) { globalThis.psFailed = true; throw Object.assign(new Error('spawn ps EAGAIN'), { code: 'EAGAIN' }); }`;
+  // Taken an hour ago by a process that started before this one; the retag keeps that claim's time.
+  plant(r, { owner: 'starting:a', batch: null, at: new Date(Date.now() - 60 * 60_000).toISOString(), pid: 1, pidStart: 0 });
+  const body = `async (c) => {
+    const r = ${JSON.stringify(r)};
+    const retagged = c.retagClaim(r, 'starting:a', 'starting:b');
+    const claim = c.readClaim(r);
+    return [retagged, claim.pidStart, c.ownerLive(r, claim)];
+  }`;
+  assert.deepEqual(withRecordedSpawns(body, { fake: failOnce }).out, [true, null, true]);
+});
