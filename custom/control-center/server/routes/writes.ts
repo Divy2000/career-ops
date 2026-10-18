@@ -98,7 +98,10 @@ export async function writeRoutes(app: FastifyInstance, opts: { cfg: ServerConfi
   const expectsRow = (p: ExpectedRow) => p.expectCompany !== undefined || p.expectRole !== undefined;
   const rowUnder = async (appNum: number, expect: ExpectedRow): Promise<{ company: string; role: string } | FollowupRefusal> => {
     const tracker = await readTracker(cfg.codeRoot, cfg.dataRoot);
-    const rows = tracker.kind === 'ok' ? tracker.rows.filter((r) => r.num === appNum) : [];
+    // An unreadable tracker is the problem to report: "stale" sends the page to reload, which changes nothing.
+    if (tracker.kind === 'malformed') return { ok: false, error: `tracker unavailable: ${tracker.error} (${tracker.path})`, status: 503 };
+    if (tracker.kind === 'missing') return { ok: false, error: `tracker unavailable: no tracker at ${tracker.path}`, status: 404 };
+    const rows = tracker.rows.filter((r) => r.num === appNum);
     if (!expectsRow(expect)) return rows[0] ?? { ok: false, error: `no tracker row #${appNum}`, status: 404 };
     const row = rows.find((r) => (expect.expectCompany === undefined || r.company === expect.expectCompany) && (expect.expectRole === undefined || r.role === expect.expectRole));
     return row ?? { ok: false, error: 'stale' };
