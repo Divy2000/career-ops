@@ -93,6 +93,25 @@ describe('blacklist rows the scanner skips by key', () => {
     });
   });
 
+  it('given a file that already holds a duplicate, when a newly typed row of that key is put first, then it is refused and nothing is written (R34-srv-dom-a-X-01)', async () => {
+    const legacy = `${FILE}| initech | 2025-01-02 | company | legacy duplicate |\n`;
+    await withApp(legacy, async (save, abs) => {
+      const saved = await save([{ company: 'INITECH', since: '2026-10-03', scope: 'company', reason: 'new' }, initech]);
+      expect(saved.status, saved.body).toBe(400);
+      expect(JSON.parse(saved.body).error).toMatch(/INITECH.*Initech/);
+      expect(fs.readFileSync(abs, 'utf8')).toBe(legacy);
+    });
+  });
+
+  it('given a file that already holds a duplicate, when it is replaced by a single newly typed row of that key, then the save succeeds and the scanner reads it', async () => {
+    const legacy = `${FILE}| initech | 2025-01-02 | company | legacy duplicate |\n`;
+    await withApp(legacy, async (save, abs) => {
+      const saved = await save([{ company: 'INITECH', since: '2026-10-03', scope: 'company', reason: 'new' }]);
+      expect(saved.status, saved.body).toBe(200);
+      expect(await scannerKeys(fs.readFileSync(abs, 'utf8'))).toHaveLength(1);
+    });
+  });
+
   it('given a file that already holds a duplicate, when the two rows are saved in swapped order, then the save succeeds', async () => {
     const legacy = `${FILE}| initech | 2025-01-02 | company | dup |\n`;
     await withApp(legacy, async (save) => {

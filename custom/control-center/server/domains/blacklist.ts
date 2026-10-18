@@ -91,7 +91,8 @@ export function blacklistScannerKey(row: Pick<BlacklistRow, 'company' | 'scope'>
  * The first row of `rows` the scanner would never read: one whose key is empty, or a second row under a key (the
  * scanner keeps the first). Rows like these the file already holds pass, so a save that leaves them as they are (in any
  * order) is not refused: each row of the file excuses one saved row with the same company and scope, and a key keeps
- * no more rows than the file has under it. Null when none.
+ * no more rows than the file has under it. Every row of a key with more than one row needs its excuse, the first one
+ * too, since any order of them is savable and the scanner then reads only whichever comes first. Null when none.
  */
 export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[], norm: NormalizeTextKey): string | null {
   const id = (r: Pick<BlacklistRow, 'company' | 'scope'>) => `${r.scope}\0${r.company}`;
@@ -108,7 +109,11 @@ export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[
     if (left > 0) heldIds.set(id(r), left - 1);
     return left > 0;
   };
-  const first = new Map<string, BlacklistRow>();
+  const group = new Map<string, BlacklistRow[]>();
+  for (const r of rows) {
+    const k = blacklistScannerKey(r, norm);
+    if (!k.empty) group.set(k.key, [...(group.get(k.key) ?? []), r]);
+  }
   const count = new Map<string, number>();
   for (const r of rows) {
     const k = blacklistScannerKey(r, norm);
@@ -116,15 +121,18 @@ export function blacklistUnreadRow(rows: BlacklistRow[], existing: BlacklistRow[
       if (excuse(r)) continue;
       return `the scanner skips ${r.company}: it has no letters or digits to match a ${r.scope === 'domain' ? 'host' : 'company'} by; name a company or host`;
     }
+    const members = group.get(k.key)!;
+    if (members.length === 1) continue;
     const n = (count.get(k.key) ?? 0) + 1;
     count.set(k.key, n);
-    const prior = first.get(k.key);
-    if (!prior) {
-      first.set(k.key, r);
-      excuse(r);
+    const cap = Math.max(1, held.get(k.key) ?? 0);
+    const same = (other: BlacklistRow) => `the scanner reads ${r.company} as the same ${r.scope} as ${other.company}, and keeps only the first; remove one of them`;
+    // A key over its cap is refused at the row past it, naming the first; the first row is refused only when it fits.
+    if (n === 1) {
+      if (!excuse(r) && members.length <= cap) return same(members[1]!);
       continue;
     }
-    if (n > Math.max(1, held.get(k.key) ?? 0) || !excuse(r)) return `the scanner reads ${r.company} as the same ${r.scope} as ${prior.company}, and keeps only the first; remove one of them`;
+    if (n > cap || !excuse(r)) return same(members[0]!);
   }
   return null;
 }
