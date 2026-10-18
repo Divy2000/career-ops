@@ -18,7 +18,7 @@ export interface ServerConfig {
   publicPort: number;
   /** One-time URL token printed by the supervisor. */
   token: string;
-  /** Value of the cc_session cookie once the token was redeemed. */
+  /** Value of the cc_session_<port> cookie once the token was redeemed. */
   sessionSecret: string;
   client: ClientMode;
   claudeBin: string;
