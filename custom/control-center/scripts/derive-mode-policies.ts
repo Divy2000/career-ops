@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from '../../../lib/is-main-module.mjs';
 
 export interface DerivedMode {
   id: string;
@@ -54,8 +55,8 @@ export function deriveModes(codeRoot: string): DerivedMode[] {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-const here = fileURLToPath(import.meta.url);
-if (process.argv[1] && path.resolve(process.argv[1]) === here) {
+if (isMainModule(import.meta.url)) {
+  const here = fileURLToPath(import.meta.url);
   const codeRoot = path.resolve(path.dirname(here), '..', '..', '..');
   const out = path.resolve(path.dirname(here), '..', 'server', 'claude', 'modes.generated.json');
   const modes = deriveModes(codeRoot);
