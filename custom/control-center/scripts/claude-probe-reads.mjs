@@ -13,8 +13,10 @@
 // Usage: node scripts/claude-probe-reads.mjs [--only C2,C8] [--record] [--keep] [--raw-only | --guarded-only]
 //   --record  writes the result to server/core/contract.json (claude.readProbe) and
 //             adds the version to claude.approvedVersions when every gate case passed
-//   --keep    keeps the temp layout for inspection (the home canary is always removed)
-//   --raw-only / --guarded-only  run one half of C13 (WebFetch with a logging hook, or with the guard hook)
+//   --keep    keeps the temp layout for inspection, with a copy of this run's transcripts in its transcripts/
+//             (the home canary and the transcripts under ~/.claude/projects are always removed)
+//   --raw-only / --guarded-only  run one half of C13 (WebFetch with a logging hook, or with the guard hook);
+//             --record refuses such a run, since the other half never ran
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -255,6 +257,37 @@ function runClaude(name, opts) {
   });
 }
 
+/**
+ * `s` with every local path a case can report replaced by a placeholder: this layout, the checkout, the node binary and
+ * the home folder, each as spelled and as its symlink-free spelling, and each in the dashed form the CLI names project
+ * folders with. Applied before any truncation, so a cut never leaves part of a path behind.
+ */
+const scrubText = (() => {
+  const dash = (p) => p.replace(/[^a-zA-Z0-9]/g, '-');
+  const real = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const pairs = [];
+  for (const [p, placeholder] of [[T, '$TMPDIR/cc-reads-probe-XXXXXX'], [PACKAGE_ROOT, '$PACKAGE_ROOT'], [process.execPath, '$NODE'], [os.homedir(), '$HOME']]) {
+    for (const spelled of new Set([p, real(p)])) pairs.push([spelled, placeholder], [dash(spelled), dash(placeholder)]);
+  }
+  pairs.push([path.basename(T), 'cc-reads-probe-XXXXXX']);
+  // Longest first, so a path inside another one (the layout inside the home folder) keeps its own placeholder.
+  pairs.sort(([a], [b]) => b.length - a.length);
+  return (s) => pairs.reduce((acc, [from, to]) => acc.split(from).join(to), String(s));
+})();
+/** `value` with scrubText applied to every string in its plain objects and arrays: what goes into the committed contract.json. */
+function scrubPaths(value) {
+  if (typeof value === 'string') return scrubText(value);
+  if (Array.isArray(value)) return value.map(scrubPaths);
+  if (value && Object.getPrototypeOf(value) === Object.prototype) return Object.fromEntries(Object.entries(value).map(([k, x]) => [k, scrubPaths(x)]));
+  return value;
+}
+
 // ---- stream helpers ----
 const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => (x?.type === 'text' ? x.text : JSON.stringify(x))).join('\n') : JSON.stringify(c ?? ''));
 const initOf = (r) => r.events.find((e) => e.type === 'system' && e.subtype === 'init') ?? null;
@@ -271,7 +304,7 @@ const leaked = (r, k) => r.stdout.includes(k);
 function attempt(r, tool, pred) {
   const res = results(r);
   const calls = uses(r).filter((u) => u.name === tool && pred(u.input ?? {}));
-  return calls.map((u) => ({ input: u.input, isError: res.get(u.id)?.isError ?? null, text: (res.get(u.id)?.text ?? '').slice(0, 300) }));
+  return calls.map((u) => ({ input: u.input, isError: res.get(u.id)?.isError ?? null, text: scrubText(res.get(u.id)?.text ?? '').slice(0, 300) }));
 }
 const readOf = (r, file) => attempt(r, 'Read', (i) => i.file_path === file);
 
@@ -371,7 +404,7 @@ groups.push({ ids: ['C10'], run: async () => {
   const pathMatch = bashCalls.map((c) => c.text.match(/(\/[^\s'"]*tool-results\/[^\s'"]+)/)).find(Boolean);
   const reads = attempt(r, 'Read', () => true);
   const c10 = !bashCalls.length ? { result: 'fail', why: 'node big.mjs not attempted; rerun' } : leaked(r, K.CBIG) ? { result: 'pass', why: 'the saved output was read back through the guard hook' } : { result: 'fail', why: 'the saved output never reached a tool result' };
-  return { cases: { C10: { ...c10, reads } }, info: { toolResultsPath: pathMatch ? pathMatch[1].replace(os.homedir(), '$HOME').replace(path.basename(T), 'cc-reads-probe-XXXXXX') : null } };
+  return { cases: { C10: { ...c10, reads } }, info: { toolResultsPath: pathMatch ? pathMatch[1] : null } };
 } });
 
 groups.push({ ids: ['C18', 'C19'], run: async () => {
@@ -450,6 +483,8 @@ async function webfetchGroup(name, hook) {
 }
 
 groups.push({ ids: ['C13'], run: async () => {
+  // A half left out never ran: --record must not replace the last real C13 or its raw-hook info with it.
+  for (const [flag, half] of [['--raw-only', 'c13-guarded'], ['--guarded-only', 'c13-raw']]) if (args.includes(flag)) incomplete.push(`${half} (not run: ${flag})`);
   const raw = args.includes('--guarded-only') ? null : await webfetchGroup('c13-raw', 'log');
   if (args.includes('--raw-only')) return { cases: { C13: { result: 'fail', why: 'guarded half not run (--raw-only)' } }, info: { webFetchRaw: { localHits: raw.mine, canaries: raw.canaries, perUrl: raw.per } } };
   const guarded = await webfetchGroup('c13-guarded', 'guard');
@@ -501,33 +536,52 @@ groups.push({ ids: ['C16'], run: async () => {
 /**
  * The CLI keeps each probe conversation under <config dir>/projects/<this layout's code dir>/. Only directories
  * carrying this layout's unique name are removed: those a hook payload of this run named under a projects/ folder,
- * and those in the default config dir's projects/.
+ * and those in the default config dir's projects/. With `keepInto` (--keep) each is copied there first. Every folder
+ * is tried; the failures are thrown together at the end.
  */
-function cleanTranscripts() {
+function cleanTranscripts(keepInto) {
   const unique = path.basename(T);
-  const dirs = new Set();
+  const named = new Set();
   for (const d of fs.existsSync(GUARD) ? fs.readdirSync(GUARD) : []) {
     const log = path.join(GUARD, d, 'hook-log.ndjson');
     if (!fs.existsSync(log)) continue;
     for (const line of fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)) {
       try {
         const tp = JSON.parse(line).transcript_path;
-        if (typeof tp === 'string') dirs.add(path.dirname(tp));
+        if (typeof tp === 'string') named.add(path.dirname(tp));
       } catch {
         /* torn line */
       }
     }
   }
-  for (const dir of dirs) {
-    if (path.basename(path.dirname(dir)) === 'projects' && path.basename(dir).includes(unique)) fs.rmSync(dir, { recursive: true, force: true });
+  const mine = new Set();
+  for (const dir of named) {
+    if (path.basename(path.dirname(dir)) === 'projects' && path.basename(dir).includes(unique)) mine.add(dir);
     else console.error(`left in place (not this probe's project dir): ${dir}`);
   }
   // A call stopped before its first hook ran has a project folder no hook log names; the default config dir is the
   // only one outside T (INHERITED drops CLAUDE_CONFIG_DIR, and the per-case config dirs live in T).
   const projects = path.join(CONFIG_HOME, 'projects');
   if (fs.existsSync(projects)) {
-    for (const d of fs.readdirSync(projects)) if (d.includes(unique)) fs.rmSync(path.join(projects, d), { recursive: true, force: true });
+    for (const d of fs.readdirSync(projects)) if (d.includes(unique)) mine.add(path.join(projects, d));
   }
+  const failures = [];
+  for (const dir of mine) {
+    if (!fs.existsSync(dir)) continue;
+    if (keepInto) {
+      try {
+        fs.cpSync(dir, path.join(keepInto, path.basename(dir)), { recursive: true });
+      } catch (err) {
+        failures.push(`copy of ${dir} not kept: ${err?.message ?? err}`);
+      }
+    }
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (err) {
+      failures.push(`${dir}: ${err?.message ?? err}`);
+    }
+  }
+  if (failures.length) throw new Error(failures.join('; '));
 }
 
 groups.push({ ids: ['C20'], run: async () => {
@@ -564,7 +618,7 @@ function cleanup() {
   step(HOME_DIR, () => fs.rmSync(HOME_DIR, { recursive: true, force: true }));
   step(OTHER_PROJECT, () => fs.rmSync(OTHER_PROJECT, { recursive: true, force: true }));
   step(CONFIG_FILE, () => fs.rmSync(CONFIG_FILE, { force: true }));
-  if (!KEEP) step(`this probe's transcripts under ${path.join(CONFIG_HOME, 'projects')}`, cleanTranscripts);
+  step(`this probe's transcripts under ${path.join(CONFIG_HOME, 'projects')}`, () => cleanTranscripts(KEEP ? path.join(T, 'transcripts') : null));
   const out = redact(JSON.stringify(summary, null, 2));
   step(path.join(T, 'probe-summary.json'), () => {
     fs.mkdirSync(T, { recursive: true });
@@ -653,7 +707,7 @@ try {
   summary.runs = fs.readdirSync(GUARD).filter((d) => fs.existsSync(path.join(GUARD, d, 'settings.json'))).length;
   if (RECORD) {
     // Cases a signal or a failed call cut short fail without having run: recording them would replace the last real record.
-    const { contract: next, cases } = recordReadProbe(contract, { ...summary, model: MODEL, only, stopped: Boolean(stopping), incomplete });
+    const { contract: next, cases } = recordReadProbe(contract, scrubPaths({ ...summary, model: MODEL, only, stopped: Boolean(stopping), incomplete }));
     summary.cases.C0 = cases.C0;
     writeContract(CONTRACT_FILE, next);
   } else if (stopping) throw new Error('stopped by a signal; nothing recorded');

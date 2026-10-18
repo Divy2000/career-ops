@@ -27,7 +27,8 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
    throwing. A settled call is out of `running`.
 6. **The run knows which calls did not run to their end.** `runClaude` adds a call to `incomplete` when its spawn
    failed, it timed out, it was killed (exit status null), its process group outlived 5 s of kills, or it was never
-   started (stopping); the main flow adds every group that threw.
+   started (stopping); the main flow adds every group that threw, and C13 adds the half `--raw-only` or `--guarded-only`
+   leaves out.
 
 ## Exit and cleanup
 
@@ -37,7 +38,8 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
    `finish()` is already under way; a second signal cleans up and exits at once. Cleanup runs every step even when
    one fails and names what may remain; a failed step makes a normal exit status 1.
 8. **Cleanup removes only what this run created**: the home canary dir, the `~/.claude` canary file and other-project
-   folder, transcripts whose project folder carries this layout's unique name, and the temp layout (unless --keep).
+   folder, transcripts whose project folder carries this layout's unique name (always; --keep copies them into the
+   kept layout's `transcripts/` first), and the temp layout (unless --keep).
    Resources a case group acquires (the local WebFetch server) are released in that group's `finally`.
 
 ## The --record write
@@ -49,7 +51,10 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
    Otherwise it merges (`--only`) or replaces the record,
    adds the version to `approvedVersions` only when every non-C0 case is `pass` or `info`, and recomputes C0.
 10. **contract.json is the old bytes or the new record, never a torn file.** The write goes to a sibling temp file
-    and is renamed over it; a failed write removes the temp file and leaves contract.json untouched.
+    and is renamed over it; a failed write removes the temp file and leaves contract.json untouched. The record names
+    no local path: the whole recorded run passes through `scrubPaths` first, which puts `$TMPDIR/cc-reads-probe-XXXXXX`,
+    `$PACKAGE_ROOT`, `$NODE` and `$HOME` for the layout, the checkout, the node binary and the home folder (as spelled,
+    symlink-free and in the CLI's dashed project-folder form), and a tool result is scrubbed before it is truncated.
 
 ## Child processes
 
