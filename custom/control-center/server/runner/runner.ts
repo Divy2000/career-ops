@@ -28,6 +28,12 @@ const STARTING_FILE = 'starting';
  * the wrapper may have passed its first cancel check and be spawning its command, which it records right after.
  */
 const STARTING_GRACE_MS = 5000;
+/**
+ * Written next to the cancel file when a process taking over an interrupted start tells its wrapper to stop: a wrapper
+ * that then stops was stopped by the takeover, not by the user, so its run ends lost (start it again), not cancelled.
+ */
+const TAKEOVER_FILE = 'takeover';
+const TAKEOVER_LOST = 'the server stopped while starting this run, before its wrapper recorded anything; the wrapper was told to stop and the run was not started again, so start it again';
 
 /** The process a claim or the schedule lock names: a bare PID in the earlier claim format; null when unreadable. */
 function parseHolder(text: string): { pid: number; start: number | null } | null {
@@ -302,6 +308,7 @@ export class Runner {
       this.track(running);
       return running;
     }
+    fs.writeFileSync(path.join(this.store.dirOf(meta.id), TAKEOVER_FILE), new Date().toISOString());
     this.store.requestCancel(meta.id);
     if (Date.now() - this.mtimeOrZero(startingFile) < STARTING_GRACE_MS) {
       this.stopping.add(meta.id);
@@ -313,7 +320,7 @@ export class Runner {
       ...meta,
       status: 'lost',
       endedAt: new Date().toISOString(),
-      error: 'the server stopped while starting this run, before its wrapper recorded anything; the wrapper was told to stop and the run was not started again, so start it again',
+      error: TAKEOVER_LOST,
     };
     this.store.write(lost);
     this.envById.delete(meta.id);
@@ -686,10 +693,13 @@ export class Runner {
     // Only a run someone stopped reads cancelled: one marked so (on disk too, as another server may have cancelled it
     // since `meta` was read), or ended by a signal after its cancel file told it to stop.
     const marked = meta.status === 'cancelled' || this.store.read(meta.id)?.status === 'cancelled';
-    const stopped = marked || (exit.signal !== null && fs.existsSync(path.join(this.store.dirOf(meta.id), CANCEL_FILE)));
-    let status: RunMeta['status'] = stopped ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
-    let error = meta.error;
-    if (!stopped && exit.signal) error = `killed by ${exit.signal}`;
+    const told = exit.signal !== null && fs.existsSync(path.join(this.store.dirOf(meta.id), CANCEL_FILE));
+    // Told to stop by a takeover of its interrupted start, not by the user: it was never started again.
+    const takenOver = !marked && told && fs.existsSync(path.join(this.store.dirOf(meta.id), TAKEOVER_FILE));
+    const stopped = marked || (told && !takenOver);
+    let status: RunMeta['status'] = takenOver ? 'lost' : stopped ? 'cancelled' : exit.code === 0 ? 'done' : 'failed';
+    let error = takenOver ? TAKEOVER_LOST : meta.error;
+    if (!stopped && !takenOver && exit.signal) error = `killed by ${exit.signal}`;
     const meaning = meta.exitMeaning;
     if (status !== 'cancelled' && meaning && exit.code === meaning.code && !(meaning.onlyWithoutStderr && this.store.readRaw(meta.id).lines.some((l) => l.stream === 'stderr'))) {
       status = meaning.status;

@@ -1170,7 +1170,38 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     expect(here.store.read(theirs.id)?.status).toBe('done');
   });
 
-  it('a recorded wrapper whose PID now belongs to a process that started after the wrapper recorded itself is gone: the run ends lost and frees its slot, instead of tracking that process', async () => {
+  it('a wrapper that reads the cancel file a takeover wrote and stops ends its run lost with the start-it-again error, not cancelled as if the user stopped it (R31-srv-core-L1-01)', async () => {
+    const root = tmpRoot();
+    const theirs = interruptedStart(root);
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    here.reconcile();
+    const dir = here.store.dirOf(theirs.id);
+    await until(() => fs.existsSync(path.join(dir, 'cancel')));
+    // What wrapper.mjs writes when it boots and finds the cancel file before spawning its command.
+    fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: new Date().toISOString() }));
+    await until(() => here.store.read(theirs.id)?.endedAt != null, 10_000);
+    expect(here.store.read(theirs.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/start it again/) });
+  });
+
+  it('a wrapper that records itself after a takeover told it to stop, then SIGTERMs its command, ends its run lost, not cancelled (R31-srv-core-L1-01)', async () => {
+    const root = tmpRoot();
+    const theirs = interruptedStart(root);
+    const here = new Runner(root, new EventBus(), { pollMs: 50 });
+    runners.push(here);
+    here.reconcile();
+    const dir = here.store.dirOf(theirs.id);
+    await until(() => fs.existsSync(path.join(dir, 'cancel')));
+    const wrapper = spawn('sleep', ['30'], { stdio: 'ignore' });
+    others.push(wrapper);
+    fs.writeFileSync(path.join(dir, 'wrapper.json'), JSON.stringify({ wrapperPid: wrapper.pid, childPid: wrapper.pid, startedAt: new Date().toISOString() }));
+    await until(() => here.store.read(theirs.id)?.status === 'running', 10_000);
+    fs.writeFileSync(path.join(dir, 'exit.json'), JSON.stringify({ code: null, signal: 'SIGTERM', endedAt: new Date().toISOString() }));
+    await until(() => here.store.read(theirs.id)?.endedAt != null, 10_000);
+    expect(here.store.read(theirs.id)).toMatchObject({ status: 'lost', error: expect.stringMatching(/start it again/) });
+  });
+
+  it('a recorded wrapper whose PID now belongs to a process that started after the wrapper recorded itself is gone:the run ends lost and frees its slot, instead of tracking that process', async () => {
     const root = tmpRoot();
     const theirs = interruptedStart(root);
     const reused = spawn('sleep', ['30'], { stdio: 'ignore' });

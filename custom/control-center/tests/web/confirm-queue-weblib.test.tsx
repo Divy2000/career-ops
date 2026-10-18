@@ -44,4 +44,31 @@ describe('overlapping confirms', () => {
     expect(answers.second).toBe(false);
     expect(title()).toBeUndefined();
   });
+
+  it('a double click on the open confirm answers only that one: its second click never answers the confirm shown next in its place (R31-shared-comp-X-01)', async () => {
+    const answers: Record<string, boolean> = {};
+    await act(async () => void ask({ title: 'Evaluate posting A', confirmLabel: 'Do it' }).then((a) => (answers.first = a)));
+    await act(async () => void ask({ title: 'Generate PDF for row 3', confirmLabel: 'Do it' }).then((a) => (answers.second = a)));
+    const click = (text: string, detail: number) => button(text).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail }));
+    await act(async () => click('Do it', 1));
+    await act(async () => click('Do it', 2));
+    expect(answers.first).toBe(true);
+    expect(answers.second).toBeUndefined();
+    expect(title()).toBe('Generate PDF for row 3');
+    // A fresh click still answers the next one.
+    await act(async () => click('Do it', 1));
+    expect(answers.second).toBe(true);
+  });
+
+  it('a double click on Cancel cancels only the open confirm, never the one shown next (R31-shared-comp-X-01)', async () => {
+    const answers: Record<string, boolean> = {};
+    await act(async () => void ask({ title: 'First', confirmLabel: 'Do it' }).then((a) => (answers.first = a)));
+    await act(async () => void ask({ title: 'Second', confirmLabel: 'Do it' }).then((a) => (answers.second = a)));
+    const click = (text: string, detail: number) => button(text).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail }));
+    await act(async () => click('Cancel', 1));
+    await act(async () => click('Cancel', 2));
+    expect(answers.first).toBe(false);
+    expect(answers.second).toBeUndefined();
+    expect(title()).toBe('Second');
+  });
 });

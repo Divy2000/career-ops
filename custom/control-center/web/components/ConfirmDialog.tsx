@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 
 export interface ConfirmOptions {
   title: string;
@@ -29,6 +29,12 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     pending.resolve(value);
     setQueue((q) => q.filter((p) => p !== pending));
   };
+  // A repeat click of a double click (detail 2+) answers nothing: the first click settled the confirm it was aimed at,
+  // and the next queued one, shown in its place with its buttons where they were, has not been read yet.
+  const click = (value: boolean) => (e: MouseEvent<HTMLButtonElement>) => {
+    if (e.detail > 1) return;
+    settle(value);
+  };
   const opts = pending?.opts;
   return (
     <ConfirmContext.Provider value={ask}>
@@ -47,10 +53,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             )}
             <div className="row gap dialog__actions">
               {/* A destructive or paid confirm starts on Cancel, so the Enter that opened it (held, or pressed twice) cannot confirm it. */}
-              <button type="button" onClick={() => settle(false)} autoFocus={Boolean(opts?.danger || opts?.focusCancel)}>
+              <button type="button" onClick={click(false)} autoFocus={Boolean(opts?.danger || opts?.focusCancel)}>
                 {opts?.cancelLabel ?? 'Cancel'}
               </button>
-              <button type="button" className={opts?.danger ? 'button--danger' : 'button--primary'} onClick={() => settle(true)} autoFocus={!(opts?.danger || opts?.focusCancel)}>
+              <button type="button" className={opts?.danger ? 'button--danger' : 'button--primary'} onClick={click(true)} autoFocus={!(opts?.danger || opts?.focusCancel)}>
                 {opts?.confirmLabel ?? 'Confirm'}
               </button>
             </div>
