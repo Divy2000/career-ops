@@ -90,6 +90,10 @@ const ABBREVIATIONS = new Set(['jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 
 const CITATION_WORDS = new Set(['fed', 'reg', 'sec', 'pub', 'rev', 'pt']);
 const CITATION_NEXT = /^\p{Lu}\p{L}{0,3}\.$/u;
 const CAPITALIZED = /^\p{Lu}/u;
+// Closers in every quoting style ("" '' “” „“ «» »« 「」 『』 ...). French spacing puts a space before a closing
+// guillemet ("définitif. »"); a Danish » after a space opens the next sentence, but sits on its word, so the lookahead refuses it.
+const SENTENCE_PUNCTUATION = /[.!?](?: ?[\u00bb\u203a]|[\u00ab\u00bb\u2039\u203a]|["')\]}\u2018\u2019\u201c\u201d\u3009\u300b\u300d\u300f\u3011\u3015\u3017\u3019\u301b\uff02\uff07\uff09\uff3d\uff5d])*(?=\s|$)/gu;
+const OPENERS = /^[(["'{\u2018\u201a\u201c\u201e\u00ab\u00bb\u2039\u203a\u3008\u300a\u300c\u300e\u3010\u3014\u3016\u3018\u301a\uff02\uff07\uff08\uff3b\uff5b]+/u;
 // A lone capital after these is a lettered part ("Schedule A.", "Part B."), not a middle initial.
 const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 'appendix', 'exhibit', 'form', 'annex', 'item', 'tier', 'type', 'class', 'category', 'group']);
 
@@ -101,7 +105,7 @@ const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 
  */
 function sentenceEnd(text: string, from = 0, ownEnd = Infinity): number {
   // Closing quotes and brackets after the punctuation belong to the sentence: 'said "under review." Posts will'.
-  for (const m of text.matchAll(/[.!?]["')\]\u2019\u201d]*(?=\s|$)/gu)) {
+  for (const m of text.matchAll(SENTENCE_PUNCTUATION)) {
     const i = m.index!;
     const after = i + m[0].length;
     if (i < from) continue;
@@ -110,7 +114,7 @@ function sentenceEnd(text: string, from = 0, ownEnd = Infinity): number {
     if (text[i] === '.') {
       // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
       const words = text.slice(0, i).split(/\s/);
-      const word = (words.pop() ?? '').replace(/^[(["'\u2018\u201c]+/u, '');
+      const word = (words.pop() ?? '').replace(OPENERS, '');
       if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) continue;
       if (ABBREVIATIONS.has(word.toLowerCase())) continue;
       if (CITATION_WORDS.has(word.toLowerCase()) && nextWord !== undefined && CITATION_NEXT.test(nextWord)) continue;
@@ -193,7 +197,8 @@ function collectDefinitions(node: { type: string; identifier?: string; url?: str
 }
 
 /** A bold lead stands alone only as a full sentence; a label ("Effective date:", "USCIS") needs the text after it. */
-const isHeadline = (lead: DigestSpan[]): boolean => /[.!?]["')\]\u2019\u201d]*$/u.test(spansText(lead));
+const HEADLINE = new RegExp(`(?:${SENTENCE_PUNCTUATION.source})$`, 'u');
+const isHeadline = (lead: DigestSpan[]): boolean => HEADLINE.test(spansText(lead));
 
 /**
  * Compact highlights from a policy digest section: for each top-level bullet its bold lead when that is a sentence, or

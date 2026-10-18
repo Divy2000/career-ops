@@ -210,4 +210,38 @@ describe('summarizeDigest', () => {
     expect(lines(body)).toEqual([expected]);
   });
 
+  it.each([
+    ['a closing guillemet', '- The agency called it «final.» Employers must comply.', 'The agency called it «final.»'],
+    ['a closing guillemet after a no-break space', '- L’agence dit « définitif. » Les employeurs doivent suivre.', 'L’agence dit « définitif. »'],
+    ['a closing guillemet after a narrow no-break space', '- L’agence dit « définitif. » Les employeurs doivent suivre.', 'L’agence dit « définitif. »'],
+    ['a reversed guillemet (Danish)', '- Styrelsen kaldte den »endelig.« Arbejdsgivere skal følge.', 'Styrelsen kaldte den »endelig.«'],
+    ['a single guillemet', '- It was called ‹final.› Employers must comply.', 'It was called ‹final.›'],
+    ['a German closing quote after a low-9 opener', '- Die Behörde nannte es „endgültig.“ Arbeitgeber müssen folgen.', 'Die Behörde nannte es „endgültig.“'],
+    ['a German single closing quote after a low-9 opener', '- Sie sagte ‚ja.‘ Danach ging sie.', 'Sie sagte ‚ja.‘'],
+    ['a CJK corner bracket', '- The notice says 「final.」 Employers must comply.', 'The notice says 「final.」'],
+    ['a CJK white corner bracket', '- The notice says 『final.』 Employers must comply.', 'The notice says 『final.』'],
+    ['a CJK double angle bracket', '- The notice says 《final.》 Employers must comply.', 'The notice says 《final.》'],
+    ['a CJK lenticular bracket', '- The notice says 【final.】 Employers must comply.', 'The notice says 【final.】'],
+    ['a fullwidth bracket', '- The notice says （final.） Employers must comply.', 'The notice says （final.）'],
+  ])('ends the first sentence at terminal punctuation followed by %s (R34-feat-a-X-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['a closing guillemet', '- **Pay rises. The rule is «final.»** More text.', 'Pay rises. The rule is «final.»'],
+    ['a German closing quote', '- **Lohn steigt. Die Regel ist „endgültig.“** Mehr Text.', 'Lohn steigt. Die Regel ist „endgültig.“'],
+    ['a CJK corner bracket', '- **Pay rises. The notice says 「final.」** More text.', 'Pay rises. The notice says 「final.」'],
+  ])('keeps a whole bold lead that ends with terminal punctuation and %s (R34-feat-a-X-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
+  it.each([
+    ['a French opening guillemet after a space', '- Il a fini. « Bonjour » dit-il ensuite.', 'Il a fini.'],
+    ['a Danish opening guillemet after a space', '- Han var færdig. »Godt« sagde han.', 'Han var færdig.'],
+    ['an abbreviation after a guillemet', '- Fees rise in the «U.S. market» soon. Later text.', 'Fees rise in the «U.S. market» soon.'],
+    ['an abbreviation after a low-9 quote', '- Siehe „Dr. Schmidt“ für Details. Mehr Text.', 'Siehe „Dr. Schmidt“ für Details.'],
+    ['an abbreviation after a CJK bracket', '- See 「Dr. Smith」 for details. Later text.', 'See 「Dr. Smith」 for details.'],
+  ])('does not end the first sentence at %s (R34-feat-a-X-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
 });
