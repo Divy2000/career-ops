@@ -85,14 +85,19 @@ function reportDirFiles(dataRoot: string): string[] {
   }
 }
 
-/** Index of real report files by number (RESERVED placeholders excluded). */
+/** Names of the real report files under reports/, sorted: numbered, RESERVED placeholders excluded. */
+export function listReportNames(dataRoot: string): string[] {
+  return reportDirFiles(dataRoot)
+    .filter((name) => !isReservedReportFile(name) && reportNumberOf(name) !== null)
+    .sort();
+}
+
+/** Index of real report files by number; when two share a number, the first by name. */
 export function listReportFiles(dataRoot: string): Map<number, string> {
   const out = new Map<number, string>();
-  const names = reportDirFiles(dataRoot);
-  for (const name of names.sort()) {
-    if (isReservedReportFile(name)) continue;
-    const num = reportNumberOf(name);
-    if (num !== null && !out.has(num)) out.set(num, name);
+  for (const name of listReportNames(dataRoot)) {
+    const num = reportNumberOf(name)!;
+    if (!out.has(num)) out.set(num, name);
   }
   return out;
 }
@@ -327,6 +332,18 @@ export function readReport(dataRoot: string, num: number): ReportRead {
     const reserved = names.find((n) => isReservedReportFile(n) && reportNumberOf(n) === num);
     return reserved ? { kind: 'reserved', num, file: reserved } : { kind: 'missing', num };
   }
+  return parseReportFile(dir, file, num);
+}
+
+/** Reads one report by its file name, for a caller that knows which file it means when two share a number. */
+export function readReportFile(dataRoot: string, file: string): ReportRead {
+  const num = reportNumberOf(file);
+  if (num === null) throw new Error(`not a numbered report file: ${file}`);
+  if (!listReportNames(dataRoot).includes(file)) return { kind: 'missing', num };
+  return parseReportFile(path.join(dataRoot, 'reports'), file, num);
+}
+
+function parseReportFile(dir: string, file: string, num: number): ReportRead {
   const read = readText(path.join(dir, file));
   if (read.kind === 'missing') return { kind: 'missing', num };
   try {

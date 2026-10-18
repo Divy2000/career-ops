@@ -21,6 +21,19 @@ describe('evaluation honesty gate', () => {
     expect(detectNewReports(root, new Set())).toHaveLength(7);
   });
 
+  it('scores a new report from its own file when another report shares its number (R34-srv-dom-b-L1-02)', () => {
+    const root = copyFixtureRoot();
+    const before = snapshotReports(root);
+    fs.writeFileSync(path.join(root, 'reports', '020-aaa-old.md'), '# Evaluation: Aaa\n\n**Score:** 2.1/5\n\n## A) Role Summary\nx\n');
+    const withOld = snapshotReports(root);
+    fs.writeFileSync(path.join(root, 'reports', '020-zzz-new.md'), '# Evaluation: Zzz\n\n**Score:** 4.6/5\n\n## A) Role Summary\nx\n');
+    expect(detectNewReports(root, withOld)).toEqual([{ num: 20, file: '020-zzz-new.md', score: 4.6 }]);
+    expect(detectNewReports(root, before)).toEqual([
+      { num: 20, file: '020-aaa-old.md', score: 2.1 },
+      { num: 20, file: '020-zzz-new.md', score: 4.6 },
+    ]);
+  });
+
   it('credits a turn only with its own report: the reserved number when it has one, else a report in its own files log', () => {
     const found = [
       { num: 42, file: '042-acme.md', score: 4 },
