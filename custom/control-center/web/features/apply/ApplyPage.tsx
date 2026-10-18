@@ -13,7 +13,8 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { CostPill, Message } from '../../components/ActionBar';
 import { DataState, Pill } from '../../components/ui';
 import { prefillBlockers } from './prefill';
-import { rowIdentity, sameRow, type RowIdentity } from '../tracker/StatusControl';
+import { rowIdentity, type RowIdentity } from '../tracker/StatusControl';
+import { forgetDraft, readDraftDocs, readTypedUrl, startedForOther, writeDraftDocs, writeSessionRow, writeTypedUrl, type DraftDocs } from './draftStore';
 import type { ApplyDocuments } from '@shared/api';
 
 const rowRoute = getRouteApi('/apply/$n');
@@ -108,82 +109,6 @@ export function ApplyBody(props: ApplyBodyProps) {
 
 const applyKey = (n: string | null) => `cc.apply.${n ?? 'url'}`;
 
-// The apply link typed for a draft, by its session id: a row's session targets the row, not the link, so the link is
-// kept beside it for a re-attached draft (prefill uses it). sessionStorage, like the remembered session itself.
-const typedUrlKey = (sid: string) => `cc.apply.typedUrl.${sid}`;
-function readTypedUrl(sid: string | null): string | null {
-  if (!sid) return null;
-  try {
-    return sessionStorage.getItem(typedUrlKey(sid));
-  } catch {
-    return null;
-  }
-}
-function writeTypedUrl(sid: string, url: string | null): void {
-  try {
-    if (url === null) sessionStorage.removeItem(typedUrlKey(sid));
-    else sessionStorage.setItem(typedUrlKey(sid), url);
-  } catch {
-    // storage refused: only the link's re-attaching is lost
-  }
-}
-
-// The CV PDF and cover letter a draft's prompt named, by its session id, so a re-attached draft fills with the documents
-// its answers were drafted for, not the row's suggested ones. '' is an explicit "none"; null is no choice made, which
-// leaves room for a document generated since.
-type DraftDocs = { pdf: string | null; cover: string | null };
-const draftDocsKey = (sid: string) => `cc.apply.docs.${sid}`;
-function readDraftDocs(sid: string | null): DraftDocs | null {
-  if (!sid) return null;
-  try {
-    const raw = sessionStorage.getItem(draftDocsKey(sid));
-    if (raw === null) return null;
-    const parsed = JSON.parse(raw) as Partial<DraftDocs>;
-    const pick = (v: unknown) => (typeof v === 'string' ? v : null);
-    return { pdf: pick(parsed.pdf), cover: pick(parsed.cover) };
-  } catch {
-    return null;
-  }
-}
-function writeDraftDocs(sid: string, docs: DraftDocs | null): void {
-  try {
-    if (docs === null) sessionStorage.removeItem(draftDocsKey(sid));
-    else sessionStorage.setItem(draftDocsKey(sid), JSON.stringify(docs));
-  } catch {
-    // storage refused: only the documents' re-attaching is lost
-  }
-}
-
-// The application a row's session was started for, by its session id. A tracker number is reused once its row is
-// deleted (the next addition takes max + 1), so a session remembered under the number is the shown row's only while the
-// row is still that application. A session with none kept (started elsewhere) is taken as the row's.
-const sessionRowKey = (sid: string) => `cc.apply.row.${sid}`;
-function readSessionRow(sid: string): RowIdentity | null {
-  try {
-    const raw = sessionStorage.getItem(sessionRowKey(sid));
-    if (raw === null) return null;
-    const parsed = JSON.parse(raw) as Partial<RowIdentity>;
-    if (typeof parsed.company !== 'string' || typeof parsed.role !== 'string' || !(parsed.report === null || typeof parsed.report === 'number')) return null;
-    return { company: parsed.company, role: parsed.role, report: parsed.report };
-  } catch {
-    return null;
-  }
-}
-function writeSessionRow(sid: string, row: RowIdentity | null): void {
-  try {
-    if (row === null) sessionStorage.removeItem(sessionRowKey(sid));
-    else sessionStorage.setItem(sessionRowKey(sid), JSON.stringify(rowIdentity(row)));
-  } catch {
-    // storage refused: a reused number's session is only taken as the row's
-  }
-}
-/** Whether the session was started for another application than `identity`, the one now under its row number. */
-function startedForOther(sid: string | null, identity: RowIdentity | undefined): boolean {
-  if (!sid || !identity) return false;
-  const row = readSessionRow(sid);
-  return row !== null && !sameRow(row, identity);
-}
-
 function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewDraft }: ApplyBodyProps & { onNewDraft: () => void }) {
   const navigate = useNavigate();
   const engine = useEngine();
@@ -199,11 +124,14 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   useEffect(() => {
     if (!foreignDraft || !rememberedId) return;
     lastSession(applyKey(n)).forget(rememberedId);
-    writeTypedUrl(rememberedId, null);
-    writeDraftDocs(rememberedId, null);
-    writeSessionRow(rememberedId, null);
+    forgetDraft(rememberedId);
     onNewDraft();
   }, [foreignDraft, rememberedId, n, onNewDraft]);
+  // Every way this page lets go of its draft (New draft, the session gone) releases the draft's kept keys the same way.
+  const dropDraft = useCallback(() => {
+    if (sessionId) forgetDraft(sessionId);
+    onNewDraft();
+  }, [sessionId, onNewDraft]);
   const [typedUrl, setUrl] = useState<string | null>(null);
   const storedUrl = readTypedUrl(sessionId);
   // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings
@@ -232,12 +160,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   const newDraftAsked = async () => {
     if (edited && !(await confirm({ title: 'Discard the edited answers?', body: 'A new draft starts from an empty form. The current draft stays on the Sessions page with the answers as it drafted them.', confirmLabel: 'Discard changes', danger: true }))) return;
     lastSession(applyKey(n)).write(null);
-    if (sessionId) {
-      writeTypedUrl(sessionId, null);
-      writeDraftDocs(sessionId, null);
-      writeSessionRow(sessionId, null);
-    }
-    onNewDraft();
+    dropDraft();
   };
   const [status, setStatus] = useState('queued');
   const [fillNote, setFillNote] = useState<string | null>(null);
@@ -293,7 +216,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   const pickDoc = (kind: keyof DraftDocs, value: string) => {
     (kind === 'pdf' ? setPickedPdf : setPickedCover)(value);
     latestPicks.current = { ...latestPicks.current, [kind]: value };
-    if (sessionId) writeDraftDocs(sessionId, { pdf: pickedPdf ?? storedPdf, cover: pickedCover ?? storedCover, [kind]: value });
+    if (sessionId) writeDraftDocs(sessionId, { pdf: latestPicks.current.pdf ?? storedPdf, cover: latestPicks.current.cover ?? storedCover });
   };
   const [summary, setSummary] = useState<string | null>(null);
   const blockers = prefillBlockers({ url, pdf, cover, pdfCount: docs.data?.pdfs.length ?? 0, company });
@@ -315,16 +238,9 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
       setStatus(s);
       rememberStatus(s);
       // Deleted elsewhere (or a stale id): its answers cannot be filled any more, so the form starts over like New draft.
-      if (s === 'gone') {
-        if (sessionId) {
-          writeTypedUrl(sessionId, null);
-          writeDraftDocs(sessionId, null);
-          writeSessionRow(sessionId, null);
-        }
-        onNewDraft();
-      }
+      if (s === 'gone') dropDraft();
     },
-    [rememberStatus, onNewDraft, sessionId],
+    [rememberStatus, dropDraft],
   );
   const target: Target = n ? { type: 'app', value: n } : { type: 'url', value: url };
   // The documents picked on this page are the ones the session attaches, not whichever CV the apply mode would resolve.
@@ -346,7 +262,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   const sessions = useSessions();
   // The row the server pinned on the session (#264) tells the application it was started for, however it was started;
   // the marker this page wrote stands in for a session started before the server pinned rows.
-  const pdfForOther = (s: { id: string; target: Target }) => (s.target.row ? identity !== undefined && !sameRow(s.target.row, identity) : startedForOther(s.id, identity));
+  const pdfForOther = (s: { id: string; target: Target }) => startedForOther(s.id, identity, s.target.row);
   // Another application's CV run under a reused number is not linked as this row's.
   const rememberedPdfMeta = pdfRemembered ? sessions.data?.find((s) => s.id === pdfRemembered) : undefined;
   const foreignPdf = rememberedPdfMeta ? pdfForOther(rememberedPdfMeta) : startedForOther(pdfRemembered, identity);
