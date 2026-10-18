@@ -8,7 +8,7 @@ if [ -n "${FAKE_GIT_FAIL:-}" ] && [ "${1:-}" = "$FAKE_GIT_FAIL" ]; then echo "fa
 case "${1:-}" in
   clone)
     shift
-    url="${@: -2:1}"; target="${@: -1}"
+    url="${*: -2:1}"; target="${*: -1}"
     mkdir -p "$target"
     # FAKE_GIT_CLONE_HANG: the clone stalls that many seconds after it started writing, as a slow network leaves it.
     if [ -n "${FAKE_GIT_CLONE_HANG:-}" ]; then echo "git-clone-hang" >> "$STUB_LOG"; exec /bin/sleep "$FAKE_GIT_CLONE_HANG"; fi

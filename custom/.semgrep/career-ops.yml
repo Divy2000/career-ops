@@ -1,0 +1,192 @@
+# Local semgrep rules for bug classes the bug hunt kept finding by hand and that eslint, tsc and shellcheck cannot
+# express. Run by custom/scripts/gates.sh; rule tests live in tests/ (semgrep --test custom/.semgrep).
+rules:
+  - id: child-process-env-not-filtered
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      $FN() here passes no `env:`, so the child inherits the whole process environment: the server's CC_TOKEN and
+      CC_SESSION_SECRET and any ANTHROPIC_*/CLAUDE_CODE_* credential the shell exported. Pass `env: childEnv(...)`
+      (server/system/child-env.ts), or probeEnv(process.env) in code the supervisor loads, or an explicit minimal
+      object such as { PATH: '/bin:/usr/bin', LC_ALL: 'C' }.
+    paths:
+      include:
+        - "**/control-center/server/**"
+        - "**/control-center/supervisor/**"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  import { ..., $FN, ... } from '$MOD';
+                  ...
+              - pattern: $FN(...)
+          - patterns:
+              - pattern-inside: |
+                  import * as $CP from '$MOD';
+                  ...
+              - pattern: $CP.$FN(...)
+          # Renamed imports: import { spawn as launch } from 'node:child_process'.
+          - patterns:
+              - pattern-inside: |
+                  import { ..., $FN as $LOCAL, ... } from '$MOD';
+                  ...
+              - pattern: $LOCAL(...)
+          # Dynamic import and require, destructured (optionally renamed) or as a namespace.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const { ..., $FN: $LOCAL, ... } = await import('$MOD');
+                      ...
+                  - pattern-inside: |
+                      const { ..., $FN: $LOCAL, ... } = require('$MOD');
+                      ...
+              - pattern: $LOCAL(...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const { ..., $FN, ... } = await import('$MOD');
+                      ...
+                  - pattern-inside: |
+                      const { ..., $FN, ... } = require('$MOD');
+                      ...
+              - pattern: $FN(...)
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      const $CP = await import('$MOD');
+                      ...
+                  - pattern-inside: |
+                      const $CP = require('$MOD');
+                      ...
+              - pattern: $CP.$FN(...)
+      - metavariable-regex:
+          metavariable: $MOD
+          regex: ^(node:)?child_process$
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)$
+      - pattern-not: '$F(..., {..., env: $E, ...}, ...)'
+
+  - id: child-process-env-raw-process-env
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      `env:` here is process.env, a spread of it, an alias of either, or undefined (Node then inherits process.env), so the child gets the server's CC_TOKEN and CC_SESSION_SECRET and
+      any ANTHROPIC_*/CLAUDE_CODE_* credential the shell exported. Build it with childEnv(...)
+      (server/system/child-env.ts), or probeEnv(process.env) in code the supervisor loads.
+    paths:
+      include:
+        - "**/control-center/server/**"
+        - "**/control-center/supervisor/**"
+    patterns:
+      - pattern-either:
+          - pattern: '$FN(..., {..., env: process.env, ...}, ...)'
+          - pattern: '$FN(..., {..., env: {..., ...process.env, ...}, ...}, ...)'
+          - pattern: '$O.$FN(..., {..., env: process.env, ...}, ...)'
+          - pattern: '$O.$FN(..., {..., env: {..., ...process.env, ...}, ...}, ...)'
+          # env: undefined makes Node inherit process.env just like no env at all.
+          - pattern: '$FN(..., {..., env: undefined, ...}, ...)'
+          - pattern: '$O.$FN(..., {..., env: undefined, ...}, ...)'
+          # An alias of process.env (or of a spread of it) is the same leak.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $V = process.env;
+                      ...
+                  - pattern-inside: |
+                      $V = {..., ...process.env, ...};
+                      ...
+              - pattern-either:
+                  - pattern: '$FN(..., {..., env: $V, ...}, ...)'
+                  - pattern: '$O.$FN(..., {..., env: $V, ...}, ...)'
+                  - pattern: '$FN(..., {..., $V, ...}, ...)'
+                  - pattern: '$O.$FN(..., {..., $V, ...}, ...)'
+      - metavariable-regex:
+          metavariable: $FN
+          regex: ^(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)$
+
+  - id: utc-iso-date-as-local-day
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      toISOString() is UTC, so this "today" is already tomorrow on a US evening. Use localDate() from
+      control-center/shared/local-date.ts (or the area's local-date helper) for the user's calendar day.
+    paths:
+      exclude:
+        - "**/tests/**"
+    pattern-either:
+      - pattern: new Date().toISOString().slice(0, 10)
+      - pattern: new Date().toISOString().substring(0, 10)
+      - pattern: new Date().toISOString().split('T')[0]
+      - pattern: new Date(Date.now()).toISOString().slice(0, 10)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  const $D = new Date();
+                  ...
+              - pattern-inside: |
+                  let $D = new Date();
+                  ...
+              - pattern-inside: |
+                  $D = new Date();
+                  ...
+          - pattern-either:
+              - pattern: $D.toISOString().slice(0, 10)
+              - pattern: $D.toISOString().substring(0, 10)
+              - pattern: $D.toISOString().split('T')[0]
+
+  - id: mixed-local-and-utc-date-math
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      This date is moved with local-time calendar math and then read back in UTC (or the other way round), which
+      shifts it by a day for part of every day outside UTC. Keep one clock: getDate/setDate with localDate(), or
+      getUTCDate/setUTCDate with toISOString().
+    paths:
+      exclude:
+        - "**/tests/**"
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              $D.$SET(...);
+              ...
+          - pattern: $D.toISOString()
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^set(Date|Month|FullYear|Hours)$
+      - pattern: new Date($Y, $MO, ...).toISOString()
+      - patterns:
+          - pattern-inside: |
+              $D.$SET(...);
+              ...
+          - pattern: $D.$GET()
+          - metavariable-regex:
+              metavariable: $SET
+              regex: ^setUTC(Date|Month|FullYear|Hours)$
+          - metavariable-regex:
+              metavariable: $GET
+              regex: ^get(Date|Month|FullYear|Day|Hours)$
+
+  - id: shared-state-write-not-atomic
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      This writes a shared state file (tracker, pipeline, ledger, TSV, shortlist, follow-ups, settings) in place. A
+      reader racing the write, or a crash halfway, sees a truncated file. Use writeFileAtomic()
+      (control-center/server/lib/atomic-write.ts), or write a temp file next to it and rename it over; `flag: 'wx'`
+      (exclusive create) is fine.
+    paths:
+      exclude:
+        - "**/tests/**"
+    patterns:
+      - pattern-either:
+          - pattern: $FS.writeFileSync($P, ...)
+          - pattern: writeFileSync($P, ...)
+          - pattern: $FS.writeFile($P, ...)
+          - pattern: writeFile($P, ...)
+          - pattern: $FS.promises.writeFile($P, ...)
+      - pattern-not: "$W($P, $DATA, {..., flag: 'wx', ...})"
+      - metavariable-regex:
+          metavariable: $P
+          # A path naming a shared file or a constant for one, and no temp, staged, draft or lock file.
+          regex: ^(?![\s\S]*(?i:tmp|temp|staged|staging|draft|lock))[\s\S]*((?i:applications\.md|pipeline\.md|follow-?ups\.md|shortlist\.md|scan-history|\.tsv|tracker|ledger|settings\.json|blacklist|contacts|interviews|portals\.yml|profile\.yml|article-digest|cv\.md)|\b[A-Z_]*(PIPELINE|SHORTLIST|FOLLOW_?UPS|SCAN_HISTORY)[A-Z_]*\b)

@@ -263,7 +263,7 @@ const permissionsOf = (d: Record<string, unknown>) => (d.permissions && typeof d
 
 function plutilJson(file: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('plutil', ['-convert', 'json', '-o', '-', file], { shell: false, timeout: 10_000 }, (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).trim())) : resolve(String(stdout))));
+    execFile('plutil', ['-convert', 'json', '-o', '-', file], { shell: false, timeout: 10_000, env: probeEnv(process.env) }, (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).trim())) : resolve(String(stdout))));
   });
 }
 

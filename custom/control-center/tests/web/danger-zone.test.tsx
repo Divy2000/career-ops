@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { until } from '../helpers/until';
 
@@ -151,8 +151,8 @@ describe('Danger zone delete', () => {
   async function confirmHeldDelete(qc: QueryClient) {
     let answer!: () => void;
     const held = new Promise<void>((r) => (answer = r));
-    const fetchStub = fetch as unknown as ReturnType<typeof vi.fn>;
-    const inner = fetchStub.getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>;
+    const fetchStub = fetch as unknown as Mock<(url: string, init?: RequestInit) => Promise<Response>>;
+    const inner = fetchStub.getMockImplementation()!;
     fetchStub.mockImplementation(async (url: string, init?: RequestInit) => {
       const res = await inner(url, init);
       if (!(JSON.parse(String(init?.body)) as { params: { dryRun: boolean } }).params.dryRun) await held;

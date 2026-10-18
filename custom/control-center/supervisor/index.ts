@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
-import { preflight, formatPreflight, chooseClaudeBin, testHost } from './preflight.js';
+import { preflight, formatPreflight, chooseClaudeBin, testHost, probeEnv } from './preflight.js';
 import { BlueGreen, type ChildHandle, type ReloadState } from './bluegreen.js';
 import { devChatChangeInEffect, guardSessionDir, listChanges, listDevSessions, recoveryRequestAllowed, recoveryRevert } from './recovery.js';
 import { resolveFromLaunchDir, resolveGuardRoot } from './guard-root.js';
@@ -493,7 +493,7 @@ async function main(): Promise<void> {
     // With the token, so the recovery page opens even when the server child dies after this line (it signs the browser in).
     console.log(`Recovery page: http://127.0.0.1:${PORT}/__recovery?t=${token}`);
     if (!process.env.CC_NO_OPEN && process.platform === 'darwin') {
-      execFile('open', [url], { shell: false }, () => undefined);
+      execFile('open', [url], { shell: false, env: probeEnv(process.env) }, () => undefined);
     }
   });
 

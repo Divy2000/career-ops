@@ -171,7 +171,7 @@ describe('a posting whose evaluation is still active', () => {
     await today();
     // A background refetch is in flight with a stale snapshot when the start happens.
     slowList = [];
-    qc.invalidateQueries({ queryKey: ['sessions'] });
+    void qc.invalidateQueries({ queryKey: ['sessions'] });
     await act(async () => new Promise((r) => setTimeout(r, 20)));
     await click(evaluateIn('Globex')!);
     await until(() => router.state.location.pathname === '/sessions/s1', 'the session page');

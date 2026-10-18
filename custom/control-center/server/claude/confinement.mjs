@@ -33,6 +33,8 @@ export function contractApprovedVersions(contractFile = CONTRACT_FILE) {
  * check right before a spawn that the binary is still the one it approved. Throws when the version cannot be read.
  */
 export function claudeVersionGate(bin, approved = contractApprovedVersions()) {
+  // Runs only in the claude shim, whose environment is the one the real claude call gets (its token included).
+  // nosemgrep: child-process-env-raw-process-env
   const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 30_000, env: { ...process.env, DISABLE_AUTOUPDATER: '1' } });
   const version = r.status === 0 ? parseClaudeVersion(r.stdout) : null;
   if (!version) throw new Error(`could not read the Claude Code version from ${bin} (exit ${r.status ?? r.error?.code}${r.stdout?.trim() ? `: ${JSON.stringify(r.stdout.trim().slice(0, 80))}` : ''})`);

@@ -119,7 +119,7 @@ RANK_LIMIT="${RANK_LIMIT:-100}"
 mkdir -p "$LOG_DIR"
 exec >>"$LOG_DIR/$TODAY.log" 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') start"
-cd "$ROOT"
+cd "$ROOT" || { echo "cannot cd to $ROOT"; exit 1; }
 
 # The subscription token goes only to the claude calls (the policy pass, and the rank through the shim), never into
 # this shell's environment: scan.mjs loads third-party provider plugins into its own process, and every other step is
@@ -404,10 +404,10 @@ ack_done_batch() {
 # cannot be read (policyBatchReadable in the Control Center) is let go of unacknowledged, its items queued for this
 # pass. A leftover still failing fails the step.
 ack_leftover_batches() {
-  local done batch
-  for done in "$IMM"/batches/*.done; do
-    [ -e "$done" ] || continue
-    batch="${done%.done}"
+  local marker batch
+  for marker in "$IMM"/batches/*.done; do
+    [ -e "$marker" ] || continue
+    batch="${marker%.done}"
     if ! BATCH="$batch" node -e '
 let items;
 try {
@@ -416,7 +416,7 @@ try {
 process.exit(Array.isArray(items) && items.every((i) => typeof i === "object" && i !== null) ? 0 : 1);
 '; then
       echo "policy pass batch $batch cannot be read: its items stay queued for this pass"
-      rm -f "$batch" "$done"
+      rm -f "$batch" "$marker"
       continue
     fi
     ack_done_batch "$batch" || return 1

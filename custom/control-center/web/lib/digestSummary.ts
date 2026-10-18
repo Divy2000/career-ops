@@ -54,7 +54,10 @@ function flatten(nodes: PhrasingContent[], bold: true | undefined, href: string 
         // The label is the visible text; the address comes from the matching definition, if there is one.
         flatten(n.children, bold, defs.get(n.identifier) ?? href, out, defs);
         break;
-      default:
+      case 'image':
+      case 'imageReference':
+      case 'footnoteReference':
+      case 'html':
         break;
     }
   }

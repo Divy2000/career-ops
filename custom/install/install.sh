@@ -244,6 +244,7 @@ ask() { # ask "question" y|n  -> 0 when the answer is yes; EOF or Enter takes th
 
 abspath() {
   local p="$1"
+  # shellcheck disable=SC2088 # the patterns match a literal "~" argument; nothing is meant to expand
   case "$p" in
     "~") p="$HOME" ;;
     "~/"*) p="$HOME/${p#"~/"}" ;;
@@ -319,6 +320,7 @@ DATA="$DATA_REQ"
 QDIR="$(shell_quote "$DIR")" # for printed commands: the directory may contain spaces
 
 # The terminal: fd 3 reads answers, fd 4 receives what interactive tools print. Never opened with --non-interactive.
+# shellcheck disable=SC2094 # a terminal opened both to read and to append to is not a file being clobbered
 if [ "$NON_INTERACTIVE" = 0 ] && { : <"$TTY_DEV" >>"$TTY_DEV"; } 2>/dev/null; then
   exec 3<"$TTY_DEV" 4>>"$TTY_DEV"
   TTY_OK=1

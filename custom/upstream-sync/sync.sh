@@ -151,6 +151,7 @@ TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s career-op
 SECURITY_RC=$?
 TOKEN="${TOKEN#"${TOKEN%%[![:space:]]*}"}"
 TOKEN="${TOKEN%"${TOKEN##*[![:space:]]}"}"
+# shellcheck disable=SC1003 # tr character sets: the backslash is a character to map, not an escape
 SECURITY_WHY="$(tail -c 200 "$SECURITY_ERR" | tr '\n"\\' "  '" | sed 's/ *$//')"
 rm -f "$SECURITY_ERR"
 trap - EXIT HUP INT TERM
@@ -330,6 +331,7 @@ if [ -z "$BLOCKERS" ]; then
   if [ -z "$LIVE_UPDATE" ]; then
     LOCKF_WHY=""
     if [ "$LIVE_RC" != 75 ] && [[ "$LIVE_LOG_FROM" =~ ^[0-9]+$ ]]; then
+      # shellcheck disable=SC1003 # tr character sets: the backslash is a character to map, not an escape
       LOCKF_WHY="$(tail -c +"$((LIVE_LOG_FROM + 1))" "$LOG" | grep -m 1 '^lockf: ' | tr '"\\' "''")"
     fi
     # No line from lockf: the update itself was killed or broke (lockf exits 70 for a child killed by a signal).

@@ -66,6 +66,15 @@ node --test custom/*/tests/*.spec.mjs
 
 Files are named `*.spec.mjs` because upstream's `test-all.mjs` rejects `*.test.mjs` files outside `tests/`.
 
+All gates in one run (Node 22+ first on PATH, plus `shellcheck` and `semgrep`; exits 1 if any gate fails):
+
+```bash
+custom/scripts/gates.sh            # typecheck, eslint, no-em-dash, shellcheck, semgrep, then vitest and the node tests
+custom/scripts/gates.sh --static   # the static gates only, a few minutes at most
+```
+
+eslint adds type-aware rules (floating and misused promises, exhaustive switches). shellcheck runs at info severity over every shell script under `custom/` (settings in `custom/.shellcheckrc`). semgrep runs the local rules in `custom/.semgrep/career-ops.yml` (child processes without a filtered `env`, UTC dates used as the local day, mixed local and UTC date math, in-place writes of shared state files) after their tests in `custom/.semgrep/tests/`. Silence a finding only on its line, with the reason: `// nosemgrep: <rule-id>` or `# shellcheck disable=SCxxxx # reason`.
+
 The landing README pins an install tag (`fork-install-v3`). `readme-flags.spec.mjs` checks by default that both the working tree's and that tag's `install.sh` accept every flag the README documents (a tag that is not available locally fails the check). Before pointing the README at a new tag, check that one alone:
 
 ```bash
