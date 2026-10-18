@@ -241,3 +241,154 @@ test('waits', async () => {
     }
   });
 }
+
+/** Starts one fixture module under plain node (no test runner in between) with a fresh TMPDIR. */
+function startFixture(source) {
+  const dir = tempDir('tmp-check-plain-');
+  const fresh = tempDir('tmp-check-fresh-');
+  const file = path.join(dir, 'fixture.mjs');
+  fs.writeFileSync(file, source.replaceAll('FRESH', JSON.stringify(fresh)));
+  const child = spawn(process.execPath, [file], { env: suiteEnv(process.env, fresh), stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  child.stdout.on('data', (d) => { output += d; });
+  child.stderr.on('data', (d) => { output += d; });
+  const closed = new Promise((r) => child.once('close', (code, signal) => r({ code, signal, output, leftovers: fs.readdirSync(fresh).sort() })));
+  return { child, fresh, closed };
+}
+
+test('Given a spec that loads tmp.mjs leaves a file in its temp dir and its tests pass, the spec process exits with status 1, the status a failing test gives (R34-mut-06)', async () => {
+  const { child, closed } = startFixture(`import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import ${JSON.stringify(TMP_MJS)};
+fs.writeFileSync(path.join(os.tmpdir(), 'leaked-file'), 'x');
+`);
+  try {
+    const r = await closed;
+    assert.equal(r.code, 1, r.output);
+    assert.match(r.output, /left 1 entry in its temp dir \(now removed\): leaked-file/);
+    assert.deepEqual(r.leftovers, []);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+test('Given a spec that loads tmp.mjs removed its own temp dir and is then killed by SIGTERM, it still dies by SIGTERM instead of crashing on ENOENT (R34-mut-04)', async () => {
+  const { child, fresh, closed } = startFixture(`import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import ${JSON.stringify(TMP_MJS)};
+fs.rmSync(os.tmpdir(), { recursive: true, force: true });
+setInterval(() => {}, 1000);
+fs.writeFileSync(path.join(FRESH, 'ready'), String(process.pid));
+`);
+  try {
+    const ready = path.join(fresh, 'ready');
+    const deadline = Date.now() + 30_000;
+    while (!fs.existsSync(ready) || !fs.readFileSync(ready, 'utf8')) {
+      assert.ok(Date.now() < deadline, 'the fixture never started');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    fs.rmSync(ready);
+    child.kill('SIGTERM');
+    const r = await closed;
+    assert.equal(r.signal, 'SIGTERM', r.output);
+    assert.doesNotMatch(r.output, /ENOENT/);
+    assert.deepEqual(r.leftovers, []);
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
+/** A suite dir with an empty test-support/tmp.mjs and the given files in suite/tests; returns specsWithoutTmpCheck over it. */
+function graphFixture(files) {
+  const dir = tempDir('tmp-check-graph-');
+  const support = path.join(dir, 'test-support');
+  const tests = path.join(dir, 'suite', 'tests');
+  fs.mkdirSync(support);
+  fs.mkdirSync(tests, { recursive: true });
+  fs.writeFileSync(path.join(support, 'tmp.mjs'), '');
+  for (const [name, source] of Object.entries(files)) fs.writeFileSync(path.join(tests, name), source);
+  return specsWithoutTmpCheck(tests, path.join(support, 'tmp.mjs'));
+}
+
+test('specsWithoutTmpCheck lists a spec whose relative imports exist but never reach tmp.mjs, or do not exist (R34-mut-09)', () => {
+  assert.deepEqual(graphFixture({
+    'plain-helper.mjs': "import fs from 'node:fs';\nexport const y = 1;\n",
+    'helper-only.spec.mjs': "import { y } from './plain-helper.mjs';\n",
+    'missing.spec.mjs': "import './no-such-helper.mjs';\n",
+    'missing-then-tmp.spec.mjs': "import './no-such-helper.mjs';\nimport '../../test-support/tmp.mjs';\n",
+  }), ['helper-only.spec.mjs', 'missing.spec.mjs']);
+});
+
+test('specsWithoutTmpCheck lists a spec whose helpers import each other in a cycle that never reaches tmp.mjs (R34-mut-08)', () => {
+  assert.deepEqual(graphFixture({
+    'cycle-a.mjs': "import './cycle-b.mjs';\n",
+    'cycle-b.mjs': "import './cycle-a.mjs';\n",
+    'cycle.spec.mjs': "import './cycle-a.mjs';\nimport './cycle-b.mjs';\n",
+    'cycle-then-tmp.spec.mjs': "import './cycle-a.mjs';\nimport '../../test-support/tmp.mjs';\n",
+  }), ['cycle.spec.mjs']);
+});
+
+test('specsWithoutTmpCheck lists a spec whose only mention of tmp.mjs is an import line inside a template string, while quotes in a regex and comment openers in a string hide no real import (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'template.spec.mjs': `import { test } from 'node:test';\nconst fixture = \`\n${tmpImport}\n\`;\n`,
+    'nested-template.spec.mjs': `const fixture = \`a \${\`b\`} \${{ x: 1 }.x}\n${tmpImport}\n\`;\n`,
+    'after-template.spec.mjs': `const fixture = \`\${'}'}\`;\nconst quote = /["'\`]/;\n${tmpImport}\n`,
+    'glob-string.spec.mjs': `const glob = '**/*.spec.mjs';\n${tmpImport}\nconst end = '*/';\n`,
+  }), ['nested-template.spec.mjs', 'template.spec.mjs']);
+});
+
+test('specsWithoutTmpCheck reads an export of a quoted value as a value, not an import, and still follows export ... from (R34 leftover)', () => {
+  assert.deepEqual(graphFixture({
+    'root.mjs': "import { join } from 'node:path';\nexport const ROOT = join(import.meta.dirname, '..');\nexport const TMP = '../../test-support/tmp.mjs';\n",
+    'reexport-all.mjs': "export * from '../../test-support/tmp.mjs';\n",
+    'reexport-named.mjs': "export {\n  tempDir,\n} from '../../test-support/tmp.mjs';\n",
+    'value-export.spec.mjs': "import { ROOT } from './root.mjs';\n",
+    'export-all.spec.mjs': "import './reexport-all.mjs';\n",
+    'export-named.spec.mjs': "import { tempDir } from './reexport-named.mjs';\n",
+  }), ['value-export.spec.mjs']);
+});
+
+test('specsWithoutTmpCheck tells template text from its substitutions: escapes, a lone $ or {, and a comment opening a substitution keep an import line inside the template (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'odd-template.spec.mjs': 'const t = `abc`;\n' + tmpImport + '\n',
+    'substitution.spec.mjs': 'const t = `${a}`;\n' + tmpImport + '\n',
+    'escaped-backtick.spec.mjs': 'const t = `a\\`b\n' + tmpImport + '\n`;\n',
+    'escaped-substitution.spec.mjs': 'const t = `\\${\n' + tmpImport + '\n`;\n',
+    'backtick-string.spec.mjs': "const t = `${'`'}\n" + tmpImport + '\n`;\n',
+    'lone-brace.spec.mjs': 'const t = `a{\n' + tmpImport + '\n`;\n',
+    'lone-dollar.spec.mjs': 'const t = `$x\n' + tmpImport + '\n`;\n',
+    'comment-substitution.spec.mjs': 'const t = `${/*\n' + tmpImport + '\n*/1}`;\n',
+    'line-comment-substitution.spec.mjs': 'const t = `${a // a ` here\n}`;\n' + tmpImport + '\n',
+    'object-substitution.spec.mjs': 'const t = `${{ a: 1 } // a ` here\n.a}`;\n' + tmpImport + '\n',
+  }), ['backtick-string.spec.mjs', 'comment-substitution.spec.mjs', 'escaped-backtick.spec.mjs', 'escaped-substitution.spec.mjs', 'lone-brace.spec.mjs', 'lone-dollar.spec.mjs']);
+});
+
+test('specsWithoutTmpCheck ends a block comment only at its own */, so /*/ stays open, /**/ closes, code right after */ is read and an unclosed comment hides the rest (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'slash-star-slash.spec.mjs': '/*/\n' + tmpImport + '\n*/\n',
+    'empty-comment.spec.mjs': '/**/\n' + tmpImport + '\n',
+    'comment-then-import.spec.mjs': '/* note */' + tmpImport + '\n',
+    'unclosed-comment.spec.mjs': '/*\n' + tmpImport + '\n',
+  }), ['slash-star-slash.spec.mjs', 'unclosed-comment.spec.mjs']);
+});
+
+test('specsWithoutTmpCheck tells a regex literal from a division, so a backtick in a regex or after a division is read right, and a division misread as a regex costs only its own line (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'regex-at-start.spec.mjs': '/`/.test(x);\n' + tmpImport + '\n',
+    'regex-after-operator.spec.mjs': 'const re = /`/;\n' + tmpImport + '\n',
+    'regex-after-keyword.spec.mjs': 'function f(s) { return /`/.test(s); }\n' + tmpImport + '\n',
+    'regex-slash-in-class.spec.mjs': 'const re = /[/`]/;\n' + tmpImport + '\n',
+    'regex-escaped-slash.spec.mjs': 'const re = /\\/`/;\n' + tmpImport + '\n',
+    'regex-flags.spec.mjs': 'const re = /a/gi; const t = `\n' + tmpImport + '\n`;\n',
+    'regex-closed-class.spec.mjs': 'const re = /[a]/; const t = `\n' + tmpImport + '\n`;\n',
+    'division.spec.mjs': 'const y = a / 2 + `\n' + tmpImport + '\n`;\n',
+    'division-after-paren.spec.mjs': 'const y = (a) / 2 + `\n' + tmpImport + '\n`;\n',
+    'misread-division.spec.mjs': 'const y = n++ / 2;\n' + tmpImport + '\nconst z = a / b;\n',
+  }), ['division-after-paren.spec.mjs', 'division.spec.mjs', 'regex-closed-class.spec.mjs', 'regex-flags.spec.mjs']);
+});

@@ -106,7 +106,90 @@ export function runSuiteInFreshTmp(testsDir, exclude) {
   }
 }
 
-const IMPORT_RE = /^[ \t]*(?:import|export)\b[^;'"]*?(?:\bfrom\s*)?['"]([^'"]+)['"]/gm;
+// `export` reaches a module only through `from`; `export const ROOT = join(dir, '..')` exports a value.
+const IMPORT_RE = /^[ \t]*(?:import\b[^;'"]*?(?:\bfrom\s*)?|export\b[^;'"]*?\bfrom\s*)['"]([^'"]+)['"]/gm;
+const REGEX_AFTER = new Set('(,=:[!&|?{};+-*%<>~^'.split(''));
+const WORD_RE = /[\w$]+/y;
+const REGEX_WORDS = new Set(['return', 'typeof', 'case', 'do', 'else', 'in', 'of', 'void', 'yield', 'await', 'delete', 'new', 'instanceof']);
+
+/**
+ * `src` with comments, template literals and regex literals removed in one pass, keeping their newlines and every
+ * quoted string, so an import line inside a template or a comment opener inside a string is not read as code.
+ */
+function staticCode(src) {
+  let out = '';
+  let i = 0;
+  let lastSig = '';
+  let lastWord = '';
+  // One entry per open `${`: the brace depth inside that substitution; closing it at depth 0 resumes the template.
+  const subs = [];
+  const keepNewlines = (from, to) => { out += src.slice(from, to).replace(/[^\n]/g, ''); };
+  // Skips template text from just past its opening backtick or the `}` closing a substitution.
+  const skipTemplate = () => {
+    const start = i;
+    for (; i < src.length && src[i] !== '`'; i++) {
+      if (src[i] === '\\') i++;
+      else if (src[i] === '$' && src[i + 1] === '{') { keepNewlines(start, i); i += 2; subs.push(0); lastSig = '{'; lastWord = ''; return; }
+    }
+    keepNewlines(start, ++i);
+    lastSig = '"';
+    lastWord = '';
+  };
+  while (i < src.length) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (c === '/' && d === '/') {
+      while (i < src.length && src[i] !== '\n') i++;
+    } else if (c === '/' && d === '*') {
+      const end = src.indexOf('*/', i + 2);
+      const stop = end === -1 ? src.length : end + 2;
+      keepNewlines(i, stop);
+      i = stop;
+    } else if (c === '"' || c === "'") {
+      const start = i;
+      for (i++; i < src.length && src[i] !== c && src[i] !== '\n'; i++) if (src[i] === '\\') i++;
+      out += src.slice(start, ++i);
+      lastSig = '"';
+      lastWord = '';
+    } else if (c === '`') {
+      i++;
+      skipTemplate();
+    } else if (c === '/' && (lastSig === '' || REGEX_AFTER.has(lastSig) || REGEX_WORDS.has(lastWord))) {
+      let cls = false;
+      for (i++; i < src.length && src[i] !== '\n'; i++) {
+        if (src[i] === '\\') i++;
+        else if (src[i] === '[') cls = true;
+        else if (src[i] === ']') cls = false;
+        else if (src[i] === '/' && !cls) break;
+      }
+      // A `/` that was really a division ends at the newline, which stays in the output.
+      if (src[i] === '/') for (i++; /[a-z]/.test(src[i] ?? ''); i++);
+      out += ' ';
+      lastSig = '"';
+      lastWord = '';
+    } else if (c === '}' && subs.length && subs[subs.length - 1] === 0) {
+      subs.pop();
+      i++;
+      skipTemplate();
+    } else {
+      if (subs.length && c === '{') subs[subs.length - 1]++;
+      else if (subs.length && c === '}') subs[subs.length - 1]--;
+      if (/[\w$]/.test(c)) {
+        WORD_RE.lastIndex = i;
+        const word = WORD_RE.exec(src)[0];
+        out += word;
+        i += word.length;
+        lastSig = 'a';
+        lastWord = word;
+        continue;
+      }
+      out += c;
+      i++;
+      if (!/\s/.test(c)) { lastSig = c; lastWord = ''; }
+    }
+  }
+  return out;
+}
 
 /**
  * The *.spec.mjs files in `testsDir` (by name, sorted) whose static imports, followed through relative helper modules,
@@ -119,7 +202,7 @@ export function specsWithoutTmpCheck(testsDir, tmpModule = fileURLToPath(import.
     if (real === target) return true;
     if (seen.has(real)) return false;
     seen.add(real);
-    for (const [, spec] of fs.readFileSync(real, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(IMPORT_RE)) {
+    for (const [, spec] of staticCode(fs.readFileSync(real, 'utf8')).matchAll(IMPORT_RE)) {
       if (!spec.startsWith('.')) continue;
       const next = path.resolve(path.dirname(real), spec);
       if (fs.existsSync(next) && reaches(next, seen)) return true;
