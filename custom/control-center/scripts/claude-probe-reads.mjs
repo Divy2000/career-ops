@@ -23,6 +23,7 @@ import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { childEnv } from '../server/system/child-env.ts';
+import { recordReadProbe, writeContract } from './probe-reads-record.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..');
@@ -258,6 +259,8 @@ async function stopCalls(children, ms) {
 }
 // Set once a signal stops the probe: no new call starts, and the main flow leaves the cleanup and exit to the signal.
 let stopping = null;
+// Every call or group that did not run to its end (spawn failed, never started, killed): --record refuses while any is.
+const incomplete = [];
 // What the app gives a Claude session (server/system/child-env.ts over server/claude/invocation.ts buildEnv), with every
 // CLAUDE* nested-session variable dropped as well. The Keychain token is the only Claude or Anthropic credential a call
 // gets; other variables the shell exports pass, as they do to the app's sessions.
@@ -266,7 +269,10 @@ const INHERITED = Object.fromEntries(Object.entries(process.env).filter(([k]) =>
 function runClaude(name, opts) {
   const sessionId = crypto.randomUUID();
   const prep = prepare(name, opts, sessionId);
-  if (stopping) return Promise.resolve({ name, sessionId, status: null, stdout: '', stderr: 'not started: the probe is stopping', events: [], hook: [], prep });
+  if (stopping) {
+    incomplete.push(`${name} (not started)`);
+    return Promise.resolve({ name, sessionId, status: null, stdout: '', stderr: 'not started: the probe is stopping', events: [], hook: [], prep });
+  }
   const argv = ['-p', opts.prompt, '--output-format', 'stream-json', '--verbose', '--session-id', sessionId, '--permission-mode', 'dontAsk'];
   if (opts.shape !== 'today') argv.push('--restricted');
   if (opts.tools) argv.push('--tools', opts.tools.join(','));
@@ -305,6 +311,7 @@ function runClaude(name, opts) {
       if (child.pid !== undefined || settled) return;
       settled = true;
       clearTimeout(timer);
+      incomplete.push(`${name} (spawn failed: ${err?.code ?? err?.message ?? err})`);
       try {
         fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
       } catch (writeErr) {
@@ -313,10 +320,11 @@ function runClaude(name, opts) {
       }
       resolve({ name, sessionId, status: null, stdout: '', stderr: redact(stderr).slice(-2000), events: [], hook: [], prep });
     });
-    child.on('close', (status) => {
+    child.on('close', (status, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (status === null) incomplete.push(`${name} (killed by ${signal})`);
       const events = stdout.split('\n').filter(Boolean).map((l) => {
         try {
           return JSON.parse(l);
@@ -715,6 +723,7 @@ try {
   for (let i = 0; i < todo.length; i += 3) outcomes.push(...(await Promise.all(todo.slice(i, i + 3).map((g) => g.run().catch((err) => ({ error: redact(err?.stack ?? err), ids: g.ids }))))));
   for (const o of outcomes) {
     if (o.error) {
+      incomplete.push(`group ${o.ids.join(',')} (threw)`);
       for (const id of o.ids) {
         summary.cases[id] = 'fail';
         summary.details[id] = { why: o.error };
@@ -728,23 +737,12 @@ try {
     Object.assign(summary.info, o.info ?? {});
   }
   summary.runs = fs.readdirSync(GUARD).filter((d) => fs.existsSync(path.join(GUARD, d, 'settings.json'))).length;
-  // Cases a signal cut short fail without having run: recording them would replace the last real record.
-  if (stopping) throw new Error('stopped by a signal; nothing recorded');
   if (RECORD) {
-    // A targeted re-run (--only) merges into the record of the same version; a new version needs every case.
-    const prev = contract.claude.readProbe;
-    const merging = only && prev?.version === summary.version;
-    if (only && !merging) throw new Error(`--record with --only needs an existing record for ${summary.version}; run every case first`);
-    const cases = { ...(merging ? prev.cases : {}), ...summary.cases };
-    const info = { ...(merging ? prev.info : {}), ...summary.info };
-    const history = [...(merging ? (prev.history ?? []) : []), { probedAt: summary.probedAt, cases: Object.keys(summary.cases).filter((id) => id !== 'C0').sort(), runs: summary.runs }];
-    const gatePassed = Object.entries(cases).every(([id, r]) => id === 'C0' || r === 'pass' || r === 'info');
-    if (gatePassed && !approved.includes(summary.version)) contract.claude.approvedVersions = [...approved, summary.version];
-    cases.C0 = (contract.claude.approvedVersions ?? []).includes(summary.version) ? 'pass' : 'fail';
+    // Cases a signal or a failed call cut short fail without having run: recording them would replace the last real record.
+    const { contract: next, cases } = recordReadProbe(contract, { ...summary, model: MODEL, only, stopped: Boolean(stopping), incomplete });
     summary.cases.C0 = cases.C0;
-    contract.claude.readProbe = { version: summary.version, probedAt: summary.probedAt, model: MODEL, shape: SHAPE, cases, info, history };
-    fs.writeFileSync(CONTRACT_FILE, `${JSON.stringify(contract, null, 2)}\n`);
-  }
+    writeContract(CONTRACT_FILE, next);
+  } else if (stopping) throw new Error('stopped by a signal; nothing recorded');
   exitCode = Object.values(summary.cases).every((r) => r === 'pass' || r === 'info') ? 0 : 1;
 } catch (err) {
   console.error(redact(err?.stack ?? err));

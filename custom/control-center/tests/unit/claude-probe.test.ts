@@ -418,7 +418,7 @@ describe('claude-probe-reads.mjs --record', () => {
     const pkg = path.join(box.root, 'pkg');
     fs.mkdirSync(path.join(pkg, 'scripts'), { recursive: true });
     fs.mkdirSync(path.join(pkg, 'server', 'core'), { recursive: true });
-    fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs'), path.join(pkg, 'scripts', 'claude-probe-reads.mjs'));
+    for (const f of fs.readdirSync(path.join(PACKAGE_ROOT, 'scripts')).filter((n) => n === 'claude-probe-reads.mjs' || n.startsWith('probe-'))) fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', f), path.join(pkg, 'scripts', f));
     for (const dir of ['claude', 'system']) fs.symlinkSync(path.join(PACKAGE_ROOT, 'server', dir), path.join(pkg, 'server', dir));
     const contract = path.join(pkg, 'server', 'core', 'contract.json');
     fs.copyFileSync(path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json'), contract);
