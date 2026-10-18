@@ -1082,9 +1082,10 @@ describe('two server processes on one data root (SW6-claude-01 review)', () => {
     const other = otherServer(root, req(['0', '30000'], { actionId: 'test.other' }));
     strays.push(await other.holding());
     const id = new RunStore(root).list().find((m) => m.actionId === 'test.other')!.id;
-    const wrapperJson = path.join(new RunStore(root).dirOf(id), 'wrapper.json');
-    await until(() => fs.existsSync(wrapperJson));
-    strays.push((JSON.parse(fs.readFileSync(wrapperJson, 'utf8')) as { childPid: number }).childPid);
+    // The wrapper writes wrapper.json in place: it can exist before its content is there.
+    const store = new RunStore(root);
+    await until(() => store.readWrapper(id) !== null);
+    strays.push(store.readWrapper(id)!.childPid);
     await other.crash();
     // No reconcile or pump here first: the cancel is what finds the claim the killed server left.
     const here = new Runner(root, new EventBus(), { pollMs: 50 });
