@@ -160,9 +160,10 @@ async function main() {
   const onSignal = async (signal) => {
     if (stopping) return;
     stopping = true;
-    if (running && running.exitCode === null && running.signalCode === null) {
+    // A render ends at its 'close', not its exit: the temp cleanup and the result come only then, after its pipes close.
+    if (running) {
       const closed = new Promise((resolve) => running.once('close', resolve));
-      if (!restoreInput) running.kill(signal);
+      if (!restoreInput && running.exitCode === null && running.signalCode === null) running.kill(signal);
       await closed;
     }
     removeDrafts();

@@ -263,7 +263,37 @@ async function main() {
   const top = arg(args, '--top', 40);
   if (!Number.isInteger(top) || top < 1) throw new Error('--top needs a positive whole number');
   const today = localToday();
-  const rows = (await readPipeline()).split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
+  // The tier lookups can take minutes, and another run may publish a shortlist for a newer pipeline meanwhile. The
+  // result is published under the pipeline lock only while the pipeline still reads as it did when the rows were taken
+  // from it; otherwise it is rebuilt from the new rows (the lookups already cached make that quick).
+  const attempts = 5;
+  for (let attempt = 1; ; attempt++) {
+    const source = await readPipeline();
+    const built = await buildMarkdown(source, { today, minRank, top });
+    const published = await withPipelineLock(PIPELINE, async () => {
+      if ((await readPipeline()) !== source) return false;
+      // Through a temp file + rename like writeTiers: the Control Center's watcher reads shortlist.md on change, and an
+      // overlapping run (the daily job and the shortlist action) must not leave its tail behind a shorter table.
+      const tmp = `${OUT}.tmp-${process.pid}`;
+      try {
+        await writeFile(tmp, built.md);
+        await rename(tmp, OUT);
+      } finally {
+        await rm(tmp, { force: true });
+      }
+      return true;
+    });
+    if (published) {
+      const { shortlist, excluded, companies, looked } = built;
+      process.stdout.write(`shortlist: ${shortlist.length} kept, ${excluded.length} excluded, ${companies.length} companies (${looked} tier lookups) -> data/shortlist.md\n`);
+      return;
+    }
+    if (attempt === attempts) throw new Error(`data/pipeline.md changed during each of ${attempts} builds; data/shortlist.md was left as it was. Run the shortlist again.`);
+  }
+}
+
+async function buildMarkdown(source, { today, minRank, top }) {
+  const rows = source.split('\n').map(parseRow).filter((r) => r?.pending && r.rank !== null);
   const companies = [...new Set(rows.filter((r) => r.rank >= minRank).map((r) => r.company))];
   const { tiers, looked } = await loadTiers(companies, today);
   const alerts = await loadAlerts(companies);
@@ -288,16 +318,7 @@ async function main() {
     ...(excluded.length ? excluded.map((s) => `- ${cell(s.company)} - [${cell(s.title || s.url)}](${s.url}) - ${sponsorCell(s.sponsor)}`) : ['- none']),
     '',
   ].join('\n');
-  // Through a temp file + rename like writeTiers: the Control Center's watcher reads shortlist.md on change, and an
-  // overlapping run (the daily job and the shortlist action) must not leave its tail behind a shorter table.
-  const tmp = `${OUT}.tmp-${process.pid}`;
-  try {
-    await writeFile(tmp, md);
-    await rename(tmp, OUT);
-  } finally {
-    await rm(tmp, { force: true });
-  }
-  process.stdout.write(`shortlist: ${shortlist.length} kept, ${excluded.length} excluded, ${companies.length} companies (${looked} tier lookups) -> data/shortlist.md\n`);
+  return { md, shortlist, excluded, companies, looked };
 }
 
 main().catch((err) => {
