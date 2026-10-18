@@ -8,13 +8,21 @@ import { DangerZone } from './DangerZone';
 import { ModeLauncher } from '../../components/ModeLauncher';
 import { SessionPanel, StatusLabel } from '../../components/SessionPanel';
 import { useSessions } from '../../lib/sessions';
-import type { ReportFull } from '@shared/api';
+import type { ReportFull, TrackerRow } from '@shared/api';
 import { formatLocalMinute } from '../../lib/time';
 import { reasonLabel } from '../../lib/format';
 import { useRememberedSession } from '../../lib/useRememberedSession';
 import { sponsorCheckKey, sponsorCheckPrompt } from '../../lib/sponsorCheck';
 import { sponsorCheckCompany } from '../sponsorship/companyKey';
 import { postingHref } from '../today/evaluate';
+
+/**
+ * Where an application's launcher remembers its sessions: the row number with the row's identity. A delete elsewhere
+ * renumbers the tracker, and the company that inherits a number must not re-attach the sessions started for the row
+ * that held it (their prompts name that row number).
+ */
+export const applicationLauncherKey = (row: Pick<TrackerRow, 'num' | 'company' | 'role' | 'report'>, slot: string) =>
+  `cc.application.${row.num}.${slot}:${JSON.stringify([row.company, row.role, row.report])}`;
 
 /** Every session whose target is this application (spec 2.4). */
 function ApplicationSessions({ n }: { n: number }) {
@@ -230,8 +238,8 @@ export function ApplicationPage() {
             {tab === 'outreach' && (
               <ModeLauncher
                 heading="Outreach and research"
-                key={`cc.application.${q.data.row.num}.outreach`}
-                rememberAs={`cc.application.${q.data.row.num}.outreach`}
+                key={applicationLauncherKey(q.data.row, 'outreach')}
+                rememberAs={applicationLauncherKey(q.data.row, 'outreach')}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'cover', label: 'Cover letter', prompt: `Write the cover letter for tracker row #${q.data.row.num} (${q.data.row.company}).` },
@@ -245,8 +253,8 @@ export function ApplicationPage() {
             {tab === 'interview' && (
               <ModeLauncher
                 heading="Interview"
-                key={`cc.application.${q.data.row.num}.interview`}
-                rememberAs={`cc.application.${q.data.row.num}.interview`}
+                key={applicationLauncherKey(q.data.row, 'interview')}
+                rememberAs={applicationLauncherKey(q.data.row, 'interview')}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'interview-prep', label: 'Interview prep', prompt: `Prepare me for the interview at ${q.data.row.company} (row #${q.data.row.num}).` },
@@ -261,8 +269,8 @@ export function ApplicationPage() {
             {tab === 'offer' && (
               <ModeLauncher
                 heading="Offer and outcome"
-                key={`cc.application.${q.data.row.num}.offer`}
-                rememberAs={`cc.application.${q.data.row.num}.offer`}
+                key={applicationLauncherKey(q.data.row, 'offer')}
+                rememberAs={applicationLauncherKey(q.data.row, 'offer')}
                 target={{ type: 'app', value: String(q.data.row.num) }}
                 modes={[
                   { id: 'offer-prep', label: 'Offer prep', prompt: `Prepare the offer negotiation for row #${q.data.row.num} (${q.data.row.company}).` },
@@ -278,8 +286,8 @@ export function ApplicationPage() {
                 <DocumentsTab n={q.data.row.num} />
                 <ModeLauncher
                   heading="Generate with AI"
-                  key={`cc.application.${q.data.row.num}.documents`}
-                  rememberAs={`cc.application.${q.data.row.num}.documents`}
+                  key={applicationLauncherKey(q.data.row, 'documents')}
+                  rememberAs={applicationLauncherKey(q.data.row, 'documents')}
                   target={{ type: 'app', value: String(q.data.row.num) }}
                   modes={[
                     { id: 'pdf', label: 'Tailored CV PDF', prompt: `Generate the tailored CV PDF for tracker row #${q.data.row.num} (${q.data.row.company}).` },

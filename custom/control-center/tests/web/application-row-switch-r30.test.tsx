@@ -127,8 +127,9 @@ describe('Application page, changing rows while a start is on its way', () => {
     panels = [];
     await act(async () => starting.onSessionId!('cover-acme'));
 
-    expect(sessionStorage.getItem('cc.application.4.outreach') ?? '').toContain('cover-acme');
-    expect(sessionStorage.getItem('cc.application.7.outreach') ?? '').not.toContain('cover-acme');
+    const { applicationLauncherKey } = await import('@web/features/tracker/ApplicationPage');
+    expect(sessionStorage.getItem(applicationLauncherKey(detail(4).row, 'outreach')) ?? '').toContain('cover-acme');
+    expect(sessionStorage.getItem(applicationLauncherKey(detail(7).row, 'outreach')) ?? '').not.toContain('cover-acme');
     expect(panels.some((p) => p.sessionId === 'cover-acme')).toBe(false);
   });
 });
