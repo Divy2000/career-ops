@@ -69,3 +69,9 @@ wherever it finishes.
   pinned to a different application than the one the request names (another company or role, or two different
   reports) does not hold it; one with no pin, one pinned before its report was linked, or a request whose application
   cannot be told, holds it. The check and the session's create run with no await between them.
+
+## Resources
+
+- A turn of a mode whose own file runs a `data/pdf-index.tsv` writer (pdf, cover) holds the runner's `pdf-index`
+  resource, as `docs.renderPdf` and `docs.coverPdf` do, so no two of them rewrite the manifest at once. Other turns
+  hold no resource, so a fan-out's evaluations run side by side.

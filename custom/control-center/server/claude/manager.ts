@@ -20,7 +20,7 @@ import { conversationStarted, HELD_REPORT_NUMS_FILE, readHeldRecords, readSentin
 import { StreamParser, type SessionEvent } from './stream-parse.js';
 import type { EnvelopeKind } from './envelopes.js';
 import { assertRootsConfinable, buildArgv, buildEnv, buildPermissions, buildPreamble, redact, toolResultsDirs, transcriptFiles, writePolicyFile, writeSettingsFile } from './invocation.js';
-import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
+import { ALWAYS_DENIED_WRITES, DEVCHAT_DENIED_WRITES, MODES, SESSION_POLICY_VERSION, getModePolicy, sessionRefusal, type ModePolicy, type PolicyClass } from './modes.js';
 import { assertApprovedClaude } from './cli-version.js';
 import { tokenize } from './guard-policy.mjs';
 import { decideTurnOutcome, detectNewReports, isReportGated, ownReports, snapshotReports, type NewReport } from './honesty.js';
@@ -325,6 +325,20 @@ export interface ManagerDeps {
 /** A name that is entirely a date (a digest) is no report, as the allocator reads it (reserve-report-num.mjs). */
 function isBareDateFile(name: string): boolean {
   return /^\d{4}-\d{2}-\d{2}\.md$/.test(name);
+}
+
+/** Scripts that rewrite data/pdf-index.tsv without a lock (generate-cover-letter.mjs through generate-pdf.mjs's renderer). */
+const PDF_INDEX_WRITERS = ['generate-pdf.mjs', 'generate-cover-letter.mjs', 'sync-pdf-flags.mjs'];
+
+/**
+ * The runner resources a turn of `mode` holds. A mode whose own file runs a pdf-index writer (pdf, cover) holds
+ * 'pdf-index', as docs.renderPdf and docs.coverPdf do, so the two never rewrite the manifest at once. Keyed on the mode
+ * file rather than the class allowlist: every evaluation may run generate-pdf.mjs, and holding it there would make the
+ * evaluations of a fan-out run one at a time.
+ */
+function turnResources(mode: string): string[] {
+  const scripts = MODES.find((m) => m.id === mode)?.scripts ?? [];
+  return scripts.some((s) => PDF_INDEX_WRITERS.includes(s)) ? ['pdf-index'] : [];
 }
 
 export class SessionManager {
@@ -1467,7 +1481,7 @@ export class SessionManager {
         actionId: `session.${meta.mode}`,
         label: `${policy.title}: turn ${n}`,
         cost: 'tokens',
-        resources: [],
+        resources: turnResources(meta.mode),
         claude: true,
         params: { sessionId: meta.id, turn: n },
         cmd: { bin: this.cfg.claudeBin, args: argv, cwd: this.cfg.codeRoot },
