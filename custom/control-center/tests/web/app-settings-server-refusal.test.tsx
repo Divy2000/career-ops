@@ -18,11 +18,15 @@ let puts: Array<{ url: string; ifMatch: string | null; patch: Record<string, unk
 /** When set, each write waits here until the test lets it reach the server. */
 let held: Array<() => void> | null;
 let roots: Root[];
+/** When set, the version is the settings' content, as the real server's hash of the file: saving earlier values revisits a version. */
+let contentEtag: boolean;
+let lastQc: QueryClient;
 
 function json(status: number, body: unknown) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
-const read = () => ({ ...settings, problem, etag: `v${version}` });
+const etag = () => (contentEtag ? `c:${JSON.stringify(settings)}` : `v${version}`);
+const read = () => ({ ...settings, problem, etag: etag() });
 
 beforeEach(() => {
   settings = { logos: false, retention: 200, claudeConcurrency: 1, modelDefault: '', usageBudgets: { fiveHourTokens: null, sevenDayTokens: null } };
@@ -30,6 +34,7 @@ beforeEach(() => {
   problem = null;
   puts = [];
   held = null;
+  contentEtag = false;
   roots = [];
   vi.resetModules();
   localStorage.clear();
@@ -47,11 +52,11 @@ beforeEach(() => {
         puts.push({ url, ifMatch, patch });
         if (held) await new Promise<void>((take) => held!.push(take));
         if (problem && !url.endsWith('?reset=1')) return json(409, { code: 'settings-problem', problem, error: `data/control-center/settings.json could not be read (${problem}), so saving would replace it with defaults.` });
-        if (ifMatch !== null && ifMatch !== `v${version}`) return json(409, { code: 'settings-changed', error: 'settings.json changed since you loaded it', current: read() });
+        if (ifMatch !== null && ifMatch !== etag()) return json(409, { code: 'settings-changed', error: 'settings.json changed since you loaded it', current: read() });
         settings = { ...settings, ...patch };
         problem = null;
         version += 1;
-        return json(200, { ...settings, etag: `v${version}` });
+        return json(200, { ...settings, etag: etag() });
       }
       if (url === '/api/usage') return json(200, {});
       return json(404, { error: 'not stubbed' });
@@ -62,6 +67,7 @@ afterEach(async () => {
   for (const r of roots) await act(async () => r.unmount());
   document.body.innerHTML = '';
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   delete (navigator as { locks?: unknown }).locks;
 });
 
@@ -73,6 +79,7 @@ async function mount(which: 'AppTab' | 'EngineSettings', fresh = false) {
   const root = createRoot(host);
   roots.push(root);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  lastQc = qc;
   await act(async () => root.render(createElement(QueryClientProvider, { client: qc }, createElement(mod[which]))));
   return host;
 }
@@ -135,6 +142,10 @@ describe('app settings: a write the server refuses', () => {
     await until(() => settings.modelDefault === 'opus', 'the reset write');
     expect(puts.at(-1)).toMatchObject({ url: '/api/settings/app?reset=1', patch: { modelDefault: 'opus' } });
     await until(() => !alerts(host), 'the alerts cleared');
+    // The replaced value is saved, so the field follows the server again rather than holding the sent draft.
+    elsewhere({ modelDefault: 'haiku' });
+    await act(async () => lastQc.invalidateQueries());
+    await until(() => host.querySelector<HTMLInputElement>('#setting-model')?.value === 'haiku', 'the field showing the server value');
   });
 });
 
@@ -181,5 +192,41 @@ describe('app settings: a write based on a read another device has changed', () 
     expect(puts.map((p) => p.ifMatch)).toEqual(['v1', 'v2']);
     expect(settings.claudeConcurrency).toBe(3);
     expect(alerts(tabA) + alerts(tabB)).toBe('');
+  });
+});
+
+describe('app settings: this browser\'s own saves never conflict with each other', () => {
+  it('Given versions named by content, when logos are toggled on, off, on and off, then every save is taken', async () => {
+    contentEtag = true;
+    const host = await mount('AppTab');
+    for (const want of [true, false, true, false]) {
+      const box = await until(() => host.querySelector<HTMLInputElement>('#setting-logos'), 'the logos checkbox');
+      await act(async () => box.click());
+      await until(() => settings.logos === want && host.querySelector<HTMLInputElement>('#setting-logos')?.checked === want, `logos saved ${want}`);
+      await act(async () => new Promise((r) => setTimeout(r, 20)));
+    }
+    expect(alerts(host)).toBe('');
+    expect(puts).toHaveLength(4);
+  });
+
+  it('Given storage that refuses writes, when logos are toggled twice before the first save answers, then both saves are taken', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError');
+    });
+    held = [];
+    const host = await mount('AppTab');
+    const box = await until(() => host.querySelector<HTMLInputElement>('#setting-logos'), 'the logos checkbox');
+    await act(async () => box.click());
+    await until(() => held!.length > 0, 'the first save on its way');
+    await act(async () => host.querySelector<HTMLInputElement>('#setting-logos')!.click());
+    for (let i = 0; i < 20 && (held!.length > 0 || puts.length < 2); i++) {
+      await act(async () => {
+        for (const take of held!.splice(0)) take();
+        await new Promise((r) => setTimeout(r, 20));
+      });
+    }
+    expect(alerts(host)).toBe('');
+    expect(settings.logos).toBe(false);
+    expect(puts.map((p) => p.ifMatch)).toEqual(['v1', 'v2']);
   });
 });

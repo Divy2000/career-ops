@@ -35,42 +35,45 @@ const subscribe = (l: () => void) => {
 
 const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
 
-// The versions this browser's own writes moved the file through (from -> to), shared by its tabs. A tab whose last
-// read predates a write from its sibling tab follows the chain to that write's version: the Web Lock already ordered
-// the two, so only a version no tab of this browser wrote (another device, a hand edit) is a conflict.
-const CHAIN_KEY = 'career-ops-app-settings-versions';
-const CHAIN_MAX = 20;
-const readChain = (): Array<[string, string]> => {
+// The version this browser's latest own write left the file at, and the versions its writes started from or left,
+// shared by its tabs. A tab whose last read is one of those is behind only its sibling tabs (the Web Lock already
+// ordered their writes), so it writes on top of the latest; a version no tab of this browser saw (another device, a
+// hand edit) is a conflict. Versions name the file's content and can repeat, so the latest is kept, never a chain.
+const OWN_KEY = 'career-ops-app-settings-versions';
+const OWN_MAX = 40;
+type OwnVersions = { latest: string; seen: string[] };
+// This tab's copy: what it uses when storage cannot be written (blocked, full), so its own saves still follow each other.
+let ownHere: OwnVersions | null = null;
+let storageWorks = true;
+const readOwn = (): OwnVersions | null => {
+  if (!storageWorks) return ownHere;
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(CHAIN_KEY) ?? '[]');
-    return Array.isArray(raw) ? raw.filter((e): e is [string, string] => Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'string') : [];
+    const raw = JSON.parse(localStorage.getItem(OWN_KEY) ?? 'null') as Partial<OwnVersions> | null;
+    if (raw && typeof raw.latest === 'string' && Array.isArray(raw.seen)) return { latest: raw.latest, seen: raw.seen.filter((v): v is string => typeof v === 'string') };
+    return ownHere;
   } catch {
-    return [];
+    return ownHere;
   }
 };
 const recordWrite = (from: string, to: string) => {
+  const seen = [...(readOwn()?.seen ?? []).filter((v) => v !== from && v !== to), from, to].slice(-OWN_MAX);
+  ownHere = { latest: to, seen };
   try {
-    localStorage.setItem(CHAIN_KEY, JSON.stringify([...readChain().filter(([f]) => f !== from), [from, to]].slice(-CHAIN_MAX)));
+    localStorage.setItem(OWN_KEY, JSON.stringify(ownHere));
   } catch {
-    // Without storage a sibling tab's next write is refused as a conflict and refetches: safe, only less smooth.
+    storageWorks = false;
   }
 };
-const latestOwnVersion = (etag: string): string => {
-  const next = new Map(readChain());
-  const seen = new Set([etag]);
-  let at = etag;
-  for (let to = next.get(at); to !== undefined && !seen.has(to); to = next.get(at)) {
-    seen.add(to);
-    at = to;
-  }
-  return at;
+const writeBase = (read: string): string => {
+  const own = readOwn();
+  return own && own.seen.includes(read) ? own.latest : read;
 };
 
 const queueWrite = (patch: Partial<AppSettings>, reset: boolean, lastRead: () => string | undefined) => {
   const url = reset ? '/api/settings/app?reset=1' : '/api/settings/app';
   const send = async () => {
     const read = lastRead();
-    const base = read === undefined ? undefined : latestOwnVersion(read);
+    const base = read === undefined ? undefined : writeBase(read);
     const written = await apiSend<Written>('PUT', url, patch, base === undefined ? {} : { 'if-match': base });
     if (base !== undefined && written.etag) recordWrite(base, written.etag);
     return written;
@@ -92,8 +95,10 @@ export function useSaveSettings() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   // A write the server refused because settings.json could not be read: sent again only if the user asks to replace the file.
-  const [refused, setRefused] = useState<{ patch: Partial<AppSettings>; okText: string } | null>(null);
-  const save = async (patch: Partial<AppSettings>, okText: string, reset = false) => {
+  const [refused, setRefused] = useState<{ patch: Partial<AppSettings>; okText: string; onSaved?: () => void } | null>(null);
+  /** `onSaved` runs once the patch is taken, also when it is taken only after the user asks to replace the file. */
+  const save = async (patch: Partial<AppSettings>, okText: string, opts: { onSaved?: () => void; reset?: boolean } = {}) => {
+    const { onSaved, reset = false } = opts;
     setError(null);
     setRefused(null);
     setUnanswered([...unanswered, patch]);
@@ -106,12 +111,13 @@ export function useSaveSettings() {
       } finally {
         setUnanswered(unanswered.filter((p) => p !== patch));
       }
+      onSaved?.();
       toast.success(okText);
       await Promise.all([qc.invalidateQueries({ queryKey: SETTINGS_KEY }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
       return true;
     } catch (err) {
       const refusal = err instanceof ApiError && err.status === 409 ? (err.body as { code?: unknown; current?: VersionedRead } | null) : null;
-      if (refusal?.code === 'settings-problem') setRefused({ patch, okText });
+      if (refusal?.code === 'settings-problem') setRefused({ patch, okText, onSaved });
       // Changed elsewhere: the latest values are shown and the fields' drafts kept, for the user to check and save again.
       if (refusal?.code === 'settings-changed') {
         await qc.cancelQueries({ queryKey: SETTINGS_KEY });
@@ -123,7 +129,7 @@ export function useSaveSettings() {
       return false;
     }
   };
-  const replace = refused ? () => save(refused.patch, refused.okText, true) : null;
+  const replace = refused ? () => save(refused.patch, refused.okText, { onSaved: refused.onSaved, reset: true }) : null;
   return { save, error, replace };
 }
 
@@ -193,9 +199,7 @@ export function AppTab() {
                   disabled={retention === null || Number(retention) === s.retention}
                   onClick={() => {
                     const sent = retention;
-                    void save({ retention: Number(sent) }, 'Retention saved').then((ok) => {
-                      if (ok) setRetention(keepNewer(sent));
-                    });
+                    void save({ retention: Number(sent) }, 'Retention saved', { onSaved: () => setRetention(keepNewer(sent)) });
                   }}
                 >
                   Save
@@ -250,7 +254,7 @@ export function EngineSettings() {
               <input id="setting-model" value={model ?? s.modelDefault} placeholder="CLI default" onChange={(e) => setModel(e.target.value)} />
               <button type="button" disabled={model === null || model === s.modelDefault} onClick={() => {
                   const sent = model;
-                  void save({ modelDefault: sent ?? '' }, 'Model default saved').then((ok) => ok && setModel(keepNewer(sent)));
+                  void save({ modelDefault: sent ?? '' }, 'Model default saved', { onSaved: () => setModel(keepNewer(sent)) });
                 }}>
                 Save
               </button>
@@ -269,11 +273,11 @@ export function EngineSettings() {
                 disabled={budget5 === null && budget7 === null}
                 onClick={() => {
                   const [sent5, sent7] = [budget5, budget7];
-                  void save({ usageBudgets: { fiveHourTokens: toBudget(sent5, s.usageBudgets.fiveHourTokens), sevenDayTokens: toBudget(sent7, s.usageBudgets.sevenDayTokens) } }, 'Budgets saved').then((ok) => {
-                    if (ok) {
+                  void save({ usageBudgets: { fiveHourTokens: toBudget(sent5, s.usageBudgets.fiveHourTokens), sevenDayTokens: toBudget(sent7, s.usageBudgets.sevenDayTokens) } }, 'Budgets saved', {
+                    onSaved: () => {
                       setBudget5(keepNewer(sent5));
                       setBudget7(keepNewer(sent7));
-                    }
+                    },
                   });
                 }}
               >
