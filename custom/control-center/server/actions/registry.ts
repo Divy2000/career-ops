@@ -233,7 +233,7 @@ interface DeleteParse {
  * The rows tracker.mjs delete --num n removes, matched as its removeRowByNum does (a trimmed table line whose number
  * cell is exactly n), each as the page shows it, or null for one too malformed to parse.
  */
-async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<{ rows: Array<{ company: string; role: string; report: number | null } | null>; respelled: string | null }> {
+async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<{ rows: Array<RowIdentity | null>; respelled: string | null }> {
   const [tp, file] = await Promise.all([importCore<DeleteParse>(ctx.codeRoot, 'tracker-parse.mjs'), resolveTrackerFile(ctx.codeRoot, ctx.dataRoot)]);
   let text: string;
   try {
@@ -256,6 +256,39 @@ async function rowsDeletedUnder(ctx: ActionContext, n: number): Promise<{ rows: 
   return { rows, respelled };
 }
 
+/** The rows set-status.mjs --row n chooses from: every parseable line whose number reads as n, as the page shows it. */
+async function rowsSetUnder(ctx: ActionContext, n: number): Promise<RowIdentity[]> {
+  const [tp, file] = await Promise.all([importCore<DeleteParse>(ctx.codeRoot, 'tracker-parse.mjs'), resolveTrackerFile(ctx.codeRoot, ctx.dataRoot)]);
+  let text: string;
+  try {
+    text = fs.readFileSync(file.canonical, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+  const lines = text.split('\n');
+  const colmap = tp.resolveColumns(lines);
+  return lines
+    .map((l) => tp.parseTrackerRow(l, colmap))
+    .filter((raw) => raw !== null && raw.num === n)
+    .map((raw) => ({ company: raw!.company ?? '', role: raw!.role ?? '', report: tp.extractTrackerReportLinks(raw!.report ?? '', raw!.notes ?? '')[0]?.target ?? null }));
+}
+
+type RowIdentity = { company: string; role: string; report: number | null };
+type ExpectedRow = { expectCompany?: string; expectRole?: string; expectReport?: number | null };
+const expectsRow = (p: ExpectedRow) => p.expectCompany !== undefined || p.expectRole !== undefined || p.expectReport !== undefined;
+const isExpectedRow = (p: ExpectedRow) => (r: RowIdentity | null) =>
+  r !== null && (p.expectCompany === undefined || r.company === p.expectCompany) && (p.expectRole === undefined || r.role === p.expectRole) && (p.expectReport === undefined || r.report === p.expectReport);
+// expectCompany/expectRole/expectReport: the row the page showed under that number. Scalars, so the palette's params
+// dialog can ask for them too.
+const expectedRowParams = {
+  // Uncapped: they echo a hand-editable tracker cell, and the request body limit already bounds them.
+  expectCompany: z.string().trim().optional(),
+  expectRole: z.string().trim().optional(),
+  // The palette types a nullable number as text, so a typed report number is read as the number.
+  expectReport: z.preprocess((v) => (typeof v === 'string' && /^\s*\d+\s*$/.test(v) ? Number(v) : v), positive.nullable()).optional(),
+};
+
 export const ACTIONS: ActionDef[] = [
   // ---- tracker ----
   define({
@@ -265,7 +298,17 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: true,
-    params: z.object({ row: positive, state: z.enum(TRACKER_STATES), note: z.string().max(STATUS_NOTE_MAX).optional(), on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
+    // A delete reindexes the tracker, so a page's row number can name another application by the time it is clicked:
+    // a status naming a row that is no longer under that number is refused rather than set on an unseen one.
+    params: z.object({ row: positive, state: z.enum(TRACKER_STATES), note: z.string().max(STATUS_NOTE_MAX).optional(), on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), ...expectedRowParams }),
+    check: async (p, ctx) => {
+      if (!expectsRow(p)) return null;
+      const rows = await rowsSetUnder(ctx, p.row);
+      if (rows.length === 0) return { status: 409, error: `Row #${p.row} no longer exists. Reload the tracker.` };
+      // Several rows under one number: set-status.mjs refuses that itself, naming them.
+      if (rows.length > 1 || isExpectedRow(p)(rows[0]!)) return null;
+      return { status: 409, error: `Row #${p.row} now holds ${rows[0]!.company} (${rows[0]!.role}), not the row you picked. Reload the tracker.` };
+    },
     build: (p, ctx) => node(ctx, 'setStatus', ['--row', String(p.row), p.state, '--source', 'web', '--json', ...noteArg(p.note), ...opt(p.on, '--on')]),
     exitMap: { 1: 400, 2: 404, 3: 409, 4: 503 },
   }),
@@ -277,24 +320,14 @@ export const ACTIONS: ActionDef[] = [
     resources: ['tracker'],
     claude: false,
     sync: true,
-    // expectCompany/expectRole/expectReport: the row the page previewed. A number freed by a delete can be reused by a
-    // later merge, so a confirm naming a row that is no longer under n is refused rather than deleting an unseen one.
-    // Scalars, so the palette's params dialog can ask for them too.
-    params: z.object({
-      n: positive,
-      dryRun: z.boolean().default(false),
-      // Uncapped: they echo a hand-editable tracker cell, and the request body limit already bounds them.
-      expectCompany: z.string().trim().optional(),
-      expectRole: z.string().trim().optional(),
-      // The palette types a nullable number as text, so a typed report number is read as the number.
-      expectReport: z.preprocess((v) => (typeof v === 'string' && /^\s*\d+\s*$/.test(v) ? Number(v) : v), positive.nullable()).optional(),
-    }),
+    // The expected row is the one the page previewed. A number freed by a delete can be reused by a later merge, so a
+    // confirm naming a row that is no longer under n is refused rather than deleting an unseen one.
+    params: z.object({ n: positive, dryRun: z.boolean().default(false), ...expectedRowParams }),
     preview: (p) => p.dryRun,
     check: async (p, ctx) => {
-      if (p.dryRun || (p.expectCompany === undefined && p.expectRole === undefined && p.expectReport === undefined)) return null;
+      if (p.dryRun || !expectsRow(p)) return null;
       const { rows, respelled } = await rowsDeletedUnder(ctx, p.n);
-      const matches = (r: (typeof rows)[number]) =>
-        r !== null && (p.expectCompany === undefined || r.company === p.expectCompany) && (p.expectRole === undefined || r.role === p.expectRole) && (p.expectReport === undefined || r.report === p.expectReport);
+      const matches = isExpectedRow(p);
       // tracker.mjs deletes every row numbered n, so each of them must be the previewed one.
       const other = rows.find((r) => !matches(r));
       if (other === undefined) return null;
