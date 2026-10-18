@@ -72,6 +72,13 @@ async function type(input: HTMLInputElement, value: string) {
   });
 }
 
+async function choose(select: HTMLSelectElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, value);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 async function click(el: HTMLElement) {
   await act(async () => el.click());
 }
@@ -146,5 +153,31 @@ describe('app settings: the latest local choice wins', () => {
     const alert = await until(() => host.querySelector('[role="alert"]'), 'the problem alert');
     expect(alert.textContent).toContain('settings.json is not valid JSON');
     expect(alert.textContent).toContain('Defaults are in effect');
+  });
+
+  it('Given two browser tabs, when the older write is delayed past the newer one, then the newer choice persists', async () => {
+    // The browser's Web Locks: one holder per name across every tab of the origin, granted in request order.
+    const held = new Map<string, Promise<unknown>>();
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: (name: string, cb: () => Promise<unknown>) => {
+          const run = (held.get(name) ?? Promise.resolve()).then(() => cb());
+          held.set(
+            name,
+            run.catch(() => undefined),
+          );
+          return run;
+        },
+      },
+    });
+    const tabA = await mount('EngineSettings', true);
+    const tabB = await mount('EngineSettings', true);
+    await choose(await until(() => tabA.querySelector<HTMLSelectElement>('#setting-concurrency'), 'tab A select'), '2');
+    await until(() => pending.length > 0, 'tab A write on its way');
+    await choose(await until(() => tabB.querySelector<HTMLSelectElement>('#setting-concurrency'), 'tab B select'), '3');
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    await drain();
+    expect(settings.claudeConcurrency).toBe(3);
   });
 });

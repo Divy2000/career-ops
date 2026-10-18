@@ -11,8 +11,11 @@ import type { AppSettings, AppSettingsRead } from '@shared/api';
 const SETTINGS_KEY = ['system', 'settings'];
 
 // The server takes app-settings patches without an ETag, in the order they arrive, so two writes on their way at once
-// could land older last and undo the user's latest choice. Each write waits for the one before it to answer.
+// could land older last and undo the user's latest choice. Each write waits for the one before it to answer, in this
+// tab through the queue and across the browser's tabs through a Web Lock (granted in request order).
 let writeQueue: Promise<unknown> = Promise.resolve();
+const WRITE_LOCK = 'career-ops-app-settings-write';
+const withWriteLock = <T,>(send: () => Promise<T>): Promise<T> => (typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request(WRITE_LOCK, send) : send());
 
 // Patches sent and not yet answered, oldest first. Every view of the settings shows them over the server's read, so a
 // control changed again before its save answers starts from the user's latest choice, not the last read.
@@ -30,7 +33,7 @@ const subscribe = (l: () => void) => {
 const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
 
 const queueWrite = (patch: Partial<AppSettings>) => {
-  const write = writeQueue.then(() => apiSend<AppSettings>('PUT', '/api/settings/app', patch));
+  const write = writeQueue.then(() => withWriteLock(() => apiSend<AppSettings>('PUT', '/api/settings/app', patch)));
   writeQueue = write.catch(() => undefined);
   return write;
 };
