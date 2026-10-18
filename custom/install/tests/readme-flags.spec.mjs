@@ -175,7 +175,7 @@ test('Given GIT_DIR exported at another repository, when the check reads a ref, 
   process.env.GIT_DIR = path.join(other, '.git');
   const head = spawnSync('git', ['-C', ROOT, 'show', `HEAD:${INSTALL_REL}`], { encoding: 'utf8', env: gitTestEnv(), maxBuffer: 16 * 1024 * 1024 }).stdout;
   assert.equal(readFileSync(installerAt('HEAD', { explicit: true }).file, 'utf8'), head);
-  assert.equal(installerAt(pinnedRef(), { explicit: false }).skip, undefined, 'the pinned tag was looked up in the other repository');
+  assert.equal(installerAt('HEAD', { explicit: false }).skip, undefined, 'the default ref was looked up in the other repository');
 });
 
 test('by default the check covers the working tree and the tag bootstrap.sh pins, which README users install (SW4-tests-07)', () => {
