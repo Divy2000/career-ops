@@ -706,13 +706,34 @@ test('given a stale local-paths.txt lock, when several installers find it at onc
   fs.mkdirSync(`${f}.lock`);
   const old = new Date(Date.now() - 10 * 60_000);
   fs.utimesSync(`${f}.lock`, old, old);
-  // Every look at the lock's age is slow, so all installers judge the same lock stale before any breaks it.
+  // Each installer waits at a barrier until all are started, so a slow boot cannot run them one after another.
+  const go = path.join(d, 'go');
+  const readyDir = path.join(d, 'ready');
+  fs.mkdirSync(readyDir);
+  // All installers read the old lock's age at once, but each acts on that stale verdict a little later than the one
+  // before it, so the later ones find the fresh lock the first took after breaking the old one.
   const preload = put(path.join(d, 'slow-stat.mjs'), `import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+fs.writeFileSync(${JSON.stringify(readyDir)} + '/ready-' + process.pid, '');
+while (!fs.existsSync(${JSON.stringify(go)})) sleep(2);
+let slot = 0;
+for (;; slot++) {
+  try {
+    fs.mkdirSync(${JSON.stringify(d)} + '/slot-' + slot);
+    break;
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+}
 const realStat = fs.statSync;
+let firstLook = true;
 fs.statSync = (p, ...rest) => {
   const st = realStat(p, ...rest);
-  if (String(p) === ${JSON.stringify(`${f}.lock`)}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+  if (String(p) === ${JSON.stringify(`${f}.lock`)} && firstLook) {
+    firstLook = false;
+    sleep(300 + slot * 200);
+  }
   return st;
 };
 // And each holds the lock a while, reading the file, so a lock broken under its holder lets two read at once.
@@ -724,7 +745,17 @@ fs.readFileSync = (p, ...rest) => {
 };
 syncBuiltinESMExports();
 `);
-  const runs = await Promise.all(Array.from({ length: 4 }, () => seedAsync(['local-paths', '--dir', d], preload)));
+  let exited = 0;
+  const all = Promise.all(Array.from({ length: 4 }, () => seedAsync(['local-paths', '--dir', d], preload).then((r) => { exited++; return r; })));
+  while (fs.readdirSync(readyDir).length < 4) {
+    if (exited) {
+      fs.writeFileSync(go, '');
+      assert.fail(`an installer exited before it was ready: ${JSON.stringify(await all)}`);
+    }
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  fs.writeFileSync(go, '');
+  const runs = await all;
   for (const r of runs) assert.equal(r.status, 0, r.stderr);
   assert.equal(fs.readFileSync(f, 'utf8'), 'notes/\ncustom/\n');
   assert.deepEqual(runs.map((r) => r.stdout.trim()).sort(), ['added', 'present', 'present', 'present']);
