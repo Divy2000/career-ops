@@ -24,11 +24,13 @@ describe('deleting a session whose cancelled turn is still stopping in another s
     const app = await makeTestApp({ dataRoot, guardRoot: tempDir('cc-test-guard-') });
     try {
       const meta = newSession(app);
-      const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', "process.on('SIGTERM', () => {}); setTimeout(() => {}, 3000)"], cwd: process.cwd() } });
+      // The process says when it ignores SIGTERM: a cancel before that (a slow start on a loaded machine) would end it at once.
+      const ready = path.join(tempDir('cc-r31-stopping-'), 'ready');
+      const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: meta.id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(ready)}, ''); setTimeout(() => {}, 3000)`], cwd: process.cwd() } });
       app.sessions.store.beginTurn(meta.id, { runId: run.id, userText: 'What is overdue?' });
+      while (!fs.existsSync(ready)) await new Promise((r) => setTimeout(r, 20));
       // The other process cancelled it: its run is stopping, and the session is recorded cancelled at once.
-      await new Promise((r) => setTimeout(r, 300));
-      app.runner.cancel(run.id);
+      expect(app.runner.cancel(run.id)).toMatchObject({ status: 'cancelled', endedAt: null });
       app.sessions.store.setStatus(meta.id, 'cancelled');
       await expect(app.sessions.delete(meta.id)).rejects.toThrow(/still finishing/);
       expect(app.sessions.read(meta.id)).not.toBeNull();
