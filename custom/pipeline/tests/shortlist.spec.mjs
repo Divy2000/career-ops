@@ -376,6 +376,54 @@ test('two overlapping shortlist runs both keep their tier lookups: the slower wr
   }
 });
 
+test('a shortlist run whose pipeline changed during its lookups does not overwrite the newer shortlist with the old rows (R32-scripts-a-X-01)', async () => {
+  let releaseAcme = null;
+  let acmeSeen = false;
+  const server = http.createServer((req, res) => {
+    const q = (new URL(req.url, 'http://x').searchParams.get('q') ?? '').toLowerCase();
+    const answer = () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ results: [] }));
+    };
+    // The slow run's Acme lookup is held until a newer run has written its shortlist.
+    if (q.startsWith('acme') && !acmeSeen) {
+      acmeSeen = true;
+      releaseAcme = answer;
+      return;
+    }
+    answer();
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const root = rankedRoot();
+  const pipeline = path.join(root, 'data', 'pipeline.md');
+  const out = path.join(root, 'data', 'shortlist.md');
+  const row = (n, company) => `- [ ] https://jobs.example.com/${n} | ${company} | Backend Engineer | Remote | rank: 4.0/5 — fit\n`;
+  const env = rootEnv(root, { H1B_API_BASE: `http://127.0.0.1:${server.address().port}` });
+  const runShortlist = () => {
+    const child = spawn(process.execPath, [SHORTLIST], { cwd: REPO, env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    child.stderr.setEncoding('utf8').on('data', (d) => { err += d; });
+    return new Promise((r) => child.on('exit', (code) => r({ code, err })));
+  };
+  try {
+    fs.writeFileSync(pipeline, `# Pipeline\n\n## Pending\n\n${row(1, 'Acme')}`);
+    const slow = runShortlist();
+    await waitFor(() => acmeSeen, 'the slow run to start its Acme lookup');
+    fs.writeFileSync(pipeline, `# Pipeline\n\n## Pending\n\n${row(2, 'Globex')}`);
+    const fast = await runShortlist();
+    assert.equal(fast.code, 0, fast.err);
+    assert.match(fs.readFileSync(out, 'utf8'), /\| Globex \|/);
+    releaseAcme();
+    const s = await slow;
+    assert.equal(s.code, 0, s.err);
+    const md = fs.readFileSync(out, 'utf8');
+    assert.match(md, /\| Globex \|/, `the newer pipeline's row is still listed:\n${md}`);
+    assert.doesNotMatch(md, /\| Acme \|/, `the old pipeline's row is not published:\n${md}`);
+  } finally {
+    server.close();
+  }
+});
+
 test('a lookup that fails in one run does not replace the entry an overlapping run has just cached (R20-scripts-a-X-01)', async () => {
   let failAcme = null;
   let acmeSeen = false;
