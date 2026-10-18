@@ -229,4 +229,25 @@ describe('app settings: this browser\'s own saves never conflict with each other
     expect(settings.logos).toBe(false);
     expect(puts.map((p) => p.ifMatch)).toEqual(['v1', 'v2']);
   });
+
+  it('Given versions named by content, when the file returns to a version this browser saw and a save is refused, then the next save is taken (R34-feat-c-L1-01)', async () => {
+    contentEtag = true;
+    const host = await mount('AppTab');
+    const box = () => host.querySelector<HTMLInputElement>('#setting-logos');
+    await act(async () => (await until(box, 'the logos checkbox')).click());
+    await until(() => settings.logos === true && box()?.checked === true, 'logos saved on');
+    // Another browser (or a hand restore) brings back the content this browser started from.
+    elsewhere({ logos: false });
+    await act(async () => lastQc.invalidateQueries());
+    await until(() => box()?.checked === false, 'the restored value shown');
+    await act(async () => box()!.click());
+    await until(() => /changed since you loaded it/.test(alerts(host)) || settings.logos === true, 'the first save answered');
+    if (settings.logos !== true) {
+      await until(() => box()?.checked === false, 'the current value shown after the refusal');
+      await act(async () => box()!.click());
+      await until(() => settings.logos === true, 'the save after the refusal taken');
+    }
+    expect(puts.at(-1)!.ifMatch).toBe(`c:${JSON.stringify({ ...settings, logos: false })}`);
+  });
 });
+

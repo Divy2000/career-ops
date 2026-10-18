@@ -55,14 +55,22 @@ const readOwn = (): OwnVersions | null => {
     return ownHere;
   }
 };
-const recordWrite = (from: string, to: string) => {
-  const seen = [...(readOwn()?.seen ?? []).filter((v) => v !== from && v !== to), from, to].slice(-OWN_MAX);
-  ownHere = { latest: to, seen };
+const storeOwn = (own: OwnVersions) => {
+  ownHere = own;
   try {
     localStorage.setItem(OWN_KEY, JSON.stringify(ownHere));
   } catch {
     storageWorks = false;
   }
+};
+const recordWrite = (from: string, to: string) => {
+  storeOwn({ latest: to, seen: [...(readOwn()?.seen ?? []).filter((v) => v !== from && v !== to), from, to].slice(-OWN_MAX) });
+};
+// The server refused a write as changed and named its current version: the file is at that version now, whoever wrote
+// it, so a read of it is written as it is, not as one of this browser's earlier versions.
+const forgetVersion = (current: string) => {
+  const own = readOwn();
+  if (own?.seen.includes(current)) storeOwn({ latest: own.latest, seen: own.seen.filter((v) => v !== current) });
 };
 const writeBase = (read: string): string => {
   const own = readOwn();
@@ -121,6 +129,7 @@ export function useSaveSettings() {
       // Changed elsewhere: the latest values are shown and the fields' drafts kept, for the user to check and save again.
       if (refusal?.code === 'settings-changed') {
         await qc.cancelQueries({ queryKey: SETTINGS_KEY });
+        if (refusal.current?.etag) forgetVersion(refusal.current.etag);
         if (refusal.current) qc.setQueryData<VersionedRead>(SETTINGS_KEY, refusal.current);
         void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
       }
