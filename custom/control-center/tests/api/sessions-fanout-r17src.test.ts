@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { copyFixtureRoot, makeTestApp, type TestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import { execNoShell } from '../../server/routes/system.js';
+import { ModeRefusedError } from '../../server/claude/manager.js';
 
 const call = (app: TestApp, url: string, payload: Record<string, unknown>) => app.app.inject({ method: 'POST', url, headers: app.authedWrite, payload });
 const freshApp = () => makeTestApp({ dataRoot: copyFixtureRoot(), guardRoot: tempDir('cc-test-guard-') });
@@ -144,6 +145,19 @@ describe('fan-out and a live evaluation of the same posting', () => {
       const fan = res.json() as Fan;
       expect(fan.sessions.filter((s) => s.status !== 'error').map((s) => s.target.value)).toEqual([OTHER_URL]);
       expect(fan.sessions.find((s) => s.target.value === LIVE_URL)!.error).toContain(live.id);
+    } finally {
+      await quiet(app);
+      await app.close();
+    }
+  });
+});
+
+describe('fan-out of a mode that is not a posting evaluation (R30-fanout-guard)', () => {
+  it('given a non-report-gated mode, when the manager fans it out directly, then it refuses with ModeRefusedError and starts no session', async () => {
+    const app = await freshApp();
+    try {
+      await expect(app.sessions.fanOut({ mode: 'deep', urls: [OTHER_URL] })).rejects.toBeInstanceOf(ModeRefusedError);
+      expect(app.sessions.store.list()).toHaveLength(0);
     } finally {
       await quiet(app);
       await app.close();
