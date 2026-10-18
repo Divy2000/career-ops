@@ -3,7 +3,7 @@
 // no page load, redirect, frame or click reaches a loopback, private or link-local address. The guard's navigate
 // check stays as the early refusal. The MCP speaks on this process's stdin and stdout.
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { isMainModule } from '../../../../lib/is-main-module.mjs';
 import { startEgressProxy } from './browser-egress-proxy.mjs';
 
 export const PLAYWRIGHT_MCP_PACKAGE = '@playwright/mcp@0.0.41';
@@ -42,7 +42,7 @@ export async function launch(extra = []) {
   });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
   launch().catch((err) => {
     process.stderr.write(`playwright-mcp-launcher: ${err && err.message}\n`);
     process.exit(1);

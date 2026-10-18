@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { startEgressProxy, type EgressProxy } from '../../server/claude/browser-egress-proxy.mjs';
 import { PLAYWRIGHT_MCP_PACKAGE, playwrightMcpArgs, playwrightMcpEnv } from '../../server/claude/playwright-mcp-launcher.mjs';
@@ -229,6 +231,28 @@ describe('Playwright MCP launcher', () => {
     expect(args.slice(0, 4)).toEqual(['-y', '@playwright/mcp@0.0.41', '--browser', 'chromium']);
     expect(args.slice(-2)).toEqual(['--proxy-server', 'http://127.0.0.1:4321']);
     expect(args.some((a) => /bypass/i.test(a))).toBe(false);
+  });
+
+  it('starts the MCP when the CLI reaches the launcher through a symlinked folder', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-launcher-'));
+    try {
+      const bin = path.join(tmp, 'bin');
+      fs.mkdirSync(bin);
+      const marker = path.join(tmp, 'npx-ran');
+      fs.writeFileSync(path.join(bin, 'npx'), `#!/bin/sh\necho "$@" > ${JSON.stringify(marker)}\n`, { mode: 0o755 });
+      const linked = path.join(tmp, 'linked-claude');
+      fs.symlinkSync(path.dirname(PLAYWRIGHT_MCP_PATH), linked);
+      const run = spawnSync(process.execPath, [path.join(linked, 'playwright-mcp-launcher.mjs')], {
+        env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` },
+        encoding: 'utf8',
+        timeout: 15_000,
+      });
+      expect(run.status, run.stderr).toBe(0);
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(fs.readFileSync(marker, 'utf8')).toContain(PLAYWRIGHT_MCP_PACKAGE);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it('drops every environment setting that could bypass or replace the proxy', () => {
