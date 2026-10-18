@@ -52,6 +52,29 @@ describe('Keyword match', () => {
     expect(res.json().error).toMatch(/report 99/i);
   });
 
+  it('reads the report file it is named when two reports share the number, not the first by name (R34-reports-FC-02)', async () => {
+    const reports = path.join(t.cfg.dataRoot, 'reports');
+    const second = path.join(reports, '001-zz-other.md');
+    fs.copyFileSync(path.join(reports, '003-globex-payments.md'), second);
+    try {
+      const named = await post('insights.keywordMatch', { report: 1, file: '001-zz-other.md' });
+      expect(named.statusCode, named.body).toBe(422);
+      expect(named.json().error).toMatch(/No "## Keywords extracted" block/);
+      const byNumber = await post('insights.keywordMatch', { report: 1 });
+      expect(byNumber.statusCode, byNumber.body).toBe(200);
+      expect(byNumber.json().result).toMatchObject({ total: 15 });
+    } finally {
+      fs.rmSync(second, { force: true });
+    }
+  });
+
+  it('refuses a named report file that is not that report or not under reports/ (R34-reports-FC-02)', async () => {
+    for (const file of ['003-globex-payments.md', '001-missing.md', '../cv.md', '005-RESERVED.md']) {
+      const res = await post('insights.keywordMatch', { report: 1, file });
+      expect(res.statusCode, `${file}: ${res.body}`).toBe(400);
+    }
+  });
+
   it("says why when the report has no keywords block, in the script's own words", async () => {
     const res = await post('insights.keywordMatch', { report: 3 });
     expect(res.statusCode).toBe(422);

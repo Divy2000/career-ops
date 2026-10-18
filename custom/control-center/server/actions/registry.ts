@@ -10,7 +10,7 @@ import { cliScriptPath, importCore } from '../core/adapter.js';
 import { readPdfIndex, rerenderProblem, resolveOutputFile } from '../domains/documents.js';
 import { readTracker } from '../domains/tracker.js';
 import { resolveTrackerFile } from '../domains/trackerPath.js';
-import { listReportFiles } from '../domains/reports.js';
+import { listReportFiles, listReportNames, reportNumberOf } from '../domains/reports.js';
 import { companyHistoryInputs } from '../domains/insightsCache.js';
 import { containedTarget, OutsideRootsError } from '../lib/atomic-write.js';
 import { RunStore } from '../runner/store.js';
@@ -920,10 +920,14 @@ export const ACTIONS: ActionDef[] = [
     resources: [],
     claude: false,
     sync: true,
-    // keyword-match.mjs <report-file> --json: the report's file under reports/, read against cv.md.
-    params: z.object({ report: positive }),
-    check: (p, ctx) => (listReportFiles(ctx.dataRoot).has(p.report) ? null : `There is no file for report ${p.report} under reports/.`),
-    build: (p, ctx) => node(ctx, 'keywordMatch', [path.join(ctx.dataRoot, 'reports', listReportFiles(ctx.dataRoot).get(p.report)!), '--json']),
+    // keyword-match.mjs <report-file> --json: the report's file under reports/, read against cv.md. Two reports can share
+    // a number, so a caller that knows which file the row links names it; with no file named, the number decides.
+    params: z.object({ report: positive, file: z.string().min(1).max(255).optional() }),
+    check: (p, ctx) => {
+      if (p.file === undefined) return listReportFiles(ctx.dataRoot).has(p.report) ? null : `There is no file for report ${p.report} under reports/.`;
+      return reportNumberOf(p.file) === p.report && listReportNames(ctx.dataRoot).includes(p.file) ? null : `There is no file ${p.file} for report ${p.report} under reports/.`;
+    },
+    build: (p, ctx) => node(ctx, 'keywordMatch', [path.join(ctx.dataRoot, 'reports', p.file ?? listReportFiles(ctx.dataRoot).get(p.report)!), '--json']),
     explainFailure: ({ code, stderr }) => ({ status: code === 1 ? 422 : 500, error: stderr.trim().split('\n').at(-1) || `keyword-match.mjs exited ${code}` }),
   }),
   // jd-skill-gap.mjs needs a JD file (it exits 1 with its usage text without one): the pasted JD goes to a temp file.

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { importCore } from '../core/adapter.js';
 import { readText } from './files.js';
-import { parseScore, postingUrl, readReport, summaryOf, type ReportSummary } from './reports.js';
+import { listReportNames, parseScore, postingUrl, readReport, readReportFile, reportNumberOf, summaryOf, type ReportRead, type ReportSummary } from './reports.js';
 import { parseFollowups } from './followups.js';
 import { statusLabeler } from './insights.js';
 import { resolveTrackerFile } from './trackerPath.js';
@@ -55,7 +55,41 @@ export function pdfPresent(cell: string): boolean {
   return v !== '' && v !== '-' && v !== String.fromCharCode(0x2014) && v !== '❌' && !/^(no|pending|n\/a)$/i.test(v);
 }
 
+/**
+ * The report file a row's link names, when it is one under reports/ numbered `num`: two reports can share a number, and
+ * the link is what says which one the row means. Null when the link names no file there, so the number decides.
+ */
+function linkedReportFile(cells: string[], num: number, names: Set<string>): string | null {
+  for (const cell of cells) {
+    for (const [token] of cell.matchAll(/[^\s\\/()<>[\]|]+\.md\b/gi)) {
+      let name = token;
+      try {
+        name = decodeURIComponent(token);
+      } catch {
+        // A stray % is part of the name as written.
+      }
+      if (reportNumberOf(name) === num && names.has(name)) return name;
+    }
+  }
+  return null;
+}
+
+/** The report a row joins: the file its link names when known, else the report by number. */
+export function readLinkedReport(dataRoot: string, file: string | null, num: number): ReportRead {
+  return file !== null ? readReportFile(dataRoot, file) : readReport(dataRoot, num);
+}
+
 export async function readTracker(codeRoot: string, dataRoot: string): Promise<TrackerRead> {
+  return (await loadTracker(codeRoot, dataRoot)).read;
+}
+
+/** The tracker with, for each row, the report file its link names (null when none is known). */
+export async function loadTracker(codeRoot: string, dataRoot: string): Promise<{ read: TrackerRead; reportFiles: Map<TrackerRow, string | null> }> {
+  const reportFiles = new Map<TrackerRow, string | null>();
+  return { read: await readTrackerInto(codeRoot, dataRoot, reportFiles), reportFiles };
+}
+
+async function readTrackerInto(codeRoot: string, dataRoot: string, reportFiles: Map<TrackerRow, string | null>): Promise<TrackerRead> {
   const [tp, tracker, label] = await Promise.all([importCore<TrackerParse>(codeRoot, 'tracker-parse.mjs'), resolveTrackerFile(codeRoot, dataRoot), statusLabeler(codeRoot)]);
   const trackerPath = tracker.canonical;
   const read = readText(trackerPath);
@@ -66,6 +100,7 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
   if (dataLines.length === 0) return { kind: 'malformed', path: trackerPath, error: 'no markdown table found' };
   const lastContact = lastContactByApp(dataRoot);
   const rows: TrackerRow[] = [];
+  let reportNames: Set<string> | null = null;
   for (const line of dataLines) {
     const raw = tp.parseTrackerRow(line, colmap);
     if (!raw) continue;
@@ -73,12 +108,15 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
     const reportNum = tp.extractTrackerReportLinks(raw.report ?? '', raw.notes ?? '')[0]?.target ?? null;
     let summary: ReportSummary | null = null;
     let reportState: TrackerRow['reportState'] = 'none';
+    let reportFile: string | null = null;
     if (reportNum !== null) {
-      const rr = readReport(dataRoot, reportNum);
+      reportNames ??= new Set(listReportNames(dataRoot));
+      reportFile = linkedReportFile([raw.report ?? '', raw.notes ?? ''], reportNum, reportNames);
+      const rr = readLinkedReport(dataRoot, reportFile, reportNum);
       reportState = rr.kind;
       if (rr.kind === 'ok') summary = summaryOf(rr.report);
     }
-    rows.push({
+    const row: TrackerRow = {
       num: raw.num,
       date: raw.date ?? '',
       company: raw.company ?? '',
@@ -99,7 +137,9 @@ export async function readTracker(codeRoot: string, dataRoot: string): Promise<T
       lastContact: lastContact.get(raw.num) ?? null,
       summary,
       reportState,
-    });
+    };
+    rows.push(row);
+    reportFiles.set(row, reportFile);
   }
   // A header and separator with no rows is a new user's valid empty tracker; only unparseable data lines are malformed.
   const dataRowLines = dataLines.filter((l) => !tp.isHeaderRow(l));
