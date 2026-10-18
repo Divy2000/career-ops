@@ -4,7 +4,13 @@ import fastifyCookie from '@fastify/cookie';
 import type { ServerConfig } from '../config.js';
 import { PAGE_THEME_CSS } from '../../shared/page-theme.js';
 
-export const SESSION_COOKIE = 'cc_session';
+/**
+ * Named per port: browsers key cookies by host and path, not port, so one shared name would let signing into a second
+ * instance (another data root on another port) replace the first one's cookie and sign it out. The supervisor uses the same name.
+ */
+export function sessionCookieName(publicPort: number): string {
+  return `cc_session_${publicPort}`;
+}
 
 /** Constant-time string compare; unequal lengths compare against self so timing stays flat. */
 export function safeEqual(a: string | undefined, b: string): boolean {
@@ -38,7 +44,7 @@ const LOCKED_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancesto
 
 export function hasSession(req: FastifyRequest, cfg: ServerConfig): boolean {
   const cookies = (req as FastifyRequest & { cookies?: Record<string, string | undefined> }).cookies ?? {};
-  return safeEqual(cookies[SESSION_COOKIE], cfg.sessionSecret);
+  return safeEqual(cookies[sessionCookieName(cfg.publicPort)], cfg.sessionSecret);
 }
 
 function cspFor(cfg: ServerConfig): string {
@@ -92,7 +98,7 @@ export async function authPlugin(app: FastifyInstance, cfg: ServerConfig): Promi
     if (!safeEqual(req.query.t, cfg.token)) {
       return reply.code(403).type('text/plain').send('invalid token');
     }
-    reply.setCookie(SESSION_COOKIE, cfg.sessionSecret, {
+    reply.setCookie(sessionCookieName(cfg.publicPort), cfg.sessionSecret, {
       httpOnly: true,
       sameSite: 'strict',
       path: '/',

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeTestApp, TEST_HOST, TEST_TOKEN, type TestApp } from '../helpers/app.js';
-import { SESSION_COOKIE, safeEqual } from '../../server/auth/plugin.js';
+import { sessionCookieName, safeEqual } from '../../server/auth/plugin.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -67,10 +67,30 @@ describe('auth and request hardening', () => {
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe('/');
     const cookie = String(res.headers['set-cookie']);
-    expect(cookie).toContain(`${SESSION_COOKIE}=`);
+    expect(cookie).toContain(`${sessionCookieName(t.cfg.publicPort)}=`);
     expect(cookie).toMatch(/HttpOnly/i);
     expect(cookie).toMatch(/SameSite=Strict/i);
     expect(cookie).toMatch(/Path=\//);
+  });
+
+  it('two instances on other ports keep apart session cookies: signing into one does not sign the other out (R32-supervisor-L2-01)', async () => {
+    // Browsers key cookies by host and path, not port: one shared name would make the second sign-in replace the first.
+    const other = await makeTestApp({ publicPort: 4318, sessionSecret: 'other-instance-secret' });
+    try {
+      const signIn = async (app: TestApp, host: string) => {
+        const res = await app.app.inject({ method: 'GET', url: `/auth?t=${TEST_TOKEN}`, headers: { host } });
+        return String(res.headers['set-cookie']).split(';')[0]!;
+      };
+      const mine = await signIn(t, TEST_HOST);
+      const theirs = await signIn(other, '127.0.0.1:4318');
+      expect(mine.split('=')[0]).not.toBe(theirs.split('=')[0]);
+      // The browser now sends both cookies to both ports.
+      const jar = `${theirs}; ${mine}`;
+      expect((await t.app.inject({ method: 'GET', url: '/api/system/status', headers: { host: TEST_HOST, cookie: jar } })).statusCode).toBe(200);
+      expect((await other.app.inject({ method: 'GET', url: '/api/system/status', headers: { host: '127.0.0.1:4318', cookie: jar } })).statusCode).toBe(200);
+    } finally {
+      await other.close();
+    }
   });
 
   it('the cookie unlocks the API and responses carry the CSP', async () => {

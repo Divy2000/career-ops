@@ -31,7 +31,7 @@ test('the token URL sets the cookie and the shell renders without serious axe vi
   await page.goto(`/auth?t=${E2E_TOKEN}`);
   await expect(page).toHaveURL(/\/$/);
   const cookies = await page.context().cookies();
-  const session = cookies.find((c) => c.name === 'cc_session');
+  const session = cookies.find((c) => c.name === `cc_session_${E2E_PORT}`);
   expect(session).toBeTruthy();
   expect(session?.httpOnly).toBe(true);
   expect(session?.sameSite).toBe('Strict');
