@@ -135,17 +135,37 @@ export function splitSections(body: string): { intro: string; sections: ReportSe
   return { intro: intro.join('\n').trim(), sections };
 }
 
-function machineSummary(md: string, file: string): Record<string, unknown> | null {
-  const idx = md.search(/^##\s+Machine Summary\s*$/m);
-  if (idx === -1) return null;
-  const after = md.slice(idx);
-  const fence = after.match(/```(?:yaml|yml)?\s*\n([\s\S]*?)\n```/);
+/**
+ * The report's own `## Machine Summary` section: the template writes it directly after the header and the archived JD
+ * last, so it is the first such heading outside a fence and before any `## Job Description` heading. A JD's own
+ * "## Machine Summary" (or a yaml fence in the JD) is the posting's text, never the report's. The section ends at the
+ * next `##` heading outside a fence.
+ */
+function machineSummarySection(md: string): { line: number; content: string } | null {
+  const lines = md.split('\n');
+  let inFence = false;
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (/^```/.test(line)) inFence = !inFence;
+    const h = !inFence ? line.match(/^##\s+(.*)$/) : null;
+    if (!h) continue;
+    if (start !== -1) return { line: start + 1, content: lines.slice(start + 1, i).join('\n') };
+    if (JD_HEADING.test(h[1]!.trim())) return null;
+    if (/^Machine Summary\s*$/.test(h[1]!)) start = i;
+  }
+  return start === -1 ? null : { line: start + 1, content: lines.slice(start + 1).join('\n') };
+}
+
+function machineSummary(section: { line: number; content: string } | null, file: string): Record<string, unknown> | null {
+  if (!section) return null;
+  const fence = section.content.match(/```(?:yaml|yml)?\s*\n([\s\S]*?)\n```/);
   if (!fence) return null;
   try {
     const parsed = YAML.parse(fence[1]!);
     return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
   } catch (err) {
-    const line = md.slice(0, idx).split('\n').length + ((err as { linePos?: Array<{ line: number }> }).linePos?.[0]?.line ?? 0);
+    const line = section.line + ((err as { linePos?: Array<{ line: number }> }).linePos?.[0]?.line ?? 0);
     throw new ParseError(`Machine Summary YAML is invalid: ${(err as Error).message.split('\n')[0]}`, file, line);
   }
 }
@@ -189,11 +209,12 @@ export function parseReport(markdown: string, file: string, num: number): Report
   const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
   const scoreRaw = headerField(markdown, SCORE_KEY);
   // The title word is localized ("# Bewertung:", "# Evaluation :"), so a report is told apart by its score header or Machine Summary.
-  const scored = new RegExp(`^\\*\\*(?:${SCORE_KEY})\\s*:\\*\\*`, 'mi').test(markdown) || /^##\s+Machine Summary\s*$/m.test(markdown);
+  const summarySection = machineSummarySection(markdown);
+  const scored = new RegExp(`^\\*\\*(?:${SCORE_KEY})\\s*:\\*\\*`, 'mi').test(markdown) || summarySection !== null;
   if (!title || !/^[^:]+:\s*\S/.test(title) || !scored) {
     throw new ParseError('Not an evaluation report: missing a "# Evaluation: Company - Role" title, a **Score:** header or a Machine Summary', file, 1);
   }
-  const machine = machineSummary(markdown, file);
+  const machine = machineSummary(summarySection, file);
   const [companyPart, rolePart] = splitTitle(title.replace(/^[^:]+:\s*/, ''));
   const { intro, sections } = splitSections(markdown);
   const blockA = sections.find((s) => s.letter === 'A')?.content ?? '';

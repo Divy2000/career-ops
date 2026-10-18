@@ -411,6 +411,21 @@ describe('usage meter from ~/.claude/projects jsonl', () => {
     expect(usage.sevenDay).toMatchObject({ tokens: 1360, messages: 2 });
     expect(computeUsage(path.join(dir, 'nope'), now).kind).toBe('missing');
   });
+
+  it('counts distinct records without a requestId apart even when their timestamp and token counts match (R32-srv-dom-b-X-02)', () => {
+    const dir = tempDir('cc-usage-noreq-');
+    fs.mkdirSync(path.join(dir, 'proj-a'));
+    const now = Date.parse('2026-10-03T12:00:00Z');
+    const ts = new Date(now - 3_600_000).toISOString();
+    const line = (messageId?: string) =>
+      JSON.stringify({ type: 'assistant', timestamp: ts, message: { ...(messageId ? { id: messageId } : {}), usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0 } } });
+    fs.writeFileSync(
+      path.join(dir, 'proj-a', 'session.jsonl'),
+      // Two content-block lines of one message, a second message, and two lines with no id at all.
+      [line('msg_a'), line('msg_a'), line('msg_b'), line(), line()].join('\n') + '\n',
+    );
+    expect(computeUsage(dir, now).fiveHour).toMatchObject({ tokens: 60, messages: 4 });
+  });
 });
 
 describe('usage meter reads only what the transcripts gained (SW5-server-04)', () => {
