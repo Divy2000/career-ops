@@ -114,7 +114,8 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     return true;
   };
   const LOST_CLAIM = 'another AI policy pass took over the queued items while this one was starting, so it was cancelled. Try again once that pass finishes.';
-  // The claim lock can be held past its wait (a claimant that died holding it counts as stale only later).
+  // The claim lock can be held past its wait by a live claimant. One that died holding it is broken at once, unless it
+  // died before naming its pid in the lock or its pid was reused: that lock counts as stale only after LOCK_STALE_MS.
   const claimBusy = (err: unknown) => `the AI policy pass claim could not be handed over (${(err as Error).message}), so it was cancelled. Try again in a minute.`;
   /**
    * Runs a claim cleanup without letting its own throw hide the error or answer that ended the start. A cleanup that
