@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DevChatPage, SESSION_CHECK_RETRY, validateDevSearch } from '@web/features/dev/DevChatPage';
 import { ConfirmProvider } from '@web/components/ConfirmDialog';
 import { START_REPORT_WINDOW_MS, lastSession } from '@web/lib/lastSession';
+import { newStartToken } from '@web/lib/useRememberedSession';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -252,6 +253,26 @@ describe('Dev Chat session in the URL', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('given a dev chat start in flight, when a newer start is recorded through the shared start-token helper, then the late answer leaves the page off the old session (R30-w1dev-dup-helpers)', async () => {
+    let release!: () => void;
+    startGate = new Promise((r) => (release = r));
+    await open('/dev');
+    const prompt = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Prompt for devchat"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(prompt, 'Add a house rule');
+      prompt.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Send')!.click());
+    const posts = () => (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls.filter(([u, i]) => u === '/api/sessions' && i?.method === 'POST').length;
+    await until(() => posts() === 1, 'the start sent');
+    // The dev chat's start token must be the one every remembered session uses, so a start recorded by the shared helper supersedes it.
+    expect(newStartToken('cc.devchat.session')).not.toBeNull();
+    await act(async () => release());
+    await settle();
+    expect(router.state.location.search.session).toBeUndefined();
+    expect(lastSession('cc.devchat.session').read()).toBeNull();
   });
 
   it('given a started session, when the nav link opens /dev with no session, then the same session comes back with its Changes and New conversation', async () => {
