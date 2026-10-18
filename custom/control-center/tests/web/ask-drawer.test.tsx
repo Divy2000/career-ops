@@ -80,6 +80,18 @@ describe('Ask drawer: proposed actions', () => {
     expect(host.querySelectorAll('li.proposal button')).toHaveLength(0);
   });
 
+  it('a proposal the drawer cannot run (setProfile, setPortals) is marked unsupported on Review and run without asking to approve a write (R30-shared-comp-X-01)', async () => {
+    for (const action of ['setProfile', 'setPortals']) {
+      await act(async () => emitEnvelope!('act', { action, params: {} }, 1));
+      const item = [...host.querySelectorAll<HTMLLIElement>('li.proposal')].pop()!;
+      expect(item.textContent, action).not.toContain('writes');
+      await act(async () => item.querySelector('button')!.click());
+      expect(document.body.querySelector('.dialog'), action).toBeNull();
+      expect(item.dataset.proposalState, action).toBe('unsupported');
+      expect(item.textContent, action).toContain('Structured settings editors are not available yet');
+    }
+  });
+
   it('an allowlisted act envelope is offered to run with its label', async () => {
     await act(async () => emitEnvelope!('act', { action: 'navigate', params: { to: '/pipeline' } }, 1));
     const item = host.querySelector<HTMLLIElement>('li.proposal')!;
@@ -1053,6 +1065,15 @@ describe('Ask drawer: evaluations wait for a live Process inbox run (R18-shared-
 
   it('given Process inbox is running, an evaluateCompany fails before asking and starts nothing', async () => {
     const item = await propose('evaluateCompany', { company: 'Acme' });
+    expect(document.body.querySelector('.dialog')).toBeNull();
+    expect(posts).toEqual([]);
+    expect(item.dataset.proposalState).toBe('failed');
+    expect(item.textContent).toContain('Process inbox is evaluating the pending rows');
+  });
+
+  it('given a language-directory Process inbox (de/pipeline) is running, an evaluate of a pending Inbox row fails before asking and starts nothing (R30-feat-b-X-01b)', async () => {
+    listed = [{ ...PIPELINE, mode: 'de/pipeline' }];
+    const item = await propose('evaluate', { url: 'https://jobs.acme.example/1' });
     expect(document.body.querySelector('.dialog')).toBeNull();
     expect(posts).toEqual([]);
     expect(item.dataset.proposalState).toBe('failed');

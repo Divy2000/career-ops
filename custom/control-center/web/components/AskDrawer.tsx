@@ -19,6 +19,7 @@ import { unescapeMarkdownCell } from '@shared/markdown-cell';
 import { STATUS_NOTE_MAX } from '@shared/tracker-status';
 import { activeEvaluationIn, evaluationStarting, useActiveEvaluation, useStartEvaluation } from '../features/today/evaluate';
 import { endBatchStarting, markBatchStarting } from '../features/pipeline/InboxAi';
+import { isProcessInboxMode } from '../features/pipeline/evaluating';
 import { useTracker } from '../lib/queries';
 import { STATES } from '../features/tracker/StatusControl';
 import type { PipelineRead, SessionMeta } from '@shared/api';
@@ -56,9 +57,16 @@ const LABELS: Record<AskActionName, (p: Record<string, unknown>) => string> = {
   setPortals: () => 'Change portals.yml',
 };
 
+/** The note an action the drawer does not run (`runs: false`) is answered with: what to do by hand instead. */
+const BY_HAND: Partial<Record<AskActionName, string>> = {
+  setApplyField: 'Edit the field directly in the Apply form.',
+  setProfile: 'Structured settings editors are not available yet; edit the file from Settings when they land.',
+  setPortals: 'Structured settings editors are not available yet; edit the file from Settings when they land.',
+};
+
 /** Advisor action allowlist (alpha parity), built from the list the advisor's contract is written from. `confirm` gates everything that writes. */
-export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) => string; confirm: boolean; writes: boolean }> = Object.fromEntries(
-  ASK_ACTION_SPECS.map((a) => [a.name, { label: LABELS[a.name], confirm: a.confirm, writes: a.writes }]),
+export const ASK_ACTIONS: Record<string, { label: (p: Record<string, unknown>) => string; confirm: boolean; writes: boolean; runs: boolean; byHand: string }> = Object.fromEntries(
+  ASK_ACTION_SPECS.map((a) => [a.name, { label: LABELS[a.name], confirm: a.confirm, writes: a.writes, runs: a.runs, byHand: BY_HAND[a.name] ?? 'The drawer does not run this action; do it by hand.' }]),
 );
 
 /** Own keys only: an advisor-named action like `toString` must not reach Object.prototype. */
@@ -184,7 +192,7 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     const process = lastSession('cc.pipeline.process');
     const remembered = process.read();
     const unlisted = remembered !== null && remembered !== knownProcess && !list.some((s) => s.id === remembered);
-    if (!process.starting() && !unlisted && !list.some((s) => s.mode === 'pipeline' && LIVE.has(s.status))) return false;
+    if (!process.starting() && !unlisted && !list.some((s) => isProcessInboxMode(s.mode) && LIVE.has(s.status))) return false;
     return p.action === 'evaluateCompany' || (await isPendingInboxRow(String(p.params.url).trim()));
   };
 
@@ -197,6 +205,10 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
     const knownProcess = lastSession('cc.pipeline.process').read();
     // Running from the click on, so its button is gone: a second run would start a second paid session or write twice.
     update(p.id, { state: 'running', note: null });
+    if (!def.runs) {
+      update(p.id, { state: 'unsupported', note: def.byHand });
+      return;
+    }
     // Checked before the question: a proposal that cannot run is not offered to the user as a write to approve.
     const invalid = invalidParams(p);
     if (invalid) {
@@ -396,13 +408,6 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
           }
           break;
         }
-        case 'setApplyField':
-          update(p.id, { state: 'unsupported', note: 'Edit the field directly in the Apply form.' });
-          return;
-        case 'setProfile':
-        case 'setPortals':
-          update(p.id, { state: 'unsupported', note: 'Structured settings editors are not available yet; edit the file from Settings when they land.' });
-          return;
       }
       update(p.id, { state: 'done', note: null });
     } catch (err) {
@@ -432,13 +437,13 @@ export function AskDrawer({ open, onClose }: { open: boolean; onClose: () => voi
               return (
                 <li key={p.id} className="proposal row gap" data-proposal-state={p.state}>
                   <span style={{ flex: 1 }}>
-                    {def ? def.label(p.params) : p.action} {def?.writes && <Pill tone="warn">writes</Pill>}
+                    {def ? def.label(p.params) : p.action} {def?.writes && def.runs && <Pill tone="warn">writes</Pill>}
                     {p.note && <span className="faint small"> {p.note}</span>}
                   </span>
                   {p.state === 'pending' ? (
                     <>
                       <button type="button" onClick={() => void run(p)}>
-                        {def?.confirm ? 'Review and run' : 'Run'}
+                        {def?.confirm && def.runs ? 'Review and run' : 'Run'}
                       </button>
                       <button type="button" onClick={() => update(p.id, { state: 'rejected', note: 'dismissed' })}>
                         Dismiss
