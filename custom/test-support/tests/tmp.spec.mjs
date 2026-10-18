@@ -350,3 +350,17 @@ test('specsWithoutTmpCheck reads an export of a quoted value as a value, not an 
     'export-named.spec.mjs': "import { tempDir } from './reexport-named.mjs';\n",
   }), ['value-export.spec.mjs']);
 });
+
+test('specsWithoutTmpCheck tells template text from its substitutions: escapes, a lone $ or {, and a comment opening a substitution keep an import line inside the template (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'odd-template.spec.mjs': 'const t = `abc`;\n' + tmpImport + '\n',
+    'substitution.spec.mjs': 'const t = `${a}`;\n' + tmpImport + '\n',
+    'escaped-backtick.spec.mjs': 'const t = `a\\`b\n' + tmpImport + '\n`;\n',
+    'escaped-substitution.spec.mjs': 'const t = `\\${\n' + tmpImport + '\n`;\n',
+    'backtick-string.spec.mjs': "const t = `${'`'}\n" + tmpImport + '\n`;\n',
+    'lone-brace.spec.mjs': 'const t = `a{\n' + tmpImport + '\n`;\n',
+    'lone-dollar.spec.mjs': 'const t = `$x\n' + tmpImport + '\n`;\n',
+    'comment-substitution.spec.mjs': 'const t = `${/*\n' + tmpImport + '\n*/1}`;\n',
+  }), ['backtick-string.spec.mjs', 'comment-substitution.spec.mjs', 'escaped-backtick.spec.mjs', 'escaped-substitution.spec.mjs', 'lone-brace.spec.mjs', 'lone-dollar.spec.mjs']);
+});
