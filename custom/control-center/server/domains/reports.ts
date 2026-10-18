@@ -130,67 +130,25 @@ export function authorLetter(heading: string): string | null {
   return m ? m[1]! : null;
 }
 
-// The archived JD (`## Job Description (archived verbatim)`) is the posting's text pasted as is, and its own `##`
-// headings ("## Responsibilities") belong to it: only a report template section ends it, the rule
+// Who owns each line, where an archived JD ends and which Machine Summary is the report's own: reports.invariants.md.
+// One pass (outline) decides all of it; every reader below takes its text, sections and summary from that outline.
+const JD_HEADING = /^Job Description\b/i;
+// A report template heading, the one thing that ends an archived JD outside a batch report's tail; the rule
 // check-jd-archive.mjs reads the section by (NEXT_REPORT_SECTION_RE). A named section is the whole heading, or the name
 // followed by a note ("Liveness gate (URL inputs)", "Step 0 - ..."): a JD's "## Risk Summary and Mitigations" is the JD's.
-const JD_HEADING = /^Job Description\b/i;
 const REPORT_SECTION = /^(?:[A-Z]\)|Block\s[A-Z]\s*(?:$|[(:\u2014\u2013-])|(?:Machine Summary|Keywords extracted|Keyword Coverage|Score Evidence|Risk Summary|Cover Letter Draft|Post-evaluation|Liveness gate|Blacklist gate|Bounded Research Budget|Step 0)\s*(?:$|[(:\u2014\u2013-]))/i;
-
-export function splitSections(body: string): { intro: string; sections: ReportSection[] } {
-  const intro: string[] = [];
-  const sections: ReportSection[] = [];
-  let cur: { heading: string; letter: string | null; lines: string[] } | null = null;
-  let inFence = false;
-  for (const line of body.split('\n')) {
-    if (/^```/.test(line)) inFence = !inFence;
-    let h = !inFence ? line.match(/^##\s+(.*)$/) : null;
-    if (h && cur && JD_HEADING.test(cur.heading) && !REPORT_SECTION.test(h[1]!.trim())) h = null;
-    if (h) {
-      if (cur) sections.push({ heading: cur.heading, letter: cur.letter, content: cur.lines.join('\n').trim() });
-      const heading = h[1]!.trim();
-      cur = { heading, letter: authorLetter(heading), lines: [] };
-    } else if (cur) cur.lines.push(line);
-    else intro.push(line);
-  }
-  if (cur) sections.push({ heading: cur.heading, letter: cur.letter, content: cur.lines.join('\n').trim() });
-  return { intro: intro.join('\n').trim(), sections };
-}
-
-/**
- * The report's own `## Machine Summary` section. oferta writes it directly after the header, then the lettered blocks,
- * and the archived JD last; the batch prompt writes the archived JD first, then the Machine Summary and the lettered
- * blocks ("## A) ..." to "## G) ...", kept lettered in every language). So it is the first such heading before any
- * `## Job Description` heading, or else the last one after it, and only in the batch layout: no lettered block before
- * the JD, and the blocks follow it in order from A) through at least F) (the blocks before Block G existed) without
- * starting over. Inside the JD only a report template section is a heading (the splitSections rule), so a JD's own
- * yaml fence or "## Responsibilities" is the posting's text; a JD's own "## Machine Summary" ends the JD there, so the
- * block order is what tells it apart: one followed by a JD's "## A) Requirements" either starts over at the report's
- * own A) or never reaches F). The section ends at the next `##` heading outside a fence.
- */
 const LETTERED_SECTION = /^(?:([A-Z])\)|Block\s([A-Z])\s*(?:$|[(:\u2014\u2013-]))/i;
 const MACHINE_SUMMARY = /^Machine Summary\s*$/;
+const FENCE = /^```/;
+
+function headingOf(line: string): string | null {
+  const m = line.match(/^##\s+(.*)$/);
+  return m ? m[1]!.trim() : null;
+}
 
 function sectionLetter(heading: string): string | null {
   const m = heading.match(LETTERED_SECTION);
   return m ? (m[1] ?? m[2]!).toUpperCase() : null;
-}
-
-/** The `##` headings outside fences, by line index, the JD's own headings left out (the splitSections rule). */
-function reportHeadings(lines: string[]): Array<{ i: number; heading: string }> {
-  const out: Array<{ i: number; heading: string }> = [];
-  let inFence = false;
-  let inJd = false;
-  lines.forEach((line, i) => {
-    if (/^```/.test(line)) inFence = !inFence;
-    const h = !inFence ? line.match(/^##\s+(.*)$/) : null;
-    if (!h) return;
-    const heading = h[1]!.trim();
-    if (inJd && !REPORT_SECTION.test(heading)) return;
-    inJd = JD_HEADING.test(heading);
-    out.push({ i, heading });
-  });
-  return out;
 }
 
 /** True when the headings run A), B), ... in order through at least F), never repeating or going back a letter. */
@@ -205,20 +163,84 @@ function lettersInOrder(headings: string[]): boolean {
   return last >= 'F';
 }
 
-function machineSummarySection(md: string): { line: number; content: string } | null {
-  const lines = md.split('\n');
-  const hs = reportHeadings(lines);
-  const section = (k: number) => ({ line: hs[k]!.i + 1, content: lines.slice(hs[k]!.i + 1, hs[k + 1]?.i ?? lines.length).join('\n') });
-  const jd = hs.findIndex((h) => JD_HEADING.test(h.heading));
-  const own = hs.findIndex((h, k) => (jd === -1 || k < jd) && MACHINE_SUMMARY.test(h.heading));
-  if (own !== -1) return section(own);
-  if (jd === -1 || hs.slice(0, jd).some((h) => sectionLetter(h.heading) !== null)) return null;
-  let last = -1;
-  hs.forEach((h, k) => {
-    if (k > jd && MACHINE_SUMMARY.test(h.heading)) last = k;
+/**
+ * The line a batch report's tail starts on, after the archived JD heading on line `jd`: the last `## A)` whose
+ * lettered headings run in order through F), from the `## Machine Summary` right before it when there is one. Every
+ * `##` line counts, fenced or not, since a fence the JD opens is the JD's text.
+ */
+function batchTail(lines: string[], jd: number): number | null {
+  const raw: Array<{ i: number; heading: string }> = [];
+  for (let i = jd + 1; i < lines.length; i++) {
+    const heading = headingOf(lines[i]!);
+    if (heading !== null) raw.push({ i, heading });
+  }
+  let a = raw.length - 1;
+  while (a >= 0 && sectionLetter(raw[a]!.heading) !== 'A') a--;
+  if (a === -1 || !lettersInOrder(raw.slice(a).map((h) => h.heading))) return null;
+  return a > 0 && MACHINE_SUMMARY.test(raw[a - 1]!.heading) ? raw[a - 1]!.i : raw[a]!.i;
+}
+
+interface Outline {
+  lines: string[];
+  /** Section starts: the report's own `##` headings outside fences and each archived JD heading, never one a JD owns. */
+  headings: Array<{ i: number; heading: string }>;
+  /** True for each line an archived JD owns (its heading line is the report's). */
+  jdOwned: boolean[];
+  /** Index into `headings` of the report's own Machine Summary, or -1. */
+  summary: number;
+}
+
+function outline(md: string): Outline {
+  const lines = md.split(/\r?\n/);
+  const headings: Outline['headings'] = [];
+  const jdOwned = new Array<boolean>(lines.length).fill(false);
+  let summary = -1;
+  let inFence = false;
+  let seenJd = false;
+  let tail: number | null = null;
+  // While in a JD: the line its batch tail starts on, or null when the next template heading ends it.
+  let jdEnd: number | null | undefined;
+  lines.forEach((line, i) => {
+    if (jdEnd !== undefined) {
+      const heading = headingOf(line);
+      if (jdEnd === null ? heading === null || !REPORT_SECTION.test(heading) : i !== jdEnd) {
+        jdOwned[i] = true;
+        return;
+      }
+      jdEnd = undefined;
+      inFence = false;
+    }
+    if (FENCE.test(line)) inFence = !inFence;
+    const heading = inFence ? null : headingOf(line);
+    if (heading === null) return;
+    if (summary === -1 && MACHINE_SUMMARY.test(heading) && (!seenJd || i === tail)) summary = headings.length;
+    if (JD_HEADING.test(heading)) {
+      // Only the first JD of a report with nothing report-shaped before it is a batch report's JD.
+      const batch = !seenJd && !headings.some((h) => MACHINE_SUMMARY.test(h.heading) || sectionLetter(h.heading) !== null);
+      if (batch) tail = batchTail(lines, i);
+      seenJd = true;
+      jdEnd = batch ? tail : null;
+    }
+    headings.push({ i, heading });
   });
-  if (last === -1 || sectionLetter(hs[last + 1]?.heading ?? '') !== 'A') return null;
-  return lettersInOrder(hs.slice(last + 1).map((h) => h.heading)) ? section(last) : null;
+  return { lines, headings, jdOwned, summary };
+}
+
+function sectionsOf(o: Outline): { intro: string; sections: ReportSection[] } {
+  const end = (k: number) => o.headings[k + 1]?.i ?? o.lines.length;
+  const sections = o.headings.map(({ i, heading }, k) => ({ heading, letter: authorLetter(heading), content: o.lines.slice(i + 1, end(k)).join('\n').trim() }));
+  return { intro: o.lines.slice(0, o.headings[0]?.i ?? o.lines.length).join('\n').trim(), sections };
+}
+
+export function splitSections(body: string): { intro: string; sections: ReportSection[] } {
+  return sectionsOf(outline(body));
+}
+
+/** The report's own `## Machine Summary` section: its heading's 1-based line and the text up to the next section. */
+function machineSummarySection(o: Outline): { line: number; content: string } | null {
+  if (o.summary === -1) return null;
+  const start = o.headings[o.summary]!.i;
+  return { line: start + 1, content: o.lines.slice(start + 1, o.headings[o.summary + 1]?.i ?? o.lines.length).join('\n') };
 }
 
 function machineSummary(section: { line: number; content: string } | null, file: string): Record<string, unknown> | null {
@@ -273,17 +295,20 @@ function splitTitle(rest: string): [string, string | undefined] {
 }
 
 export function parseReport(markdown: string, file: string, num: number): ReportFull {
-  const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
-  const scoreRaw = headerField(markdown, SCORE_KEY);
+  const o = outline(markdown.replace(/^\uFEFF/, ''));
+  // The header, the title and every other `**Key:**` line come only from text the report owns, never from a JD.
+  const own = o.lines.filter((_, i) => !o.jdOwned[i]).join('\n');
+  const title = own.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
+  const scoreRaw = headerField(own, SCORE_KEY);
   // The title word is localized ("# Bewertung:", "# Evaluation :"), so a report is told apart by its score header or Machine Summary.
-  const summarySection = machineSummarySection(markdown);
-  const scored = new RegExp(`^\\*\\*(?:${SCORE_KEY})\\s*:\\*\\*`, 'mi').test(markdown) || summarySection !== null;
+  const summarySection = machineSummarySection(o);
+  const scored = new RegExp(`^\\*\\*(?:${SCORE_KEY})\\s*:\\*\\*`, 'mi').test(own) || summarySection !== null;
   if (!title || !/^[^:]+:\s*\S/.test(title) || !scored) {
     throw new ParseError('Not an evaluation report: missing a "# Evaluation: Company - Role" title, a **Score:** header or a Machine Summary', file, 1);
   }
   const machine = machineSummary(summarySection, file);
   const [companyPart, rolePart] = splitTitle(title.replace(/^[^:]+:\s*/, ''));
-  const { intro, sections } = splitSections(markdown);
+  const { intro, sections } = sectionsOf(o);
   const blockA = sections.find((s) => s.letter === 'A')?.content ?? '';
   const cover = sections.find((s) => /cover letter/i.test(s.heading))?.content ?? '';
   const coverPdf = cover.match(/PDF generated:\s*(\S+)/i)?.[1] ?? null;
@@ -295,15 +320,15 @@ export function parseReport(markdown: string, file: string, num: number): Report
     title,
     company: str(machine?.company) ?? companyPart?.trim() ?? '',
     role: str(machine?.role) ?? rolePart?.trim() ?? '',
-    date: headerField(markdown, DATE_KEY),
-    url: postingUrl(headerField(markdown, 'URL')),
-    via: headerField(markdown, 'Via'),
+    date: headerField(own, DATE_KEY),
+    url: postingUrl(headerField(own, 'URL')),
+    via: headerField(own, 'Via'),
     // The Machine Summary carries the normalized archetype; the header may read "Not a target - closest default: X".
-    archetype: str(machine?.archetype) ?? headerField(markdown, ARCHETYPE_KEY),
+    archetype: str(machine?.archetype) ?? headerField(own, ARCHETYPE_KEY),
     score: parseScore(scoreRaw) ?? (typeof machine?.score === 'number' ? (machine.score as number) : null),
-    legitimacy: headerField(markdown, LEGITIMACY_KEY) ?? str(machine?.legitimacy_tier),
-    workAuth: headerField(markdown, 'Work Auth'),
-    pdf: headerField(markdown, 'PDF'),
+    legitimacy: headerField(own, LEGITIMACY_KEY) ?? str(machine?.legitimacy_tier),
+    workAuth: headerField(own, 'Work Auth'),
+    pdf: headerField(own, 'PDF'),
     tldr: blockField(blockA, 'TL;DR'),
     remote: blockField(blockA, 'Remote'),
     // Block A has no Comp row; the Machine Summary carries the JD's own figure.
@@ -344,7 +369,16 @@ export function readReportFile(dataRoot: string, file: string): ReportRead {
 }
 
 function parseReportFile(dir: string, file: string, num: number): ReportRead {
-  const read = readText(path.join(dir, file));
+  let read: ReturnType<typeof readText>;
+  try {
+    read = readText(path.join(dir, file));
+  } catch (err) {
+    // This one file cannot be read (a folder put in its place after the listing, no permission): the report is
+    // unreadable, not the whole index. Anything else (EMFILE, EIO) is not about this file and propagates.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EISDIR' || code === 'EACCES' || code === 'EPERM') return { kind: 'malformed', num, file, error: `Cannot read the report: ${(err as Error).message}`, line: null };
+    throw err;
+  }
   if (read.kind === 'missing') return { kind: 'missing', num };
   try {
     return { kind: 'ok', report: parseReport(read.text, file, num) };
