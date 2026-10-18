@@ -586,8 +586,12 @@ export class SessionManager {
     return () => {
       unclaim();
       // A session another process deleted after it was read leaves no guard folder made only for this claim; one that
-      // holds anything else is left as it is.
-      if (this.store.read(id) !== null) return;
+      // holds anything else is left as it is, as is one that cannot be read (a torn meta.json): it may still be there.
+      try {
+        if (this.store.read(id) !== null) return;
+      } catch {
+        return;
+      }
       try {
         fs.rmdirSync(dir);
       } catch (err) {
@@ -1676,8 +1680,13 @@ export class SessionManager {
         const after = settled();
         if (after === null) {
           // Gives the claim back and stands by again, rather than take over a turn it cannot tell is still open.
-          tracked.release();
+          const release = tracked.release;
           tracked.release = null;
+          try {
+            release();
+          } catch (err) {
+            console.warn(`[sessions] session ${id}: could not give back the track claim it took while standing by for its turn ${n}: ${(err as Error).message}`);
+          }
           return;
         }
         if (after) return this.untrack(id);
