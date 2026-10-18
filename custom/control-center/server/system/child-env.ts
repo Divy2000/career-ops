@@ -71,9 +71,34 @@ function withClaudeConfigDir(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return dir ? { ...rest, CLAUDE_CONFIG_DIR: dir } : rest;
 }
 
+/**
+ * Repository overrides git reads from the environment (`git rev-parse --local-env-vars`, plus the numbered
+ * GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n pairs GIT_CONFIG_COUNT enables). A server started from a shell or a git hook that
+ * exports GIT_DIR or GIT_WORK_TREE would otherwise point every git a child runs (the Dev Chat diff card, a session's
+ * git diff) at that other repository rather than the directory it runs in. A caller may still pass one explicitly.
+ */
+const GIT_REPO_VARS = new Set([
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_CONFIG',
+  'GIT_CONFIG_PARAMETERS',
+  'GIT_CONFIG_COUNT',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_IMPLICIT_WORK_TREE',
+  'GIT_GRAFT_FILE',
+  'GIT_INDEX_FILE',
+  'GIT_NO_REPLACE_OBJECTS',
+  'GIT_REPLACE_REF_BASE',
+  'GIT_PREFIX',
+  'GIT_SHALLOW_FILE',
+  'GIT_COMMON_DIR',
+]);
+const isGitRepoVar = (name: string): boolean => GIT_REPO_VARS.has(name) || /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(name);
+
 export function childEnv(extra: NodeJS.ProcessEnv = {}, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(base)) if (!k.startsWith('CC_') && !isCredential(k)) out[k] = v;
+  for (const [k, v] of Object.entries(base)) if (!k.startsWith('CC_') && !isCredential(k) && !isGitRepoVar(k)) out[k] = v;
   const env = withClaudeConfigDir({ ...out, ...PINNED_TO_DATA_ROOT, ...extra });
   return { ...env, NODE_OPTIONS: withLocalFileGuard(env.NODE_OPTIONS) };
 }
