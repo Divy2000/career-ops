@@ -475,13 +475,15 @@ function ProjectForm({ editing, liveEtag, onDiskTitles, update, isOpen, onDone }
 function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended: () => void }) {
   const [format, setFormat] = useState<'json' | 'markdown'>('json');
   const [text, setText] = useState('');
-  // A preview remembers the source it was made for, so Append never pairs it with a newer one.
-  const [previewed, setPreviewed] = useState<{ result: ConvertResult; source: string | null } | null>(null);
+  // A preview remembers the source it was made for, so Append never pairs it with a newer one, and the library ETag it was
+  // checked against: its duplicate check is only good for that library, and append does not check again.
+  const [previewed, setPreviewed] = useState<{ result: ConvertResult; source: string | null; etag: string | null } | null>(null);
   const parse = useParseSession();
   // A parser result that landed after the user edited the draft: offered, never written over their edit.
   const [heldResult, setHeldResult] = useState<{ markdown: string; source: string } | null>(null);
   useUnsaved('the projects import', text.trim() !== '' || previewed !== null || parse.parsing || heldResult !== null);
   const preview = previewed?.result ?? null;
+  const stale = previewed !== null && previewed.etag !== etag;
   const [error, setError] = useState<string | null>(null);
   const [uploadPath, setUploadPath] = useState<string | null>(null);
   // The documents/ source the draft came from (intake's path, e.g. projects/x.pdf); sent with preview and append.
@@ -565,10 +567,12 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   const convert = async () => {
     const mine = generation.current;
     const forSource = source;
+    // The library as last loaded: the server reads it no earlier, so a change in between only costs a fresh preview.
+    const forEtag = etag;
     setError(null);
     try {
       const result = await apiSend<ConvertResult>('POST', '/api/projects/convert', { format, text, ...(forSource ? { source: forSource } : {}) });
-      if (generation.current === mine) setPreviewed({ result, source: forSource });
+      if (generation.current === mine) setPreviewed({ result, source: forSource, etag: forEtag });
     } catch (err) {
       if (generation.current !== mine) return;
       setPreviewed(null);
@@ -579,12 +583,12 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
   // One append at a time: a second one on the same ETag would come back 409 after the first succeeded.
   const [appending, setAppending] = useState(false);
   const append = async () => {
-    if (!previewed?.result.markdown || appending) return;
-    const { result, source: forSource } = previewed;
+    if (!previewed?.result.markdown || appending || stale) return;
+    const { result, source: forSource, etag: forEtag } = previewed;
     const mine = generation.current;
     setAppending(true);
     try {
-      const out = await apiSend<{ recorded?: boolean; warning?: string }>('POST', '/api/projects/append', { markdown: result.markdown, ...(forSource ? { source: forSource } : {}) }, ifMatch(etag));
+      const out = await apiSend<{ recorded?: boolean; warning?: string }>('POST', '/api/projects/append', { markdown: result.markdown, ...(forSource ? { source: forSource } : {}) }, ifMatch(forEtag));
       toast.success(out.recorded ? `Imported into article-digest.md; documents/${forSource} is recorded as ingested` : 'Imported into article-digest.md');
       if (out.warning) toast.warning(out.warning);
       onAppended();
@@ -660,11 +664,16 @@ function ProjectsImport({ etag, onAppended }: { etag: string | null; onAppended:
           Preview
         </button>
         {preview && (
-          <button type="button" className="button--primary" disabled={appending || !preview.markdown || preview.errors.length > 0} onClick={() => void append()}>
+          <button type="button" className="button--primary" disabled={appending || stale || !preview.markdown || preview.errors.length > 0} onClick={() => void append()}>
             Append {plural(fresh, 'project')}
           </button>
         )}
       </div>
+      {stale && (
+        <p role="status" className="muted small">
+          The library changed since this preview, so its duplicate check may be out of date. Preview again to append.
+        </p>
+      )}
       {error && (
         <p role="alert" className="danger-text">
           {error}
