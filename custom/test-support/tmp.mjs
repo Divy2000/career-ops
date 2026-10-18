@@ -1,11 +1,45 @@
 // Temp dirs for the custom/*/tests specs. tempDir() tracks every dir it makes and a file-level after()
-// hook removes them all, so a test run leaves nothing in TMPDIR. assertSuiteLeavesNoTemp() is the guard:
-// it runs a suite in a child process with a fresh TMPDIR and lists whatever is left there.
+// hook removes them all, so a test run leaves nothing in TMPDIR. Loading this module is also the guard: the spec
+// process, and every child it starts with the inherited environment, works in a private temp dir, and when the
+// process exits whatever is left there is listed, removed and fails the file. A suite tmp-guard spec checks with
+// specsWithoutTmpCheck() that every spec of its suite loads this module; runSuiteInFreshTmp() is the older guard,
+// which re-runs a whole suite in a child process with a fresh TMPDIR.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { after } from 'node:test';
+
+const OWN_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'tmp-check-'));
+// os.tmpdir() reads TEMP or TMP before TMPDIR on Windows.
+for (const key of ['TMPDIR', 'TEMP', 'TMP']) process.env[key] = OWN_TMP;
+let ownTmpRemoved = false;
+// A kill by signal skips 'exit': when nothing else handles the signal, the dir is removed and the signal raised again.
+// A spec with its own handler keeps running, so its dir stays and the 'exit' check below still runs.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.once(signal, function onSignal() {
+    if (process.listenerCount(signal) > 0) return;
+    ownTmpRemoved = true;
+    fs.rmSync(OWN_TMP, { recursive: true, force: true });
+    process.kill(process.pid, signal);
+  });
+}
+process.on('exit', () => {
+  if (ownTmpRemoved) return;
+  let left;
+  try {
+    left = fs.readdirSync(OWN_TMP).sort();
+  } catch (err) {
+    // A spec that removed the dir itself left nothing in it; any other error is a real failure to check.
+    if (err.code === 'ENOENT') return;
+    throw err;
+  }
+  fs.rmSync(OWN_TMP, { recursive: true, force: true });
+  if (!left.length) return;
+  process.stderr.write(`test-support/tmp.mjs: this spec left ${left.length} entr${left.length === 1 ? 'y' : 'ies'} in its temp dir (now removed): ${left.join(', ')}\n`);
+  process.exitCode = 1;
+});
 
 const made = [];
 // Registered when the module loads, so it hangs off the file's root, not off whichever test calls tempDir first.
@@ -70,4 +104,27 @@ export function runSuiteInFreshTmp(testsDir, exclude) {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+const IMPORT_RE = /^[ \t]*(?:import|export)\b[^;'"]*?(?:\bfrom\s*)?['"]([^'"]+)['"]/gm;
+
+/**
+ * The *.spec.mjs files in `testsDir` (by name, sorted) whose static imports, followed through relative helper modules,
+ * never reach `tmpModule` (this module by default), so their run is not checked for temp leftovers.
+ */
+export function specsWithoutTmpCheck(testsDir, tmpModule = fileURLToPath(import.meta.url)) {
+  const target = fs.realpathSync(tmpModule);
+  const reaches = (file, seen) => {
+    const real = fs.realpathSync(file);
+    if (real === target) return true;
+    if (seen.has(real)) return false;
+    seen.add(real);
+    for (const [, spec] of fs.readFileSync(real, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(IMPORT_RE)) {
+      if (!spec.startsWith('.')) continue;
+      const next = path.resolve(path.dirname(real), spec);
+      if (fs.existsSync(next) && reaches(next, seen)) return true;
+    }
+    return false;
+  };
+  return fs.readdirSync(testsDir).filter((f) => f.endsWith('.spec.mjs') && !reaches(path.join(testsDir, f), new Set())).sort();
 }

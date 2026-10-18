@@ -8,6 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, copyF
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import '../../test-support/tmp.mjs';
 import { gitTestEnv } from '../../test-support/git-env.mjs';
 // The real lock writer's start time, so a running-Control-Center lock carries what acquireInstanceLock writes.
 import { processStartTime } from '../../control-center/supervisor/instance-lock.ts';

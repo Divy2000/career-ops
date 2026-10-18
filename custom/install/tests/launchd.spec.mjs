@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import '../../test-support/tmp.mjs';
 import { caseFlippedHome } from '../../test-support/case-home.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,15 @@ const mkTmp = (prefix) => {
   scratch.push(d);
   return d;
 };
+
+// Runs a bash script with stdin closed. A script stuck in a loop is killed (SIGXCPU) once it, or any one process it
+// starts, has used `cpuSeconds` of CPU time: a tight wall-clock timeout instead killed healthy runs on a loaded
+// machine, where a run that needs well under a second of CPU took longer than 30 s. `hangMs` is only the backstop for
+// what the CPU limit cannot see (a child that blocks, a loop of short-lived children), sized so that no healthy run
+// reaches it however loaded the machine is.
+function runScript(script, args, { cwd, env, cpuSeconds = 30, hangMs = 600_000 }) {
+  return spawnSync('bash', ['-c', 'ulimit -t "$1" && shift && exec bash "$@"', 'bash', String(cpuSeconds), script, ...args], { cwd, env, encoding: 'utf8', timeout: hangMs, stdio: ['ignore', 'pipe', 'pipe'] });
+}
 
 function run(args, { env = {}, marker = null, existing = [], existingXml = {}, homeName = 'home', claude = null, localClaude = null, relativeClaude = false, realPlutil = false, nodeAt = 'bin', nodeShim = false } = {}) {
   const T = mkTmp('ci-launchd-');
@@ -63,16 +73,39 @@ function run(args, { env = {}, marker = null, existing = [], existingXml = {}, h
   for (const [label, xml] of Object.entries(existingXml)) fs.writeFileSync(path.join(agentsDir, `${label}.plist`), xml.replaceAll('$T', T));
   const stubLog = path.join(T, 'stub.log');
   fs.writeFileSync(stubLog, '');
-  const r = spawnSync('bash', [path.join(root, 'custom', 'launchd', 'install.sh'), ...args], {
+  const r = runScript(path.join(root, 'custom', 'launchd', 'install.sh'), args, {
     cwd: T,
     env: { PATH: `${relativeClaude ? 'node_modules/.bin::' : ''}${nodeAt === 'bin' ? '' : `${path.join(T, nodeAt)}:`}${bin}:/usr/bin:/bin`, HOME: home, STUB_LOG: stubLog, ...Object.fromEntries(Object.entries(env).map(([k, v]) => [k, v.replace('$T', T)])) },
-    encoding: 'utf8',
-    timeout: 30000,
-    stdio: ['ignore', 'pipe', 'pipe'],
   });
   const agents = path.join(home, 'Library', 'LaunchAgents');
   return { ...r, T, root, home, plists: fs.existsSync(agents) ? fs.readdirSync(agents).sort() : [], log: fs.readFileSync(stubLog, 'utf8') };
 }
+
+test('Given a loaded machine stretches a run in wall-clock time while it uses little CPU, the run is not killed (R34-flake-launchd)', () => {
+  const script = path.join(mkTmp('ci-launchd-limit-'), 'slow.sh');
+  fs.writeFileSync(script, 'sleep 2\necho done\n');
+  const r = runScript(script, [], { env: { PATH: '/usr/bin:/bin' }, cpuSeconds: 1 });
+  assert.equal(r.signal, null, `killed by ${r.signal}`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, 'done\n');
+});
+
+test('Given the script under test spins in a loop, the run is still killed instead of hanging the suite (R34-flake-launchd)', () => {
+  const script = path.join(mkTmp('ci-launchd-limit-'), 'spin.sh');
+  fs.writeFileSync(script, 'while :; do :; done\n');
+  const r = runScript(script, [], { env: { PATH: '/usr/bin:/bin' }, cpuSeconds: 1 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the spinning script was not killed');
+});
+
+test('Given the script under test blocks on a child that never ends, the run is still killed instead of hanging the suite (R34-flake-launchd fix check)', { timeout: 20_000 }, () => {
+  const script = path.join(mkTmp('ci-launchd-limit-'), 'blocked.sh');
+  // exec, so the timeout's SIGTERM reaches the sleeping process itself and leaves nothing running.
+  fs.writeFileSync(script, 'exec sleep 60\n');
+  const r = runScript(script, [], { env: { PATH: '/usr/bin:/bin' }, cpuSeconds: 1, hangMs: 1000 });
+  assert.equal(r.status, null);
+  assert.ok(r.signal, 'the blocked script was not killed');
+});
 
 test('--jobs daily installs only the daily plist and never bootstraps the sync job', () => {
   const r = run(['--jobs', 'daily']);

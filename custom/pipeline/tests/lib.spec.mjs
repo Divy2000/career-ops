@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import '../../test-support/tmp.mjs';
 import { parseRow, orderPending, sponsorAdjustment, buildShortlist, pickSearchMatch } from '../lib.mjs';
 
 const ROW = '- [ ] https://jobs.example.com/1 | Snap Inc. | Software Engineer, Backend | New York, NY | posted: 2026-09-30';

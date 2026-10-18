@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runSuiteInFreshTmp, suiteEnv, suiteRanTests, tempDir } from '../tmp.mjs';
+import { spawn, spawnSync } from 'node:child_process';
+import { runSuiteInFreshTmp, specsWithoutTmpCheck, suiteEnv, suiteRanTests, tempDir } from '../tmp.mjs';
 
 test('the guard child gets the fresh dir as TMPDIR, TEMP and TMP (TEMP and TMP win on Windows) and no NODE_TEST_CONTEXT', () => {
   const env = suiteEnv({ PATH: '/bin', NODE_TEST_CONTEXT: 'child-v8', TMPDIR: '/old', TEMP: 'C:\\old', TMP: 'C:\\old' }, '/fresh');
@@ -90,3 +91,153 @@ test('Given the caller exports FORCE_COLOR, the guard child prints a plain summa
     else process.env.FORCE_COLOR = saved;
   }
 });
+
+const TMP_MJS = new URL('../tmp.mjs', import.meta.url).href;
+
+/** Runs one fixture spec under node --test with a fresh TMPDIR; returns the run and what it left in that TMPDIR. */
+function runFixtureSpec(source) {
+  const dir = tempDir('tmp-check-spec-');
+  const fresh = tempDir('tmp-check-fresh-');
+  const file = path.join(dir, 'fixture.spec.mjs');
+  fs.writeFileSync(file, source);
+  const r = spawnSync(process.execPath, ['--test', file], { env: suiteEnv(process.env, fresh), encoding: 'utf8', timeout: 60_000 });
+  return { status: r.status, output: `${r.stdout}\n${r.stderr}`, leftovers: fs.readdirSync(fresh).sort() };
+}
+
+test('Given a spec that loads tmp.mjs leaves a file in the temp dir, its run fails naming the file and the temp dir is still left empty (R34-flake-tmpguard)', () => {
+  const r = runFixtureSpec(`import { test } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import ${JSON.stringify(TMP_MJS)};
+test('leaks', () => { fs.writeFileSync(path.join(os.tmpdir(), 'leaked-file'), 'x'); });
+`);
+  assert.notEqual(r.status, 0, r.output);
+  assert.match(r.output, /leaked-file/);
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('Given a child process of a spec that loads tmp.mjs leaves a dir in $TMPDIR, the spec run fails naming it (R34-flake-tmpguard)', () => {
+  const r = runFixtureSpec(`import { test } from 'node:test';
+import { spawn, spawnSync } from 'node:child_process';
+import ${JSON.stringify(TMP_MJS)};
+test('child leaks', () => { spawnSync('sh', ['-c', 'mkdir "$TMPDIR/leaked-by-child"']); });
+`);
+  assert.notEqual(r.status, 0, r.output);
+  assert.match(r.output, /leaked-by-child/);
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('Given a spec that loads tmp.mjs cleans up after itself, its run passes and leaves nothing in the temp dir: the check reports no false leftover (R34-flake-tmpguard control)', () => {
+  const r = runFixtureSpec(`import { test } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { tempDir } from ${JSON.stringify(TMP_MJS)};
+test('uses a temp dir', () => { fs.writeFileSync(path.join(tempDir('kept-'), 'f'), 'x'); });
+`);
+  assert.equal(r.status, 0, r.output);
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('Given a spec that loads tmp.mjs removes its own private temp dir, its run passes instead of crashing on ENOENT at exit (R34-flake-tmpguard FC-02)', () => {
+  const r = runFixtureSpec(`import { test } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import ${JSON.stringify(TMP_MJS)};
+test('removes the temp dir', () => { fs.rmSync(os.tmpdir(), { recursive: true, force: true }); });
+`);
+  assert.equal(r.status, 0, r.output);
+  assert.doesNotMatch(r.output, /ENOENT/);
+  assert.deepEqual(r.leftovers, []);
+});
+
+test('specsWithoutTmpCheck lists the specs whose imports never reach tmp.mjs, following relative helpers and ignoring imports commented out by line or block (R34-flake-tmpguard)', () => {
+  const dir = tempDir('tmp-check-graph-');
+  const support = path.join(dir, 'test-support');
+  const tests = path.join(dir, 'suite', 'tests');
+  fs.mkdirSync(support);
+  fs.mkdirSync(tests, { recursive: true });
+  fs.writeFileSync(path.join(support, 'tmp.mjs'), '');
+  fs.writeFileSync(path.join(tests, 'helper.mjs'), "import { tempDir } from '../../test-support/tmp.mjs';\nexport const x = 1;\n");
+  fs.writeFileSync(path.join(tests, 'direct.spec.mjs'), "import { test } from 'node:test';\nimport '../../test-support/tmp.mjs';\n");
+  fs.writeFileSync(path.join(tests, 'via-helper.spec.mjs'), "import {\n  x,\n} from './helper.mjs';\n");
+  fs.writeFileSync(path.join(tests, 'commented.spec.mjs'), "// import '../../test-support/tmp.mjs';\nimport { test } from 'node:test';\n");
+  fs.writeFileSync(path.join(tests, 'block-comment.spec.mjs'), "/*\nimport '../../test-support/tmp.mjs';\n*/\nimport { test } from 'node:test';\n");
+  fs.writeFileSync(path.join(tests, 'none.spec.mjs'), "import { test } from 'node:test';\nimport fs from 'node:fs';\n");
+  fs.writeFileSync(path.join(tests, 'notes.md'), "import '../../test-support/tmp.mjs';\n");
+  assert.deepEqual(specsWithoutTmpCheck(tests, path.join(support, 'tmp.mjs')), ['block-comment.spec.mjs', 'commented.spec.mjs', 'none.spec.mjs']);
+});
+
+test('Given a spec that loads tmp.mjs handles SIGTERM itself and keeps running, its temp dir stays usable and what it leaves is still reported (R34-flake-tmpguard fix check 2)', async () => {
+  const dir = tempDir('tmp-check-signal-');
+  const fresh = tempDir('tmp-check-fresh-');
+  const file = path.join(dir, 'fixture.spec.mjs');
+  fs.writeFileSync(file, `import { test } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import ${JSON.stringify(TMP_MJS)};
+test('survives SIGTERM', async () => {
+  const alive = setInterval(() => {}, 1000);
+  const got = new Promise((r) => process.once('SIGTERM', r));
+  fs.writeFileSync(path.join(${JSON.stringify(fresh)}, 'pid'), String(process.pid));
+  await got;
+  clearInterval(alive);
+  fs.writeFileSync(path.join(os.tmpdir(), 'after-signal'), 'x');
+});
+`);
+  const runner = spawn(process.execPath, ['--test', file], { env: suiteEnv(process.env, fresh), stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  runner.stdout.on('data', (d) => { output += d; });
+  runner.stderr.on('data', (d) => { output += d; });
+  try {
+    const pidFile = path.join(fresh, 'pid');
+    const deadline = Date.now() + 30_000;
+    while (!fs.existsSync(pidFile) || !fs.readFileSync(pidFile, 'utf8')) {
+      assert.ok(Date.now() < deadline, 'the fixture spec never started');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGTERM');
+    await new Promise((r) => (runner.exitCode !== null || runner.signalCode !== null ? r() : runner.once('close', r)));
+    fs.rmSync(pidFile);
+    assert.notEqual(runner.exitCode, 0, output);
+    assert.match(output, /left 1 entry in its temp dir \(now removed\): after-signal/);
+    assert.deepEqual(fs.readdirSync(fresh), []);
+  } finally {
+    runner.kill('SIGKILL');
+  }
+});
+
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  test(`Given a spec that loads tmp.mjs is killed by ${signal} mid-test, its private temp dir is still removed (R34-flake-tmpguard fix check)`, async () => {
+    const dir = tempDir('tmp-check-signal-');
+    const fresh = tempDir('tmp-check-fresh-');
+    const file = path.join(dir, 'fixture.spec.mjs');
+    fs.writeFileSync(file, `import { test } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import ${JSON.stringify(TMP_MJS)};
+test('waits', async () => {
+  fs.writeFileSync(path.join(${JSON.stringify(fresh)}, 'pid'), String(process.pid));
+  fs.writeFileSync(path.join(os.tmpdir(), 'in-flight'), 'x');
+  await new Promise((r) => setTimeout(r, 60_000));
+});
+`);
+    const runner = spawn(process.execPath, ['--test', file], { env: suiteEnv(process.env, fresh), stdio: 'ignore' });
+    try {
+      const pidFile = path.join(fresh, 'pid');
+      const deadline = Date.now() + 30_000;
+      while (!fs.existsSync(pidFile) || !fs.readFileSync(pidFile, 'utf8')) {
+        assert.ok(Date.now() < deadline, 'the fixture spec never started');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      process.kill(Number(fs.readFileSync(pidFile, 'utf8')), signal);
+      await new Promise((r) => (runner.exitCode !== null || runner.signalCode !== null ? r() : runner.once('exit', r)));
+      fs.rmSync(pidFile);
+      assert.deepEqual(fs.readdirSync(fresh), []);
+    } finally {
+      runner.kill('SIGKILL');
+    }
+  });
+}
