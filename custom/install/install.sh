@@ -348,7 +348,6 @@ else
 fi
 if [ -n "$DATA_ROOT_ARG" ]; then DATA_REQ="$(abspath "$DATA_ROOT_ARG")"; else DATA_REQ="$DIR"; fi
 if [ -n "$PROJECTS" ]; then PROJECTS="$(abspath "$PROJECTS")"; fi
-DATA="$DATA_REQ"
 QDIR="$(shell_quote "$DIR")" # for printed commands: the directory may contain spaces
 
 # The terminal: fd 3 reads answers, fd 4 receives what interactive tools print. Never opened with --non-interactive.
@@ -700,6 +699,18 @@ effective_data_root() {
   fi
 }
 
+# set_data_root [resolver]: the one writer of DATA. Sets it to the root the tools will use (effective_data_root, or with
+# "resolver" the checkout's path-resolver.mjs itself) and, in the same call, refuses a root no session could be
+# confined to, so nothing is ever created under a root that was not checked since it was last resolved.
+set_data_root() {
+  if [ "${1:-}" = resolver ]; then
+    DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+  else
+    DATA="$(effective_data_root)"
+  fi
+  refuse_unconfinable_root "$DATA"
+}
+
 # --data-root must be the root the tools will use. Checked before anything is created, so no directory or log appears
 # in the other root. The environment half needs no node: without it, paths are compared as written (trailing slashes
 # ignored); with node, symlinks and relative spellings are resolved first.
@@ -727,7 +738,6 @@ validate_inputs() {
   [ "$VALIDATED" = 1 ] && return 0
   if [ -z "$RESUME" ] && [ "${#DOCS[@]}" -eq 0 ] && [ -z "$PROJECTS" ]; then VALIDATED=1; return 0; fi
   have node || return 0 # checked again once the prerequisites are in place
-  DATA="$(effective_data_root)"
   local vargs=() rc=0
   if [ -n "$RESUME" ]; then vargs+=(--resume "$RESUME"); fi
   if [ "${#DOCS[@]}" -gt 0 ]; then vargs+=(--docs "${DOCS[@]}"); fi
@@ -790,8 +800,7 @@ check_projects() {
 # ---------------------------------------------------------------- intro and platform
 
 check_data_root_conflict
-DATA="$(effective_data_root)"
-refuse_unconfinable_root "$DATA"
+set_data_root
 validate_inputs
 check_projects local
 
@@ -860,8 +869,7 @@ fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
 # Again now node can read a .career-ops-data marker, before the daily lock or the log is taken under the root.
-DATA="$(effective_data_root)"
-refuse_unconfinable_root "$DATA"
+set_data_root
 validate_inputs
 check_projects fetch
 
@@ -951,8 +959,7 @@ else
 fi
 
 if [ "$DRY_RUN" = 0 ]; then
-  DATA="$(effective_data_root)"
-  refuse_unconfinable_root "$DATA"
+  set_data_root
   LOG_FILE="$DATA/data/install/install-$(date +%Y-%m-%d).log"
   mkdir -p "$(dirname "$LOG_FILE")"
   printf '%s' "$LOG_BUF" >> "$LOG_FILE"
@@ -1020,8 +1027,7 @@ else
       say "  wrote $marker -> $DATA_REQ"
     fi
   fi
-  DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
-  refuse_unconfinable_root "$DATA"
+  set_data_root resolver
   mkdir -p "$DATA"
   # same-path resolves letter case too (realpathSync.native), as pwd -P does not on a case-insensitive volume.
   if [ -n "$DATA_ROOT_ARG" ] && ! lib same-path "$DATA" "$DATA_REQ"; then

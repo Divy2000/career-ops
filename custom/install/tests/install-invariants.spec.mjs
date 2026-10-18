@@ -100,6 +100,13 @@ function ownerOf() {
   });
 }
 
+test('DATA has one writer, set_data_root, which refuses an unconfinable root in the same call (R30-scripts-b-L2-01)', () => {
+  const owners = ownerOf();
+  const writers = code.map((l, i) => (/(^|[\s;])DATA=/.test(l) ? owners[i] || '<top level>' : null)).filter(Boolean);
+  assert.deepEqual([...new Set(writers)], ['set_data_root'], code.filter((l) => /(^|[\s;])DATA=/.test(l)).join('\n'));
+  assert.match(shellFunctions('set_data_root'), /refuse_unconfinable_root "\$DATA"/);
+});
+
 test('every temp path is made by make_temp, and one cleanup trap owns every exit, QUIT included (R31-scripts-b-L1-01, R32-scripts-b-L1-02)', () => {
   const owners = ownerOf();
   const makers = code.map((l, i) => (/\bmktemp\b/.test(l) ? owners[i] || '<top level>' : null)).filter(Boolean);
