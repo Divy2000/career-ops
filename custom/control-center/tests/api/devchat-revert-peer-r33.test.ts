@@ -43,10 +43,13 @@ describe('a Dev Chat revert beside a turn another server process holds (R33-mgr-
     try {
       const meta = idleSession(app);
       const peer = await heldByOtherProcess(app, meta.id, 'track.claim');
-      const refused = await revert(app, meta.id);
-      expect(refused.statusCode).toBe(409);
-      expect(refused.json().error).toMatch(/finishing/);
-      await peer.exit();
+      try {
+        const refused = await revert(app, meta.id);
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json().error).toMatch(/finishing/);
+      } finally {
+        await peer.exit();
+      }
       expect((await revert(app, meta.id)).statusCode).toBe(200);
     } finally {
       await app.close();
