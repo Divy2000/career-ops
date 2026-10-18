@@ -10,13 +10,22 @@ import type { AppSettings, AppSettingsRead } from '@shared/api';
 
 export const useAppSettings = () => useQuery({ queryKey: ['system', 'settings'], queryFn: () => apiGet<AppSettingsRead>('/api/settings/app') });
 
+// The server takes app-settings patches without an ETag, in the order they arrive, so two writes on their way at once
+// could land older last and undo the user's latest choice. Each write waits for the one before it to answer.
+let writeQueue: Promise<unknown> = Promise.resolve();
+const queueWrite = (patch: Partial<AppSettings>) => {
+  const write = writeQueue.then(() => apiSend('PUT', '/api/settings/app', patch));
+  writeQueue = write.catch(() => undefined);
+  return write;
+};
+
 export function useSaveSettings() {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const save = async (patch: Partial<AppSettings>, okText: string) => {
     setError(null);
     try {
-      await apiSend('PUT', '/api/settings/app', patch);
+      await queueWrite(patch);
       toast.success(okText);
       await Promise.all([qc.invalidateQueries({ queryKey: ['system', 'settings'] }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
       return true;
