@@ -139,4 +139,12 @@ describe('app settings: the latest local choice wins', () => {
     expect(host.querySelector<HTMLInputElement>('#setting-budget-5h')!.value).toBe('1000');
     expect(host.querySelector<HTMLInputElement>('[aria-label="7 day token budget"]')!.value).toBe('9000');
   });
+
+  it('Given settings.json could not be read, when the AI engine tab opens, then it says defaults are showing', async () => {
+    settings = { ...settings, problem: 'settings.json is not valid JSON: Unexpected token' };
+    const host = await mount('EngineSettings');
+    const alert = await until(() => host.querySelector('[role="alert"]'), 'the problem alert');
+    expect(alert.textContent).toContain('settings.json is not valid JSON');
+    expect(alert.textContent).toContain('Defaults are in effect');
+  });
 });

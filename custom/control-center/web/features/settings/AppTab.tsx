@@ -76,6 +76,16 @@ const keepNewer =
   (current: string | null): string | null =>
     current === sent ? null : current;
 
+/** Both settings tabs read and write the same file, so each says when it could not be read and shows defaults. */
+function SettingsProblem({ problem }: { problem: string | null }) {
+  if (!problem) return null;
+  return (
+    <p role="alert" className="danger-text small">
+      {problem} Defaults are in effect until the next save.
+    </p>
+  );
+}
+
 /** App settings: logos opt-in and run retention (spec 2.14 App). */
 export function AppTab() {
   const q = useAppSettings();
@@ -89,11 +99,7 @@ export function AppTab() {
       <DataState query={q}>
         {s && (
           <div className="fields">
-            {s.problem && (
-              <p role="alert" className="danger-text small">
-                {s.problem} Defaults are in effect until the next save.
-              </p>
-            )}
+            <SettingsProblem problem={s.problem} />
             <AppearanceSetting />
             <div className="fields__row">
               <label className="fields__label" htmlFor="setting-logos">
@@ -152,6 +158,7 @@ export function EngineSettings() {
     <DataState query={q}>
       {s && (
         <div className="fields">
+          <SettingsProblem problem={s.problem} />
           <div className="fields__row">
             <label className="fields__label" htmlFor="setting-concurrency">
               Claude concurrency
