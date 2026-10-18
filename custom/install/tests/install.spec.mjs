@@ -31,6 +31,22 @@ const READY_FILES = {
   'portals.yml': 'x: 1\n',
 };
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
+// The harness's index installer always writes the default index; this one downloads where the real plugin does (a
+// trimmed H1B_INDEX_PATH taken from its working directory, else the default) or, with fail, exits 1 writing nothing,
+// so a run can reach the daily job with the default index still missing.
+function h1bInstaller(D, { fail = false } = {}) {
+  fs.writeFileSync(path.join(D, 'plugins/h1b-sponsor/install-h1b-index.mjs'), `import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+fs.appendFileSync(process.env.STUB_LOG, 'h1b-install ' + process.argv.slice(2).join(' ') + '\\n');
+if (${fail}) process.exit(1);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const set = (process.env.H1B_INDEX_PATH || '').trim();
+const idx = set ? path.resolve(set) : path.join(root, 'data', 'h1b', 'index.ndjson.gz');
+fs.mkdirSync(path.dirname(idx), { recursive: true });
+fs.writeFileSync(idx, 'x');
+`);
+}
 const exists = (...p) => fs.existsSync(path.join(...p));
 const md = (w, name, data) => w.write(`src/${name}`, data);
 // A freshly seeded modes/_custom.md: the template with the projects-library rule in place of its first "none yet" line.
@@ -1136,10 +1152,14 @@ test('an absolute H1B_INDEX_PATH through the real folder of a symlinked checkout
   const real = path.join(w.T, 'real-checkout');
   const D = path.join(w.T, 'linked-checkout');
   w.makeCheckout(real, { files: READY_FILES });
+  h1bInstaller(real, { fail: true });
   fs.symlinkSync(real, D);
   const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: path.join(real, 'data/h1b/index.ndjson.gz') } });
+  // The failed download keeps the default index missing when the job is installed, so only the path match keeps the note away.
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /The H-1B index download failed/, r.out);
+  assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
   assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
-  assert.equal(r.status, 0, r.out);
 });
 
 test('an H1B_INDEX_PATH other than the default raises no daily-job note when this run does not install the job: onboarding unfinished, or a dry run (R18-scripts-b-L2-01 review)', () => {
@@ -1202,15 +1222,41 @@ for (const spelling of ['data/h1b/index.ndjson.gz', './data//h1b/index.ndjson.gz
     assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
     assert.match(r.out, /index already installed/, r.out);
   });
+
+  test(`an H1B_INDEX_PATH naming the default index (${spelling}) raises no daily-job note when the job is installed with the default index missing (R31-tests-custom-L2-01)`, () => {
+    const { w, D } = fresh({ keychain: true });
+    w.makeCheckout(D, { files: { ...READY_FILES, 'data/h1b/keep': '' } });
+    h1bInstaller(D, { fail: true });
+    const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: spelling } });
+    assert.equal(r.status, 3, r.out);
+    assert.match(r.out, /The H-1B index download failed/, r.out);
+    assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
+    assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+  });
 }
 
 test('an H1B_INDEX_PATH spelling the default index on a checkout with no data/h1b folder yet leaves nothing pending (R18-scripts-b-L2-01 review)', () => {
   const { w, D } = fresh({ keychain: true });
   w.makeCheckout(D, { files: READY_FILES });
-  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--no-launchd', '--onboard', 'none'], { env: { H1B_INDEX_PATH: './data//h1b/../h1b/index.ndjson.gz' } });
-  assert.equal(r.status, 0, r.out);
-  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+  h1bInstaller(D, { fail: true });
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: './data//h1b/../h1b/index.ndjson.gz' } });
+  assert.equal(r.status, 3, r.out);
+  assert.ok(!exists(D, 'data/h1b'), r.out);
   assert.equal(w.calls('h1b-install').length, 1, r.out);
+  assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
+  assert.doesNotMatch(r.out, /does not inherit H1B_INDEX_PATH/, r.out);
+});
+
+test('an H1B_INDEX_PATH other than the default that this run downloads is still a pending action, since the daily job reads the default index (R31-tests-custom-L2-01)', () => {
+  const { w, D } = fresh({ keychain: true });
+  w.makeCheckout(D, { files: READY_FILES });
+  h1bInstaller(D);
+  const r = w.run(['--dir', D, '--non-interactive', '--no-start', '--onboard', 'none'], { env: { H1B_INDEX_PATH: ' data/h1b/shared.gz ' } });
+  assert.equal(r.status, 3, r.out);
+  assert.match(r.out, /H-1B index installed/, r.out);
+  assert.ok(exists(D, 'data/h1b/shared.gz') && !exists(D, 'data/h1b/index.ndjson.gz'), r.out);
+  assert.deepEqual(w.calls('launchd-install'), ['launchd-install --jobs daily'], r.out);
+  assert.match(r.out, /the daily job does not inherit H1B_INDEX_PATH/, r.out);
 });
 
 test('a blank H1B_INDEX_PATH is the plugin\'s misconfiguration, not the default index: a pending action, nothing downloaded (R18-scripts-b-L2-01)', () => {
