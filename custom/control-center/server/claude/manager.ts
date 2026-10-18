@@ -113,6 +113,8 @@ interface Tracked {
   timer: NodeJS.Timeout | null;
   /** This process's track claim (TRACK_CLAIM_FILE), or null while another tracker holds it and this one stands by. */
   release: (() => void) | null;
+  /** A settle step (finalize, its failure path, a kept reservation's settle) is in flight: it untracks when it ends. */
+  settling: boolean;
 }
 
 /** How far into a turn's raw log the transcript got, so a restarted server resumes instead of replaying. */
@@ -977,7 +979,13 @@ export class SessionManager {
   }
 
   close(): void {
-    for (const id of [...this.active.keys()]) this.untrack(id);
+    // A settle step in flight keeps its track claim until it ends (its own untrack releases it): a peer must not start a
+    // turn its late writes would land on.
+    for (const [id, tracked] of [...this.active]) {
+      if (tracked.timer) clearInterval(tracked.timer);
+      tracked.timer = null;
+      if (!tracked.settling) this.untrack(id);
+    }
     this.closed = true;
     if (this.policyAckTimer) clearTimeout(this.policyAckTimer);
     this.policyAckTimer = null;
@@ -1510,7 +1518,7 @@ export class SessionManager {
 
   private track(id: string, n: number, runId: string, policy: ModePolicy, state: TurnState, token: string): void {
     if (this.active.has(id)) return;
-    const tracked: Tracked = { timer: null, release: this.claimTrack(id) };
+    const tracked: Tracked = { timer: null, release: this.claimTrack(id), settling: false };
     this.active.set(id, tracked);
     const progressFile = path.join(this.store.guardDirOf(id), 'turns', String(n), 'progress.json');
     const parser = new StreamParser();
@@ -1653,7 +1661,7 @@ export class SessionManager {
         fail(err);
         clearInterval(timer);
         // Still tracked until the runner stops following its process: the duplicate checks count it live until then.
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err).finally(() => this.untilRunStops(id, runId, state.beforeReports));
+        this.settling(id, () => this.finalizeFailed(id, n, null, { turnDone, denials, failure, keepReservation: true }, err), () => this.untilRunStops(id, runId, state.beforeReports));
         return;
       }
       // A cancelled run's status leaves queued/running at once, but its Claude process may still run until the runner's
@@ -1666,16 +1674,14 @@ export class SessionManager {
         stopRun();
         if (this.runner.ending(runId)) return;
         clearInterval(timer);
-        void this.finalizeFailed(id, n, null, { turnDone, denials, failure }, new Error(`the run record ${runId} is gone`)).finally(() => this.untrack(id));
+        this.settling(id, () => this.finalizeFailed(id, n, null, { turnDone, denials, failure }, new Error(`the run record ${runId} is gone`)));
         return;
       }
       if (run.endedAt === null) return;
       clearInterval(timer);
       safePull();
       const ended = run;
-      this.finalize(id, n, ended, policy, state, { envelopes, envelopeKinds, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure })
-        .catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err))
-        .finally(() => this.untrack(id));
+      this.settling(id, () => this.finalize(id, n, ended, policy, state, { envelopes, envelopeKinds, denials, sawResult, turnDone, finalText: sawResult ? finalText : parser.text, failure }).catch((err: unknown) => this.finalizeFailed(id, n, ended, { turnDone, denials, failure }, err)));
     }, this.deps.pollMs ?? 250);
     timer.unref();
     tracked.timer = timer;
@@ -1692,6 +1698,16 @@ export class SessionManager {
       console.warn(`[sessions] session ${id}: could not take its track claim, so another server process cannot see it finishing: ${(err as Error).message}`);
       return () => {};
     }
+  }
+
+  /** Runs one settle step of a tracked session, then `next` (by default, untracking it), whether the step failed or not. */
+  private settling(id: string, step: () => Promise<void>, next: () => void = () => this.untrack(id)): void {
+    const tracked = this.active.get(id);
+    if (tracked) tracked.settling = true;
+    void step().finally(() => {
+      if (tracked) tracked.settling = false;
+      next();
+    });
   }
 
   /** The one way a tracked session stops being tracked: its timer stops and its track claim goes. */
@@ -1758,7 +1774,7 @@ export class SessionManager {
    * session kept stays reserved.
    */
   private untilRunStops(id: string, runId: string, beforeReports: string[]): void {
-    if (this.closed) return;
+    if (this.closed) return this.untrack(id);
     let stopped = false;
     const following = () => {
       if (!stopped) {
@@ -1783,7 +1799,7 @@ export class SessionManager {
     let unreadableSince: number | null = null;
     const tracked = this.active.get(id);
     if (!tracked) return;
-    const settle = () => void this.settleKeptReservation(id, beforeReports).finally(() => this.untrack(id));
+    const settle = () => this.settling(id, () => this.settleKeptReservation(id, beforeReports));
     if (!following()) {
       settle();
       return;
@@ -1795,7 +1811,7 @@ export class SessionManager {
         clearInterval(timer);
         console.warn(`[sessions] session ${id}: the run record ${runId} still cannot be read; its report number is left to the stale reservation GC`);
         // A report the run already wrote under the number is credited now; nothing would look for it later.
-        void this.settleKeptReservation(id, beforeReports, false).finally(() => this.untrack(id));
+        this.settling(id, () => this.settleKeptReservation(id, beforeReports, false));
         return;
       }
       this.keepReservationFresh(id);

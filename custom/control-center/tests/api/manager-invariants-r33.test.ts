@@ -100,6 +100,17 @@ describe('a cancelled turn another server process is still finalizing (R33-claud
     }
   }, 40_000);
 
+  it('given A still finalizing, when A closes, then a reply through B is still refused until that finalize ends', async () => {
+    const s = await peerFinalizing();
+    try {
+      await s.a.close();
+      await expect(s.b.sessions.send(s.id, 'Again?')).rejects.toThrow(/still finishing/);
+      expect(s.b.sessions.read(s.id)!.turns).toHaveLength(1);
+    } finally {
+      await teardown(s);
+    }
+  }, 40_000);
+
   it('given A finished finalizing, when a reply is sent through B, then it starts', async () => {
     const s = await peerFinalizing();
     try {
