@@ -9,6 +9,7 @@ import { SessionPanel } from '../../components/SessionPanel';
 import { summarizeWatcher } from '../../lib/watcherState';
 import { LookupTab } from './LookupTab';
 import { useRememberedSession } from '../../lib/useRememberedSession';
+import { httpHref } from '../../lib/posting-href';
 
 const route = getRouteApi('/sponsorship');
 
@@ -168,8 +169,8 @@ export function SponsorshipPage() {
                           <td className="mono">{String(c.announced ?? c.announced_date ?? '')}</td>
                           <td className="muted">{String(c.source ?? '')}</td>
                           <td>
-                            {c.url ? (
-                              <a href={String(c.url)} target="_blank" rel="noreferrer noopener">
+                            {httpHref(String(c.url ?? '')) ? (
+                              <a href={httpHref(String(c.url))} target="_blank" rel="noreferrer noopener">
                                 {String(c.title ?? '')}
                               </a>
                             ) : (
@@ -203,8 +204,8 @@ export function SponsorshipPage() {
                           <tr key={i}>
                             {Object.entries(row).map(([k, v]) => (
                               <td key={k} className={k === 'first_seen' || k === 'published' ? 'mono' : ''}>
-                                {k === 'url' ? (
-                                  <a href={v} target="_blank" rel="noreferrer noopener">
+                                {k === 'url' && httpHref(v) ? (
+                                  <a href={httpHref(v)} target="_blank" rel="noreferrer noopener">
                                     link
                                   </a>
                                 ) : (
@@ -243,8 +244,8 @@ export function SponsorshipPage() {
                             <Pill tone={alertTone(String(a.status))}>{String(a.status)}</Pill>
                           </td>
                           <td>
-                            {a.url ? (
-                              <a href={String(a.url)} target="_blank" rel="noreferrer noopener">
+                            {httpHref(String(a.url ?? '')) ? (
+                              <a href={httpHref(String(a.url))} target="_blank" rel="noreferrer noopener">
                                 {String(a.headline ?? '')}
                               </a>
                             ) : (
