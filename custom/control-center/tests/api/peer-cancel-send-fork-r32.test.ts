@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { copyFixtureRoot, makeTestApp } from '../helpers/app.js';
 import { runsEnded } from '../helpers/runs.js';
 import { tempDir } from '../helpers/tmp.js';
@@ -9,9 +11,11 @@ const newSession = (app: App) => app.sessions.store.create({ mode: 'advisor', po
 
 /** A turn whose Claude process ignores SIGTERM and lives `ms`, cancelled the way another server process cancels it. */
 async function cancelledButStopping(app: App, id: string, ms: number): Promise<void> {
-  const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', `process.on('SIGTERM', () => {}); setTimeout(() => {}, ${ms})`], cwd: process.cwd() } });
+  // The process says when it ignores SIGTERM: a cancel before that (a slow start on a loaded machine) would end it at once.
+  const ready = path.join(tempDir('cc-r32-stopping-'), 'ready');
+  const run = app.runner.start({ actionId: 'session.advisor', label: 'Ask (advisor): turn 1', cost: 'tokens', resources: [], claude: false, params: { sessionId: id, turn: 1 }, cmd: { bin: process.execPath, args: ['-e', `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(ready)}, ''); setTimeout(() => {}, ${ms})`], cwd: process.cwd() } });
   app.sessions.store.beginTurn(id, { runId: run.id, userText: 'What is overdue?' });
-  await new Promise((r) => setTimeout(r, 300));
+  while (!fs.existsSync(ready)) await new Promise((r) => setTimeout(r, 20));
   app.runner.cancel(run.id);
   app.sessions.store.setStatus(id, 'cancelled');
 }
