@@ -103,16 +103,32 @@ function sentenceEnd(text: string): number {
   return -1;
 }
 
-/** Keeps spans up to the first sentence end. A link whose label holds the end is kept whole. */
+/**
+ * Keeps spans up to the first sentence end. A link (its consecutive spans sharing one target) whose label holds the end
+ * is kept whole; its end is judged with the text after the link in view, so "[rule 5.](u) applies" reads on.
+ */
 function firstSentence(spans: DigestSpan[]): DigestSpan[] {
   const out: DigestSpan[] = [];
-  for (const s of spans) {
-    const end = sentenceEnd(s.text);
-    if (end !== -1) {
-      out.push(s.href ? s : { ...s, text: s.text.slice(0, end) });
-      return out;
+  for (let i = 0; i < spans.length; ) {
+    const s = spans[i]!;
+    if (!s.href) {
+      const end = sentenceEnd(s.text);
+      if (end !== -1) {
+        out.push({ ...s, text: s.text.slice(0, end) });
+        return out;
+      }
+      out.push(s);
+      i++;
+      continue;
     }
-    out.push(s);
+    let j = i;
+    while (j < spans.length && spans[j]!.href === s.href) j++;
+    const link = spans.slice(i, j);
+    const label = spansText(link);
+    out.push(...link);
+    const end = sentenceEnd(label + spansText(spans.slice(j)));
+    if (end !== -1 && end <= label.length) return out;
+    i = j;
   }
   return out;
 }

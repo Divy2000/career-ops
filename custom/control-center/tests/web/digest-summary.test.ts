@@ -121,6 +121,13 @@ describe('summarizeDigest', () => {
     expect(lines('- Per [the U.S.](https://example.test/us) rule today. Later text.')).toEqual(['Per the U.S. rule today.']);
   });
 
+
+  it('keeps every piece of a link whose label holds the sentence end, and reads on past a label period before lowercase text (R33 fix-check FC-01)', () => {
+    const u = 'https://example.test/r';
+    expect(summarizeDigest(`- See [Read it.\\\nNow](${u}) later. More.`)[0]).toEqual([{ text: 'See ' }, { text: 'Read it.', href: u }, { text: ' ', href: u }, { text: 'Now', href: u }]);
+    expect(summarizeDigest(`- See [Rule one. *Two*](${u}) later. More.`)[0]).toEqual([{ text: 'See ' }, { text: 'Rule one. ', href: u }, { text: 'Two', href: u }]);
+    expect(lines(`- See [rule 5.](${u}) applies today. Next.`)).toEqual(['See rule 5. applies today.']);
+  });
   it('keeps a hard break inside a link label as part of the link (R33-feat-c-X-03)', () => {
     expect(summarizeDigest('- Read [the final\\\nrule](https://example.test/rule).')[0]).toEqual([
       { text: 'Read ' },
