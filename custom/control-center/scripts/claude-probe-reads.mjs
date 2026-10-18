@@ -698,7 +698,8 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
 try {
   buildLayout();
   const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
-  summary.version = (v.stdout.match(/\d+\.\d+\.\d+/) ?? [null])[0];
+  if (v.error) throw new Error(`claude not runnable at ${claudeBin}: ${v.error.message}`);
+  summary.version = ((v.stdout ?? '').match(/\d+\.\d+\.\d+/) ?? [null])[0];
   const contract = JSON.parse(fs.readFileSync(CONTRACT_FILE, 'utf8'));
   const approved = contract.claude.approvedVersions ?? [];
   summary.cases.C0 = approved.includes(summary.version) ? 'pass' : 'fail';
