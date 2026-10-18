@@ -14,7 +14,7 @@ import { LOG_JOBS, type ScheduleJob, type ScheduleService } from '../system/sche
 import type { DailyJobWatch } from '../system/daily.js';
 import { listLogDates, localDate, logHasStart, parseDailyLog, withJobState } from '../domains/immigration.js';
 import { readText } from '../domains/files.js';
-import { appSettingsPatchSchema, readSettings, SETTINGS_REL, updateSettings, type AppSettings } from '../domains/settings.js';
+import { appSettingsPatchSchema, readSettings, SETTINGS_REL, updateSettings, type SettingsRead } from '../domains/settings.js';
 import { computeUsage, type UsageRead } from '../domains/usage.js';
 import { INSIGHT_SCRIPTS, readInsight, type InsightScript } from '../domains/insightsCache.js';
 import { readContacts, readInterviews } from '../domains/contacts.js';
@@ -26,8 +26,8 @@ export interface SettingsDeps {
   bus: EventBus;
   exec?: Exec;
   schedule: ScheduleService;
-  /** Applies a saved settings object to the live runner (slot cap, retention). */
-  applySettings: (s: AppSettings) => void;
+  /** Applies a read of settings.json to the live runner (slot cap, retention) when its version is not the one applied. */
+  applySettings: (read: SettingsRead) => void;
   /** Answers whether run-daily.sh runs now, so a daily log with no done line reads running or interrupted. */
   daily: DailyJobWatch;
 }
@@ -126,7 +126,10 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
 
   // ---- app settings ----
   app.get('/api/settings/app', async () => {
-    const { settings, problem, etag } = readSettings(cfg.dataRoot);
+    const read = readSettings(cfg.dataRoot);
+    // A hand edit shown here reaches the runner too, not only at the next save or restart.
+    opts.applySettings(read);
+    const { settings, problem, etag } = read;
     return { ...settings, problem, etag };
   });
   app.put<{ Body: unknown; Querystring: { reset?: string } }>('/api/settings/app', async (req, reply) => {
@@ -135,6 +138,8 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
     const ifMatch = req.headers['if-match'];
     const written = updateSettings(cfg.dataRoot, body.data, { reset: req.query.reset === '1', ifMatch: typeof ifMatch === 'string' ? ifMatch : undefined });
     if (!written.ok && written.code === 'settings-changed') {
+      // The page shows these current values next, so the runner takes them as the GET would.
+      opts.applySettings(written.current);
       const { settings, problem, etag } = written.current;
       return reply.code(409).send({ code: written.code, error: `${SETTINGS_REL} changed since you loaded it (another window, device or a hand edit). Check the current values and save again.`, current: { ...settings, problem, etag } });
     }
@@ -142,7 +147,7 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
       return reply.code(409).send({ code: written.code, problem: written.problem, error: `${SETTINGS_REL} could not be read (${written.problem}), so saving would replace it with defaults. Fix the file by hand, or save again with ?reset=1 to replace it.` });
     }
     const next = written.settings;
-    opts.applySettings(next);
+    opts.applySettings({ settings: next, problem: null, etag: written.etag });
     bus.publish('data.changed', { domain: 'config' });
     return { ...next, etag: written.etag };
   });

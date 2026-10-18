@@ -1168,3 +1168,65 @@ describe('contacts and interviews reads', () => {
     }
   });
 });
+
+describe('hand edits to settings.json reach the runner (R34-srv-dom-b-L2-01)', () => {
+  const readIn = async (own: TestApp) => (await own.app.inject({ method: 'GET', url: '/api/settings/app', headers: own.authed })).json();
+  const writeFile = (own: TestApp, content: string) => {
+    const file = path.join(own.cfg.dataRoot, 'data', 'control-center', 'settings.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  };
+  it('given a running server, when settings.json is edited by hand and the settings page reads it, then the runner uses the slot cap the page shows', async () => {
+    const own = await makeTestApp();
+    try {
+      expect(own.runner.claudeSlots).toBe(2);
+      writeFile(own, JSON.stringify({ claudeConcurrency: 4, retention: 50 }));
+      expect(await readIn(own)).toMatchObject({ claudeConcurrency: 4, retention: 50, problem: null });
+      expect(own.runner.claudeSlots).toBe(4);
+    } finally {
+      await own.close();
+    }
+  });
+  it('given a hand edit back to the content of an earlier version, when the page reads it, then the runner follows it again', async () => {
+    const own = await makeTestApp();
+    try {
+      writeFile(own, JSON.stringify({ claudeConcurrency: 1 }));
+      await readIn(own);
+      expect(own.runner.claudeSlots).toBe(1);
+      const saved = await own.app.inject({ method: 'PUT', url: '/api/settings/app', headers: own.authedWrite, payload: { claudeConcurrency: 3 } });
+      expect(saved.statusCode, saved.body).toBe(200);
+      expect(own.runner.claudeSlots).toBe(3);
+      writeFile(own, JSON.stringify({ claudeConcurrency: 1 }));
+      expect((await readIn(own)).claudeConcurrency).toBe(1);
+      expect(own.runner.claudeSlots).toBe(1);
+    } finally {
+      await own.close();
+    }
+  });
+  it('given a hand edit after the page loaded, when a save is refused as stale and answers the current settings, then the runner uses them', async () => {
+    const own = await makeTestApp();
+    try {
+      const read = await readIn(own);
+      writeFile(own, JSON.stringify({ claudeConcurrency: 4 }));
+      const stale = await own.app.inject({ method: 'PUT', url: '/api/settings/app', headers: { ...own.authedWrite, 'if-match': read.etag }, payload: { logos: true } });
+      expect(stale.statusCode, stale.body).toBe(409);
+      expect(stale.json().current).toMatchObject({ claudeConcurrency: 4 });
+      expect(own.runner.claudeSlots).toBe(4);
+    } finally {
+      await own.close();
+    }
+  });
+  it('given a hand edit that leaves settings.json unreadable, when the page reads it, then the runner keeps the last good settings', async () => {
+    const own = await makeTestApp();
+    try {
+      writeFile(own, JSON.stringify({ claudeConcurrency: 3 }));
+      await readIn(own);
+      expect(own.runner.claudeSlots).toBe(3);
+      writeFile(own, '{"claudeConcurrency": 1,');
+      expect((await readIn(own)).problem).toEqual(expect.any(String));
+      expect(own.runner.claudeSlots).toBe(3);
+    } finally {
+      await own.close();
+    }
+  });
+});
