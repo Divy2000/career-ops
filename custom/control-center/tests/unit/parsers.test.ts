@@ -33,6 +33,25 @@ describe('reports', () => {
     expect(readReport(root, 5)).toMatchObject({ kind: 'reserved', file: '005-RESERVED.md' });
   });
 
+  it('does not take a folder named like a report for one, so the tracker still loads (R34-srv-dom-b-L1-01)', async () => {
+    const r = copyFixtureRoot();
+    // A session that wrote reports/099-acme.md/jd.txt, and a folder that sorts before report 2's real file.
+    fs.mkdirSync(path.join(r, 'reports', '099-acme.md'));
+    fs.writeFileSync(path.join(r, 'reports', '099-acme.md', 'jd.txt'), 'jd');
+    fs.mkdirSync(path.join(r, 'reports', '002-aaa.md'));
+    fs.mkdirSync(path.join(r, 'reports', '008-RESERVED.md'));
+    expect([...listReportFiles(r).entries()]).toEqual([...listReportFiles(root).entries()]);
+    expect(readReport(r, 99)).toEqual({ kind: 'missing', num: 99 });
+    expect(readReport(r, 8)).toEqual({ kind: 'missing', num: 8 });
+    expect(readReport(r, 2)).toMatchObject({ kind: 'ok', report: { file: '002-northwind-analytics.md' } });
+    fs.appendFileSync(path.join(r, 'data', 'applications.md'), `| 99 | 2026-10-01 | Acme | ${EM_DASH} | Eng | 4.0/5 | Evaluated | ❌ | [99](../reports/099-acme.md) | |\n`);
+    const t = await readTracker(DEFAULT_CODE_ROOT, r);
+    expect(t.kind).toBe('ok');
+    if (t.kind !== 'ok') return;
+    expect(t.rows.find((row) => row.num === 99)).toMatchObject({ reportState: 'missing' });
+    expect(t.rows.find((row) => row.num === 2)).toMatchObject({ reportState: 'ok' });
+  });
+
   it('does not read a bare-date digest such as reports/2026-10-17.md as report #2026 (R28-mgr-rev-05)', () => {
     const dated = copyFixtureRoot();
     fs.writeFileSync(path.join(dated, 'reports', '2026-10-17.md'), '# Scan digest 2026-10-17\n');

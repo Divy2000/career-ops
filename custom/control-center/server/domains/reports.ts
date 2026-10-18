@@ -61,17 +61,23 @@ export function reportNumberOf(name: string): number | null {
   return m ? parseInt(m[1]!, 10) : null;
 }
 
-/** Index of real report files by number (RESERVED placeholders excluded). */
-export function listReportFiles(dataRoot: string): Map<number, string> {
-  const dir = path.join(dataRoot, 'reports');
-  const out = new Map<number, string>();
-  let names: string[];
+/** Names of the files under reports/: a folder named like a report (a session that wrote reports/099-acme.md/jd.txt) is no report. */
+function reportDirFiles(dataRoot: string): string[] {
   try {
-    names = fs.readdirSync(dir);
+    return fs
+      .readdirSync(path.join(dataRoot, 'reports'), { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return out;
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw err;
   }
+}
+
+/** Index of real report files by number (RESERVED placeholders excluded). */
+export function listReportFiles(dataRoot: string): Map<number, string> {
+  const out = new Map<number, string>();
+  const names = reportDirFiles(dataRoot);
   for (const name of names.sort()) {
     if (isReservedReportFile(name)) continue;
     const num = reportNumberOf(name);
@@ -303,7 +309,7 @@ export function readReport(dataRoot: string, num: number): ReportRead {
   if (!file) {
     let names: string[];
     try {
-      names = fs.readdirSync(dir);
+      names = reportDirFiles(dataRoot);
     } catch {
       return { kind: 'missing', num };
     }
