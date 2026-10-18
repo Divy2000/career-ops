@@ -107,8 +107,9 @@ describe('oferta report format (modes/oferta.md, examples/sample-report.md)', ()
       .replace('{Role}', 'Eng')
       .replace('{X.X/5}', '4.0/5')
       // The sections the prompt lists after the Machine Summary ("Then include:").
-      .concat('\n## A) Role Summary\n\n| Field | Value |\n|---|---|\n| **Remote** | Hybrid |\n\n## B) CV Match\n\nGood\n');
-    expect(prompt).toMatch(/^- `## Machine Summary`\n- `## A\) Role Summary`$/m);
+      .concat('\n## A) Role Summary\n\n| Field | Value |\n|---|---|\n| **Remote** | Hybrid |\n\n## B) CV Match\n\nGood\n')
+      .concat('\n## C) Level and Strategy\n\nC\n\n## D) Compensation and Demand\n\nD\n\n## E) Personalization Plan\n\nE\n\n## F) Interview Plan\n\nF\n\n## G) Posting Legitimacy\n\nG\n');
+    expect(prompt).toMatch(/^- `## Machine Summary`\n- `## A\) Role Summary`\n- `## B\) CV Match`\n- `## C\) Level and Strategy`\n- `## D\) Compensation and Demand`\n- `## E\) Personalization Plan`\n- `## F\) Interview Plan`\n- `## G\) Posting Legitimacy`$/m);
     const r = parseReport(md, '002-acme.md', 2);
     expect(r.machine).toMatchObject({ company: 'Acme', final_decision: 'Skip' });
     expect(r).toMatchObject({ finalDecision: 'Skip', discardReasons: ['salary_too_low'], comp: '80-90k EUR', score: 4 });
