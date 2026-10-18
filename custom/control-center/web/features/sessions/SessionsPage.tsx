@@ -12,6 +12,7 @@ import type { ModePolicy, SessionMeta } from '@shared/api';
 import { plainPostingUrl } from '@shared/posting-url';
 import { localJdPath } from '@shared/local-jd';
 import { useActiveEvaluation } from '../today/evaluate';
+import { isReportGatedMode } from '../pipeline/evaluating';
 import { formatLocalMinute } from '../../lib/time';
 import { forgetDevSession } from '../../lib/devchatSession';
 
@@ -130,8 +131,8 @@ export function SessionsPage() {
 }
 
 /**
- * The New session panel, held back while its target is a URL the session route would refuse, or a posting an oferta
- * session is still evaluating (the guard the Evaluate entry points share: the route does not dedupe by target).
+ * The New session panel, held back while its target is a URL the session route would refuse, or, in a report-gated mode,
+ * a posting a session is still evaluating (the guard the Evaluate entry points share: the route does not dedupe by target).
  */
 function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['target'] }) {
   // Once this panel has started a session the target no longer reaches the route, so its controls stay usable.
@@ -139,7 +140,7 @@ function NewSessionPanel({ mode, target }: { mode: string; target: SessionMeta['
   const badUrl = !started && target.type === 'url' && !plainPostingUrl(target.value);
   const sessions = useSessions();
   const activeFor = useActiveEvaluation();
-  const posting = !started && !badUrl && mode === 'oferta' && target.value !== null && (target.type === 'url' || localJdPath(target.value) !== null) ? target.value : null;
+  const posting = !started && !badUrl && isReportGatedMode(mode) && target.value !== null && (target.type === 'url' || localJdPath(target.value) !== null) ? target.value : null;
   // Until the sessions list first loads (and when it cannot), a running evaluation of the posting cannot be told apart
   // from none. A failed later poll keeps the list it had, so it does not lock the prompt being typed.
   const checking = posting !== null && sessions.data === undefined;
