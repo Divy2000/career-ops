@@ -797,6 +797,10 @@ export class SessionManager {
       this.bus.publish('session.status', { sessionId: id, status: 'cancelled', mode: meta.mode });
       return this.store.read(id)!;
     }
+    // Another server process preparing a turn here holds its claim and decides alone whether it spawns: answering with the
+    // unchanged session would let the turn the user cancelled start. Once it runs, a cancel here stops it. This process's
+    // own claim (a fork waiting for its source's cancelled turn to finish) is not that.
+    if (!this.sending.has(id) && this.turnClaimHeld(id)) throw new BusyError(`session ${id} is starting a turn in another server process; cancel again once it is running`);
     if (turn && (meta.status === 'running' || meta.status === 'queued')) {
       // A turn whose run already ended is being finalized (or about to be): marking it cancelled here would turn a
       // completed turn into "cancelled", keep its pipeline row pending, leave its policy batch unacknowledged and let
@@ -825,15 +829,32 @@ export class SessionManager {
     if (current === null) return this.store.delete(id);
     // A turn another server process runs: only its own process tracks it, so the record is all this one can see. One
     // still queued is preparing under the turn claim taken below.
-    if (current.status === 'running') throw new BusyError(`session ${id} is running`);
+    this.assertNotRunningElsewhere(current);
     // Another server process starting a turn on the session holds its claim: deleting it now leaves that turn starting
     // on a session that no longer exists.
     const unclaimTurn = this.claimTurn(id);
     try {
+      // Read again under the claim: another server process may have started a turn since.
+      const claimed = this.store.read(id);
+      if (claimed !== null) this.assertNotRunningElsewhere(claimed);
       return await this.deleteClaimed(id);
     } finally {
       unclaimTurn();
     }
+  }
+
+  /**
+   * Refuses a session whose last turn runs, or was cancelled (here or in another server process) and is still stopping:
+   * its Claude process lives until SIGKILL and may yet write the report under the number a delete would release.
+   */
+  private assertNotRunningElsewhere(meta: SessionMeta): void {
+    if (meta.status === 'running') throw new BusyError(`session ${meta.id} is running`);
+    const turn = meta.turns.at(-1);
+    if (!turn || turn.endedAt !== null) return;
+    const run = this.runner.store.read(turn.runId);
+    if (run === null || run.endedAt !== null || this.runner.store.readExit(turn.runId) !== null) return;
+    // A cancelled run left by a stopped process is taken over here and settled, or followed until it exits.
+    if (run.status !== 'cancelled' || this.runner.ending(turn.runId)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
   }
 
   private async deleteClaimed(id: string): Promise<boolean> {
