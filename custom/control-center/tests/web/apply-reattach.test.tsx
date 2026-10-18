@@ -35,6 +35,8 @@ let turnGate: Promise<void> | null;
 let turnRefused: boolean;
 /** The tracker.setStatus actions the page sent. */
 let statusPosts: Array<Record<string, unknown>>;
+/** A tracker.setStatus refusal the server answers instead of applying it, or null to apply it. */
+let statusRefusal: { status: number; body: unknown } | null;
 let root: Root;
 let router: AnyRouter;
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -42,11 +44,15 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
 const DOCS: ApplyDocuments = { pdfs: ['output/cv-acme.pdf'], covers: [], suggestedPdf: 'output/cv-acme.pdf', suggestedCover: null };
 const ANSWERS = { fields: [{ id: 'name', label: 'Full name', type: 'text', required: true, value: 'Jane Smith', needsConfirmation: false }, { id: 'why', label: 'Why Acme', type: 'textarea', required: false, value: 'Robots.', needsConfirmation: true }] };
 
+// The row the page shows under #12, as the tracker read it.
+const ROW_12 = { company: 'Acme Robotics', role: 'Robotics Engineer', report: 31 };
+const APPLIED_12 = { row: 12, state: 'Applied', expectCompany: 'Acme Robotics', expectRole: 'Robotics Engineer', expectReport: 31 };
+
 async function openApply(n: string | null = '12', status?: string) {
   const { ApplyBody } = await import('@web/features/apply/ApplyPage');
   const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
   const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
-  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: 'Acme Robotics', postingUrl: 'https://jobs.example.com/acme/1', status } : { n: null, company: null, postingUrl: '' }) });
+  const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: () => createElement(ApplyBody, n ? { n, company: 'Acme Robotics', postingUrl: 'https://jobs.example.com/acme/1', status, identity: ROW_12 } : { n: null, company: null, postingUrl: '' }) });
   const elsewhere = createRoute({ getParentRoute: () => rootRoute, path: '/elsewhere', component: () => createElement('p', null, 'Elsewhere page') });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/sessions/$id', component: () => createElement('p', null, 'Session page') });
   router = createRouter({ routeTree: rootRoute.addChildren([apply, elsewhere, session]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
@@ -84,6 +90,7 @@ beforeEach(() => {
   turnGate = null;
   turnRefused = false;
   statusPosts = [];
+  statusRefusal = null;
   sessionStorage.clear();
   vi.stubGlobal(
     'fetch',
@@ -104,6 +111,7 @@ beforeEach(() => {
       if (url === '/api/sessions/s-apply-url') return json({ meta: URL_SESSION, events: [] });
       if (url === '/api/actions/tracker.setStatus' && init?.method === 'POST') {
         statusPosts.push((JSON.parse(String(init.body)) as { params: Record<string, unknown> }).params);
+        if (statusRefusal) return new Response(JSON.stringify(statusRefusal.body), { status: statusRefusal.status, headers: { 'content-type': 'application/json' } });
         return json({ result: 'updated' });
       }
       return new Response(JSON.stringify({ error: 'not stubbed' }), { status: 404, headers: { 'content-type': 'application/json' } });
@@ -757,7 +765,7 @@ describe('Mark applied does not roll back a row that is further along (R30-feat-
     await act(async () => markApplied()!.click());
     await until(() => statusPosts.length > 0, 'the status action');
     expect(dialog()).toBeNull();
-    expect(statusPosts).toEqual([{ row: 12, state: 'Applied' }]);
+    expect(statusPosts).toEqual([APPLIED_12]);
   });
 
   it('Given a row already Applied, When the page opens, Then Mark applied is not offered', async () => {
@@ -782,6 +790,26 @@ describe('Mark applied does not roll back a row that is further along (R30-feat-
     expect(dialog()!.textContent).toContain('Offer');
     await act(async () => [...dialog()!.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent !== 'Cancel')!.click());
     await until(() => statusPosts.length > 0, 'the status action');
-    expect(statusPosts).toEqual([{ row: 12, state: 'Applied' }]);
+    expect(statusPosts).toEqual([APPLIED_12]);
+  });
+});
+
+describe('Mark applied names the row it shows, so a reindex cannot mark another application (R30-feat-c-L2-01b)', () => {
+  const markApplied = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Mark applied');
+
+  it('Given row #12 shown as Acme Robotics, When Mark applied is clicked, Then the status action carries its company, role and report', async () => {
+    await openApply('12', 'Evaluated');
+    await act(async () => markApplied()!.click());
+    await until(() => statusPosts.length > 0, 'the status action');
+    expect(statusPosts).toEqual([APPLIED_12]);
+  });
+
+  it('Given another row now sits under #12, When Mark applied is clicked, Then the server refusal is shown and nothing claims success', async () => {
+    const error = 'Row #12 now holds Globex (Platform Engineer), not the row you picked. Reload the tracker.';
+    statusRefusal = { status: 409, body: { error } };
+    await openApply('12', 'Evaluated');
+    await act(async () => markApplied()!.click());
+    await until(() => host.textContent?.includes(error) || undefined, 'the refusal message');
+    expect(host.textContent).not.toContain('Marked as Applied');
   });
 });
