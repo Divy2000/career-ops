@@ -1,7 +1,11 @@
 # Apply page invariants
 
 A tracker row number is not an identity: it is reused after a delete reindexes the tracker. The application a page
-works for is its `RowIdentity` (company, role, report), or the typed posting URL on `/apply` with no row.
+works for is its `RowIdentity` (company, role, report), or the typed posting URL on `/apply` with no row. Two
+identities are one application by the server's rule (`sameApplication`, server/claude/sessions.ts): the same company and
+role, and no two different reports. A report linked to a row in place (null, then 42) is the same application, so it
+keeps the row's form, draft and CV session. `sameApplication` in `draftStore.ts` is the page's one copy of that rule;
+every "is this the shown application" check on the page goes through it, and a test holds it equal to the server's.
 
 1. **Form state belongs to one application.** The typed link, CV and cover picks, drafted and edited answers, the
    prefill summary, the action message and the documents listing live in one form instance, created for one

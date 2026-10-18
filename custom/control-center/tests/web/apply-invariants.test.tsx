@@ -196,6 +196,72 @@ describe('Given row #12 changes owner while its Apply page is open, before any d
   });
 });
 
+describe('Given row #12 has no report yet, and one is linked to it while a draft is attached (R34-feat-a-L1-01)', () => {
+  /** Opens /apply/12 for owner a with no report; `linkReport` links report 31 to the same row in place. */
+  async function openUnlinked() {
+    const { ApplyBody } = await import('@web/features/apply/ApplyPage');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    let link!: (report: number) => void;
+    function Shown() {
+      const [report, setReport] = useState<number | null>(null);
+      link = setReport;
+      return createElement(ApplyBody, { n: '12', company: OWNERS.a.identity.company, postingUrl: postingUrl('a'), status: 'Evaluated', identity: { ...OWNERS.a.identity, report } });
+    }
+    const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
+    const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: Shown });
+    const router = createRouter({ routeTree: rootRoute.addChildren([apply]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(RouterProvider, { router }))));
+    await until(() => applyPanel(), 'the apply session panel');
+    return (report: number = OWNERS.a.identity.report) => act(async () => link(report));
+  }
+
+  it('When the report is linked, Then the draft stays attached with its answers, link and marker, as the server holds it', async () => {
+    const linkReport = await openUnlinked();
+    await until(() => select('Cover letter text'), 'the documents listing');
+    await typeUrl(typedLink('a', 1));
+    await pick('CV PDF to attach', 'output/cv-zq-a-short.pdf');
+    await act(async () => button('Draft answers')!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-link'));
+    await act(async () => applyPanel()!.onStatus!('done', 'clean exit with output'));
+    await act(async () => applyPanel()!.onEnvelope!('answers', answersFor('a'), 1));
+    await until(() => shownStrings().some((v) => v === 'answer-zq-a') || undefined, 'the drafted answer');
+
+    await linkReport();
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    expect(applyPanel()!.sessionId).toBe('s-link');
+    expect(shownStrings()).toContain('answer-zq-a');
+    expect(urlInput()!.value).toBe(typedLink('a', 1));
+    expect(select('CV PDF to attach')!.value).toBe('output/cv-zq-a-short.pdf');
+    expect(sessionStorage.getItem('cc.apply.row.s-link')).not.toBeNull();
+    expect(sessionStorage.getItem('cc.apply.typedUrl.s-link')).toBe(typedLink('a', 1));
+
+    // Coming back to the page later re-attaches the same draft.
+    await leave();
+    await openUnlinked().then((l) => l());
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    expect(applyPanel()!.sessionId).toBe('s-link');
+  });
+
+  it('When the row then shows another report, Then it is another application: the draft is let go and the form starts clean', async () => {
+    const linkReport = await openUnlinked();
+    await linkReport();
+    await until(() => select('Cover letter text'), 'the documents listing');
+    await typeUrl(typedLink('a', 1));
+    await act(async () => button('Draft answers')!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-link'));
+    await act(async () => applyPanel()!.onEnvelope!('answers', answersFor('a'), 1));
+    await until(() => shownStrings().some((v) => v === 'answer-zq-a') || undefined, 'the drafted answer');
+
+    // The draft was recorded for report 31; report 32 under the same company and role is a different application.
+    await linkReport(32);
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    expect(applyPanel()!.sessionId ?? null).toBeNull();
+    expect(shownStrings()).not.toContain('answer-zq-a');
+    expect(urlInput()!.value).toBe(postingUrl('a'));
+  });
+});
+
 // mulberry32: small, seedable, good enough to pick operations.
 function prng(seed: number) {
   let a = seed >>> 0;

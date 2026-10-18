@@ -14,8 +14,8 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import { CostPill, Message } from '../../components/ActionBar';
 import { DataState, Pill } from '../../components/ui';
 import { prefillBlockers } from './prefill';
-import { rowIdentity, type RowIdentity } from '../tracker/StatusControl';
-import { forgetDraft, readDraftDocs, readTypedUrl, startedForOther, writeDraftDocs, writeSessionRow, writeTypedUrl, type DraftDocs } from './draftStore';
+import { rowIdentity, sameRow, type RowIdentity } from '../tracker/StatusControl';
+import { forgetDraft, readDraftDocs, readTypedUrl, sameApplication, startedForOther, writeDraftDocs, writeSessionRow, writeTypedUrl, type DraftDocs } from './draftStore';
 import type { ApplyDocuments } from '@shared/api';
 
 const rowRoute = getRouteApi('/apply/$n');
@@ -98,6 +98,20 @@ const PAST_APPLIED = ['Responded', 'Interview', 'Offer', 'Hired', 'Rejected'];
 /** The application a form instance is for: its row identity, or none on /apply with no row. */
 const ownerKey = (identity: RowIdentity | undefined) => (identity ? JSON.stringify(rowIdentity(identity)) : '');
 
+/**
+ * Counts the applications shown under the number so far, by the same rule as the server's (`sameApplication`): a report
+ * linked to the row in place is the same application and keeps the count; another company, role or report moves it on.
+ */
+function useOwnerGeneration(identity: RowIdentity | undefined): number {
+  const [held, setHeld] = useState({ identity, generation: 0 });
+  const same = (a: RowIdentity | undefined, b: RowIdentity | undefined) => (a && b ? sameApplication(a, b) : a === b);
+  const generation = same(held.identity, identity) ? held.generation : held.generation + 1;
+  const unchanged = held.identity === identity || (held.identity !== undefined && identity !== undefined && sameRow(held.identity, identity));
+  // Held as the latest shown, so a later report after a linked one is told apart from it.
+  if (!unchanged) setHeld({ identity, generation });
+  return generation;
+}
+
 /** Leaving the page with edited answers asks first: the session keeps only the answers as it drafted them. */
 export function ApplyBody(props: ApplyBodyProps) {
   // New draft remounts the form, so the URL, the answers and the panel start clean.
@@ -106,9 +120,10 @@ export function ApplyBody(props: ApplyBodyProps) {
   const onNewDraft = useCallback(() => setDraft((d) => d + 1), []);
   // The form holds every value typed, picked or drafted for one application: when a reindex moves another one under the
   // number, it starts clean for that one (ApplyPage.invariants.md, 1).
+  const owner = useOwnerGeneration(props.identity);
   return (
     <UnsavedProvider>
-      <ApplyForm key={`${ownerKey(props.identity)}#${draft}`} {...props} onNewDraft={onNewDraft} />
+      <ApplyForm key={`${owner}#${draft}`} {...props} onNewDraft={onNewDraft} />
     </UnsavedProvider>
   );
 }

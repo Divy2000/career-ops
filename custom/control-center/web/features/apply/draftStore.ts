@@ -1,7 +1,7 @@
 // What the Apply page keeps beside each session it starts, by session id (sessionStorage, like the remembered session
 // itself): the only owner of these keys and their format (ApplyPage.invariants.md, 3). A storage that refuses only loses
 // the re-attaching of that piece.
-import { rowIdentity, sameRow, type RowIdentity } from '../tracker/StatusControl';
+import { rowIdentity, type RowIdentity } from '../tracker/StatusControl';
 
 // The CV PDF and cover letter a draft's prompt named, so a re-attached draft fills with the documents its answers were
 // drafted for, not the row's suggested ones. '' is an explicit "none"; null is no choice made, which leaves room for a
@@ -67,6 +67,14 @@ export function forgetDraft(sid: string): void {
 }
 
 /**
+ * Whether two recorded rows may be one application: the server's rule (`sameApplication` in server/claude/sessions.ts),
+ * so the page attaches exactly the sessions the server holds for the row. A row recorded before its report was linked
+ * (null) cannot be told apart from the same row with one, so it counts as the same.
+ */
+export const sameApplication = (a: RowIdentity, b: RowIdentity): boolean =>
+  a.company === b.company && a.role === b.role && (a.report === null || b.report === null || a.report === b.report);
+
+/**
  * Whether the session was started for another application than `identity`, the one now under its row number. The row
  * the server pinned on the session (#264) decides when there is one; else the marker this page wrote; a session with
  * neither (started elsewhere, before rows were pinned) is taken as the row's.
@@ -74,5 +82,5 @@ export function forgetDraft(sid: string): void {
 export function startedForOther(sid: string | null, identity: RowIdentity | undefined, pinned?: RowIdentity): boolean {
   if (!sid || !identity) return false;
   const row = pinned ?? readSessionRow(sid);
-  return row !== null && !sameRow(row, identity);
+  return row !== null && !sameApplication(row, identity);
 }
