@@ -56,6 +56,17 @@ describe('summarizeDigest', () => {
     expect(lines('- President Donald [J.](https://example.test/p) Trump signed it. Later text.')).toEqual(['President Donald J. Trump signed it.']);
   });
 
+  it.each([
+    ['a citation word before a link', '- Per 90 Fed. [Reg. 45678](https://www.federalregister.gov/d/2025-1), the H-1B lottery is wage-weighted. Later text.', 'Per 90 Fed. Reg. 45678, the H-1B lottery is wage-weighted.'],
+    ['a middle initial before a link', '- Signed by President Donald J. [Trump](https://www.whitehouse.gov/x) on Sept. 19. Later text.', 'Signed by President Donald J. Trump on Sept. 19.'],
+    ['a citation word before emphasis', '- Per 90 Fed. *Reg.* 45678, the lottery is wage-weighted. Later text.', 'Per 90 Fed. Reg. 45678, the lottery is wage-weighted.'],
+    ['a middle initial before bold', '- Signed by President Donald J. **Trump** today. Later text.', 'Signed by President Donald J. Trump today.'],
+    ['a number before a lowercase link', '- Stamping paused until Oct. 15. [source](https://state.gov/x)', 'Stamping paused until Oct. 15.'],
+    ['a sentence end before a capitalized link', '- USCIS updated the fee page. [Read more](https://www.uscis.gov/x) for details.', 'USCIS updated the fee page.'],
+  ])('judges a period at the end of a plain span with the following spans in view: %s (R34-feat-a-L2-01)', (_shape, body, expected) => {
+    expect(lines(body)).toEqual([expected]);
+  });
+
   it('a sentence that really ends at an abbreviation runs on into the next: a whole bullet is better than "the U."', () => {
     expect(lines('- The rule applies in the U.S. Employers must file by Monday.')).toEqual(['The rule applies in the U.S. Employers must file by Monday.']);
   });
@@ -198,4 +209,5 @@ describe('summarizeDigest', () => {
   ])('does not end the first sentence at closing punctuation after %s (R33-weblib-L2-01)', (_shape, body, expected) => {
     expect(lines(body)).toEqual([expected]);
   });
+
 });

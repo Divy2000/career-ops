@@ -96,14 +96,17 @@ const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 
 /**
  * Where the first sentence of `text` ends (after its . ! or ? and any closing quotes or brackets), or -1: a period after an abbreviation, or before a lowercase
  * word or a number ("Oct. 15"), is no end. Ends before `from` are skipped: that text is context for the words before a period.
+ * Text from `ownEnd` on belongs to later spans: it still shows an abbreviation or initial ("Fed. [Reg.](u)", "J. [Trump](u)"),
+ * or a number ("Fed. *Reg.* 45678"), but a lowercase word there does not carry the sentence on ("Oct. 15. [source](u)", "here. ![img](u) end.").
  */
-function sentenceEnd(text: string, from = 0): number {
+function sentenceEnd(text: string, from = 0, ownEnd = Infinity): number {
   // Closing quotes and brackets after the punctuation belong to the sentence: 'said "under review." Posts will'.
   for (const m of text.matchAll(/[.!?]["')\]\u2019\u201d]*(?=\s|$)/gu)) {
     const i = m.index!;
     const after = i + m[0].length;
     if (i < from) continue;
-    const nextWord = /^\s+(\S+)/.exec(text.slice(after))?.[1];
+    const next = /^(\s+)(\S+)/.exec(text.slice(after));
+    const nextWord = next?.[2];
     if (text[i] === '.') {
       // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
       const words = text.slice(0, i).split(/\s/);
@@ -115,7 +118,9 @@ function sentenceEnd(text: string, from = 0): number {
       const before = words.pop() ?? '';
       if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(before) && !LETTERED_PARTS.has(before.toLowerCase()) && nextWord !== undefined && CAPITALIZED.test(nextWord)) continue;
     }
-    if (nextWord === undefined || !/[\p{Ll}\d]/u.test(nextWord[0]!)) return after;
+    if (next === null) return after;
+    const carriesOn = after + next[1]!.length < ownEnd ? /[\p{Ll}\d]/u : /\d/u;
+    if (!carriesOn.test(next[2]![0]!)) return after;
   }
   return -1;
 }
@@ -129,10 +134,12 @@ function firstSentence(spans: DigestSpan[]): DigestSpan[] {
   for (let i = 0; i < spans.length; ) {
     const s = spans[i]!;
     if (!s.href) {
-      // The text kept so far holds no sentence end, but its last words decide whether a period here is one ("[Donald](u) J.").
+      // The text kept so far holds no sentence end, but its last words decide whether a period here is one ("[Donald](u) J."),
+      // and so do the words after it ("Donald J. [Trump](u)").
       const before = spansText(out);
-      const end = sentenceEnd(before + s.text, before.length);
-      if (end !== -1) {
+      const spanEnd = before.length + s.text.length;
+      const end = sentenceEnd(before + s.text + spansText(spans.slice(i + 1)), before.length, spanEnd);
+      if (end !== -1 && end <= spanEnd) {
         out.push({ ...s, text: s.text.slice(0, end - before.length) });
         return out;
       }
