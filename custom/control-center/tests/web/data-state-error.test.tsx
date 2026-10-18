@@ -57,3 +57,44 @@ describe('DataState load errors', () => {
     expect(await show(new Error('Failed to fetch'))).toContain('Could not load. Failed to fetch');
   });
 });
+
+// A failed background refetch keeps a read page's loaded data on screen with a refresh notice, rather than blanking it
+// for the error card; an editor still gives way to the card, so nothing saves on a base the failed read could not
+// confirm (R31-shared-comp-X-02, R18-feat-c-L1-01).
+describe('DataState refetch errors', () => {
+  let fail = false;
+  let client: QueryClient;
+  function Refetching({ editable }: { editable?: boolean }) {
+    const q = useQuery({ queryKey: ['refetching'], queryFn: async () => (fail ? Promise.reject(new ApiError(502, '502 Bad Gateway', null)) : { kind: 'ok' }), retry: false });
+    return createElement(DataState, { query: q, editable }, createElement('p', { id: 'content' }, 'loaded rows'));
+  }
+  async function refetchFails(editable?: boolean) {
+    fail = false;
+    client = new QueryClient();
+    await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(Refetching, { editable }))));
+    const content = await until(() => host.querySelector('#content'), 'the loaded content');
+    fail = true;
+    await act(async () => void client.invalidateQueries({ queryKey: ['refetching'] }));
+    await until(() => host.querySelector('[role="alert"]'), 'the error');
+    return content;
+  }
+
+  it('keeps the loaded content, the same element, under a notice that the refresh failed, with a Retry that recovers', async () => {
+    const content = await refetchFails();
+    expect(host.querySelector('#content')).toBe(content);
+    const alert = host.querySelector('[role="alert"]')!.textContent;
+    expect(alert).toContain('Could not refresh. 502 Bad Gateway');
+    expect(alert).not.toContain('Could not load');
+    fail = false;
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Retry')!.click());
+    await until(() => !host.querySelector('[role="alert"]'), 'the notice gone');
+    expect(host.querySelector('#content')).toBe(content);
+  });
+
+  it('still replaces an editor with the error card', async () => {
+    await refetchFails(true);
+    expect(host.querySelector('[role="alert"]')!.textContent).toContain('Could not load. 502 Bad Gateway');
+    expect(host.querySelector('#content')).toBeNull();
+  });
+});
+

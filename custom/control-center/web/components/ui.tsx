@@ -116,7 +116,9 @@ export function DataState({ query, missing, emptyState, editable, children }: { 
       </div>
     );
   }
-  if (query.isError) {
+  // A refetch that fails after a load keeps a read page's data on screen under a notice. An editor gives way to the
+  // card instead: its draft sits on a base the failed read could not confirm, and a save on it may be a false 409.
+  if (query.isError && (query.data === undefined || editable)) {
     return (
       <div className="card card--danger" role="alert">
         <strong>Could not load.</strong> <span className="muted">{loadError(query.error)}</span>
@@ -128,25 +130,54 @@ export function DataState({ query, missing, emptyState, editable, children }: { 
       </div>
     );
   }
+  // Always in the first slot, false when the data is fresh, so the children keep their place (and state) either way.
+  const stale = query.isError && (
+    <div className="card card--danger" role="alert">
+      <strong>Could not refresh.</strong> <span className="muted">{loadError(query.error)}. Showing what was loaded last.</span>
+      <div style={{ marginTop: 8 }}>
+        <button type="button" onClick={() => void query.refetch()}>
+          Retry
+        </button>
+      </div>
+    </div>
+  );
   const data = query.data as { kind?: string; path?: string; error?: string } | undefined;
-  if (data?.kind === 'missing' && emptyState) return <>{emptyState}</>;
-  if (data?.kind === 'missing' && editable) return <>{children}</>;
+  if (data?.kind === 'missing' && emptyState) return <>{stale}{emptyState}</>;
+  if (data?.kind === 'missing' && editable) {
+    return (
+      <>
+        {stale}
+        {children}
+      </>
+    );
+  }
   if (data?.kind === 'missing') {
     return (
-      <div className="card">
-        <strong>File missing.</strong> <span className="muted mono">{data.path}</span>
-        {missing && <div style={{ marginTop: 8 }}>{missing}</div>}
-      </div>
+      <>
+        {stale}
+        <div className="card">
+          <strong>File missing.</strong> <span className="muted mono">{data.path}</span>
+          {missing && <div style={{ marginTop: 8 }}>{missing}</div>}
+        </div>
+      </>
     );
   }
   if (data?.kind === 'malformed') {
     return (
-      <div className="card card--warn" role="alert">
-        <strong>File malformed.</strong> <span className="muted">{data.error}</span> <span className="mono faint">{data.path}</span>
-      </div>
+      <>
+        {stale}
+        <div className="card card--warn" role="alert">
+          <strong>File malformed.</strong> <span className="muted">{data.error}</span> <span className="mono faint">{data.path}</span>
+        </div>
+      </>
     );
   }
-  return <>{children}</>;
+  return (
+    <>
+      {stale}
+      {children}
+    </>
+  );
 }
 
 export function Empty({ children }: { children: ReactNode }) {
