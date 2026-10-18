@@ -97,71 +97,88 @@ const OPENERS = /^[(["'{\u2018\u201a\u201c\u201e\u00ab\u00bb\u2039\u203a\u3008\u
 // A lone capital after these is a lettered part ("Schedule A.", "Part B."), not a middle initial.
 const LETTERED_PARTS = new Set(['schedule', 'part', 'plan', 'title', 'section', 'appendix', 'exhibit', 'form', 'annex', 'item', 'tier', 'type', 'class', 'category', 'group']);
 
-/**
- * Where the first sentence of `text` ends (after its . ! or ? and any closing quotes or brackets), or -1: a period after an abbreviation, or before a lowercase
- * word or a number ("Oct. 15"), is no end. Ends before `from` are skipped: that text is context for the words before a period.
- * Text from `ownEnd` on belongs to later spans: it still shows an abbreviation or initial ("Fed. [Reg.](u)", "J. [Trump](u)"),
- * or a number ("Fed. *Reg.* 45678"), but a lowercase word there does not carry the sentence on ("Oct. 15. [source](u)", "here. ![img](u) end.").
- */
-function sentenceEnd(text: string, from = 0, ownEnd = Infinity): number {
-  // Closing quotes and brackets after the punctuation belong to the sentence: 'said "under review." Posts will'.
-  for (const m of text.matchAll(SENTENCE_PUNCTUATION)) {
-    const i = m.index!;
-    const after = i + m[0].length;
-    if (i < from) continue;
-    const next = /^(\s+)(\S+)/.exec(text.slice(after));
-    const nextWord = next?.[2];
-    if (text[i] === '.') {
-      // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
-      const words = text.slice(0, i).split(/\s/);
-      const word = (words.pop() ?? '').replace(OPENERS, '');
-      if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) continue;
-      if (ABBREVIATIONS.has(word.toLowerCase())) continue;
-      if (CITATION_WORDS.has(word.toLowerCase()) && nextWord !== undefined && CITATION_NEXT.test(nextWord)) continue;
-      // A middle initial sits between two capitalized words ("Donald J. Trump"); "schedule B. Employers" ends.
-      const before = words.pop() ?? '';
-      if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(before) && !LETTERED_PARTS.has(before.toLowerCase()) && nextWord !== undefined && CAPITALIZED.test(nextWord)) continue;
-    }
-    if (next === null) return after;
-    const carriesOn = after + next[1]!.length < ownEnd ? /[\p{Ll}\d]/u : /\d/u;
-    if (!carriesOn.test(next[2]![0]!)) return after;
-  }
-  return -1;
+const SPACE = /\s/u;
+const NEXT_WORD = /(\s+)(\S+)/uy;
+
+/** The whitespace-delimited word ending at `end`, read backwards from it, and where it starts. */
+function wordBefore(text: string, end: number): { word: string; start: number } {
+  let start = end;
+  while (start > 0 && !SPACE.test(text[start - 1]!)) start--;
+  return { word: text.slice(start, end), start };
 }
 
 /**
- * Keeps spans up to the first sentence end. A link (its consecutive spans sharing one target) whose label holds the end
- * is kept whole; its end is judged with the text after the link in view, so "[rule 5.](u) applies" reads on.
+ * Whether the . ! or ? at `i` (with its closing quotes and brackets, up to `after`) ends a sentence: a period after an
+ * abbreviation, or before a lowercase word or a number ("Oct. 15"), is no end. Text from `ownEnd` on belongs to later spans:
+ * it still shows an abbreviation or initial ("Fed. [Reg.](u)", "J. [Trump](u)"), or a number ("Fed. *Reg.* 45678"), but a
+ * lowercase word there does not carry the sentence on ("Oct. 15. [source](u)", "here. ![img](u) end.").
+ * Reads only the words next to `i`, so scanning a whole text costs time linear in its length.
  */
-function firstSentence(spans: DigestSpan[]): DigestSpan[] {
-  const out: DigestSpan[] = [];
+function endsSentence(text: string, i: number, after: number, ownEnd: number): boolean {
+  NEXT_WORD.lastIndex = after;
+  const next = NEXT_WORD.exec(text);
+  const nextWord = next?.[2];
+  if (text[i] === '.') {
+    // "(U.S." and "\"e.g." are the same abbreviations: opening brackets and quotes are not part of the word.
+    const own = wordBefore(text, i);
+    const word = own.word.replace(OPENERS, '');
+    if (/^(?:\p{L}\.)+\p{L}$/u.test(word)) return false;
+    if (ABBREVIATIONS.has(word.toLowerCase())) return false;
+    if (CITATION_WORDS.has(word.toLowerCase()) && nextWord !== undefined && CITATION_NEXT.test(nextWord)) return false;
+    // A middle initial sits between two capitalized words ("Donald J. Trump"); "schedule B. Employers" ends.
+    const before = own.start > 0 ? wordBefore(text, own.start - 1).word : '';
+    if (/^\p{Lu}$/u.test(word) && CAPITALIZED.test(before) && !LETTERED_PARTS.has(before.toLowerCase()) && nextWord !== undefined && CAPITALIZED.test(nextWord)) return false;
+  }
+  if (next === null) return true;
+  const carriesOn = after + next[1]!.length < ownEnd ? /[\p{Ll}\d]/u : /\d/u;
+  return !carriesOn.test(next[2]![0]!);
+}
+
+/** A plain span, or a link: its consecutive spans sharing one target. */
+interface Piece {
+  first: number;
+  last: number;
+  start: number;
+  end: number;
+}
+
+function pieces(spans: DigestSpan[]): Piece[] {
+  const out: Piece[] = [];
+  let offset = 0;
   for (let i = 0; i < spans.length; ) {
-    const s = spans[i]!;
-    if (!s.href) {
-      // The text kept so far holds no sentence end, but its last words decide whether a period here is one ("[Donald](u) J."),
-      // and so do the words after it ("Donald J. [Trump](u)").
-      const before = spansText(out);
-      const spanEnd = before.length + s.text.length;
-      const end = sentenceEnd(before + s.text + spansText(spans.slice(i + 1)), before.length, spanEnd);
-      if (end !== -1 && end <= spanEnd) {
-        out.push({ ...s, text: s.text.slice(0, end - before.length) });
-        return out;
-      }
-      out.push(s);
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j < spans.length && spans[j]!.href === s.href) j++;
-    const link = spans.slice(i, j);
-    const label = spansText(link);
-    const before = spansText(out);
-    out.push(...link);
-    const end = sentenceEnd(before + label + spansText(spans.slice(j)), before.length);
-    if (end !== -1 && end <= before.length + label.length) return out;
+    let j = i + 1;
+    if (spans[i]!.href) while (j < spans.length && spans[j]!.href === spans[i]!.href) j++;
+    let length = 0;
+    for (let k = i; k < j; k++) length += spans[k]!.text.length;
+    out.push({ first: i, last: j - 1, start: offset, end: offset + length });
+    offset += length;
     i = j;
   }
   return out;
+}
+
+/**
+ * Keeps spans up to the first sentence end, judged over the text of every span so a period at a span's edge sees its
+ * neighbours ("[Donald](u) J.", "Donald J. [Trump](u)"). An end belongs to the piece holding its punctuation and counts only
+ * when its closing quotes stay inside that piece. A link whose label holds the end is kept whole; its end is judged with
+ * the text after the link in view, so "[rule 5.](u) applies" reads on.
+ */
+function firstSentence(spans: DigestSpan[]): DigestSpan[] {
+  const text = spansText(spans);
+  const all = pieces(spans);
+  let p = 0;
+  for (const m of text.matchAll(SENTENCE_PUNCTUATION)) {
+    const i = m.index!;
+    const after = i + m[0].length;
+    while (all[p]!.end <= i) p++;
+    const piece = all[p]!;
+    const link = spans[piece.first]!.href !== undefined;
+    if (after > piece.end || !endsSentence(text, i, after, link ? Infinity : piece.end)) continue;
+    const kept = spans.slice(0, piece.last + 1);
+    if (!link) kept[piece.last] = { ...spans[piece.last]!, text: spans[piece.last]!.text.slice(0, after - piece.start) };
+    return kept;
+  }
+  return spans;
 }
 
 /** Clips rendered text to the limit. A link is kept whole or dropped; plain text is cut with an ellipsis. */

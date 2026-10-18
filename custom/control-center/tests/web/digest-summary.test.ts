@@ -247,4 +247,22 @@ describe('summarizeDigest', () => {
   ])('does not end the first sentence at %s (R34-feat-a-X-01)', (_shape, body, expected) => {
     expect(lines(body)).toEqual([expected]);
   });
+
+  // Linear work: the quadratic scan took over 20 s on each of these, the linear one well under a second; the bound leaves room for a loaded machine.
+  it('summarizes an abbreviation-heavy bullet in linear time (R34-feat-b-X-01)', () => {
+    const body = `- ${'e.g. '.repeat(40000)}Final policy update. Later text.`;
+    const started = performance.now();
+    const [line] = lines(body);
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(line).toBe(`${'e.g. '.repeat(32).trimEnd()}…`);
+  }, 60000);
+
+  it('summarizes a bullet of many inline spans in linear time (R34-feat-b-X-02)', () => {
+    const body = `- ${'`w` '.repeat(10000)}end. Later text.`;
+    const started = performance.now();
+    const [line] = lines(body);
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(line!.startsWith('w w w')).toBe(true);
+    expect(line!.endsWith('…')).toBe(true);
+  }, 60000);
 });
