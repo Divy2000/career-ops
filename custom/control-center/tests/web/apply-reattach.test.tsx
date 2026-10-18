@@ -667,6 +667,32 @@ describe('Apply starts over and follows the sessions it started', () => {
     expect(generate()!.disabled).toBe(true);
   });
 
+  // A reindex can move another application under the number before the click lands: both paid starts name the one shown,
+  // so the server refuses them for any other (ApplyPage.invariants.md, 5; R35-feat-a-L2-01).
+  it('Generate CV PDF names the application shown under the row, so the server can refuse another one', async () => {
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+    const starts: unknown[] = [];
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url, init) => {
+      if (url === '/api/sessions' && init?.method === 'POST') starts.push(JSON.parse(String(init.body)));
+      return inner(url, init);
+    });
+    await openApply();
+    await act(async () => (await until(generate, 'the Generate CV PDF button')).click());
+    await until(() => starts.length === 1 || undefined, 'the tailored CV start');
+    expect(starts[0]).toMatchObject({ mode: 'pdf', target: { type: 'app', value: '12', expect: ROW_12 } });
+  });
+
+  it('Draft answers names the application shown under the row in the target it starts on', async () => {
+    await openApply();
+    expect((applyPanel() as PanelProps & { target?: unknown }).target).toEqual({ type: 'app', value: '12', expect: ROW_12 });
+  });
+
+  it('on /apply with no row, Draft answers starts on the posting URL and names no application', async () => {
+    await openApply(null);
+    expect((applyPanel() as PanelProps & { target?: { type: string; expect?: unknown } }).target).not.toHaveProperty('expect');
+  });
+
   it('Generate CV PDF clicked just before leaving does not pull the user onto the session page', async () => {
     docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
     let release!: () => void;

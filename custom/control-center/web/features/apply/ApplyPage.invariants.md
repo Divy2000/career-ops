@@ -25,9 +25,10 @@ every "is this the shown application" check on the page goes through it, and a t
    was sent from, the latest ones at the moment its id comes back (also picks made while the start was in flight). A
    fork of a re-attached draft inherits that draft's link and picks, an explicit "None" (`''`) included. A reply
    (same session id) changes neither. A preselected suggestion is not a pick (`null`).
-5. **Status writes name the row shown.** Mark applied sends the shown identity with the row number, so the server
-   refuses a row a reindex moved under it; it is not offered on an Applied row, and asks before moving a row back from
-   Responded, Interview, Offer, Hired or Rejected.
+5. **Writes and paid starts name the row shown.** Mark applied, Draft answers and Generate CV PDF send the shown
+   identity with the row number (`expectCompany`/`expectRole`/`expectReport`, or the start's `target.expect`), so the
+   server refuses a row a reindex moved under it instead of writing or starting a paid session for it. Mark applied is
+   not offered on an Applied row, and asks before moving a row back from Responded, Interview, Offer, Hired or Rejected.
 6. **Paid starts are single.** Generate CV PDF stays off while the row's CV run is starting, live, or not yet known to
    be absent (sessions list pending or failed); the session in the way is linked, and named as the earlier
    application's when its pin says so.

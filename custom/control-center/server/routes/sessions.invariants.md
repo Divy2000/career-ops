@@ -15,13 +15,19 @@ What must always hold for every route that starts work: `POST /api/sessions` (st
 3. **Rejected inputs.** A body naming `reportNum`; a URL target that is not a plain http(s) posting URL; a sponsorship
    check without a company target or with no company file; an unknown mode; a mode that never runs as a session; a
    fan-out of any mode that is not a posting evaluation; a blacklist unlock outside Dev Chat or without the
-   `X-CC-Explicit: blacklist` header; Reply watch with no candidates file.
+   `X-CC-Explicit: blacklist` header; Reply watch with no candidates file; an expected application (`target.expect`) on
+   a target that is not a tracker row.
 4. **Duplicate paid work is refused, never started twice.** One live (or starting, or still stopping) evaluation per
    posting and evaluation class, decided by the manager under its on-disk posting claim, so a second server process on
    the same roots is seen too (its `BusyError` is a 409). One Process inbox run at a time, and no evaluation of a
    pending Inbox row beside it. One tailored CV session per tracker row and pinned application. A session whose
    next turn or fork is starting counts as live for these holds (`turnsStarting`), from the admitting tick until the
    manager call returns or throws.
+
+10. **A row start runs for the application it expects.** A tracker row number is reused after a reindex. A start whose
+    `target.expect` names an application runs only when the row the server pins under that number is the same
+    application (`sameApplication`); a number with no single row, or another application, is a 409 and nothing starts.
+    The expectation is never stored; the stored `target.row` is always the tracker's pin, not the client's.
 
 ## The AI policy pass claim (`data/immigration/.policy-pass.claim`)
 

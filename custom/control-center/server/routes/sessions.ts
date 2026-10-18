@@ -23,7 +23,9 @@ import { withEmptyJsonBody } from '../lib/empty-json-body.js';
 import { removeUpload, uploadTarget } from '../actions/tmp-inputs.js';
 import { rowsSetUnder } from '../actions/registry.js';
 
-const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable() });
+// expect: on a tracker row target, the application the page showed under that number (a reindex can move another one under it).
+const expectedRow = z.object({ company: z.string().max(4000), role: z.string().max(4000), report: z.number().int().positive().nullable() });
+const target = z.object({ type: z.enum(['app', 'url', 'company', 'text', 'none']), value: z.string().max(4000).nullable(), expect: expectedRow.optional() });
 const prompt = z.string().min(1).max(20_000);
 const model = z.string().regex(/^[\w.-]+$/).max(60).nullable().optional();
 
@@ -405,6 +407,10 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     const parsed = z.object({ mode: z.string().min(1).max(100), target: target.default({ type: 'none', value: null }), prompt, model, blacklistAllowed: z.boolean().optional() }).safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'invalid body', issues: parsed.error.issues });
     const { mode } = parsed.data;
+    // The expected application is a check on the row the start pins, never part of the stored target.
+    const { expect: expectRow, ...plainTarget } = parsed.data.target;
+    if (expectRow && plainTarget.type !== 'app') return reply.code(400).send({ error: 'only a tracker row target can name the application it expects' });
+    parsed.data.target = plainTarget;
     // A URL target reaches the session's prompt, so it is held to the fan-out's posting URL rule.
     // Every later use (duplicate checks, inbox holds, the stored target) sees the trimmed value; a blank one names no URL.
     if (parsed.data.target.type === 'url' && parsed.data.target.value !== null) {
@@ -434,6 +440,11 @@ export async function sessionRoutes(app: FastifyInstance, opts: { cfg: ServerCon
     if (parsed.data.target.type === 'app') {
       pin = (await appRowAt(parsed.data.target.value)) ?? undefined;
       parsed.data.target = { type: 'app', value: parsed.data.target.value, ...(pin ? { row: pin } : {}) };
+      // A row number is reused after a reindex: a start naming the application it expects runs only on that one.
+      if (expectRow && !(pin && sameApplication(pin, expectRow))) {
+        const now = pin ? `now holds ${pin.company} (${pin.role})` : 'holds no single row any more';
+        return reply.code(409).send({ error: `Not started: tracker row #${parsed.data.target.value?.trim()} ${now}, not ${expectRow.company} (${expectRow.role}). Reload the page.` });
+      }
     }
     const chosenModel = sessionModel(opts.cfg.dataRoot, parsed.data.model);
     let userPrompt = promptWithTarget(parsed.data.prompt, parsed.data.target);

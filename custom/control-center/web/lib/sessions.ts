@@ -272,7 +272,11 @@ export function useSessionStream(id: string | null): { transcript: Transcript; m
 export const useSessions = () => useQuery({ queryKey: ['sessions'], queryFn: () => apiGet<SessionMeta[]>('/api/sessions'), refetchInterval: 5000 });
 export const useEngine = () => useQuery({ queryKey: ['sessions', 'engine'], queryFn: () => apiGet<{ playwrightAvailable: boolean; modes: string[] }>('/api/sessions/engine'), staleTime: 60_000 });
 
-export type Target = SessionMeta['target'];
+/**
+ * A session's target. On a start, `expect` names the application the page showed under a tracker row number: a reindex
+ * can move another one under it, and the server then refuses the start instead of running it for that one.
+ */
+export type Target = SessionMeta['target'] & { expect?: NonNullable<SessionMeta['target']['row']> };
 
 /** The Dev Chat blacklist unlock travels with the explicit header the server requires on that very request. */
 const blacklistUnlock = (allowed?: boolean): { body: { blacklistAllowed?: true }; headers: Record<string, string> } => (allowed ? { body: { blacklistAllowed: true }, headers: { 'X-CC-Explicit': 'blacklist' } } : { body: {}, headers: {} });
@@ -297,9 +301,9 @@ export function startSavedJdSession(ref: string, jd: string): Promise<SessionMet
     prompt: `Evaluate the job description saved at ${jd} (pipeline row ${ref}) following the mode file. It is a saved file, not a posting URL: read it as the JD, and skip the liveness check and any fetch of the posting.`,
   });
 }
-/** The pdf-mode session that writes the tailored CV PDF for one tracker row. */
-export function startTailoredCvSession(n: string): Promise<SessionMeta> {
-  return startSession({ mode: 'pdf', target: { type: 'app', value: n }, prompt: `Generate the tailored CV PDF for tracker row #${n}.` });
+/** The pdf-mode session that writes the tailored CV PDF for one tracker row; `expect` is the application shown under it. */
+export function startTailoredCvSession(n: string, expect?: Target['expect']): Promise<SessionMeta> {
+  return startSession({ mode: 'pdf', target: { type: 'app', value: n, ...(expect ? { expect } : {}) }, prompt: `Generate the tailored CV PDF for tracker row #${n}.` });
 }
 export async function sendTurn(id: string, prompt: string, blacklistAllowed?: boolean): Promise<SessionMeta> {
   const unlock = blacklistUnlock(blacklistAllowed);
