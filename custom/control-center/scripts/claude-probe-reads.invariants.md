@@ -23,16 +23,17 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
 5. **Every call settles exactly once and settling never throws.** One `settle()` per call owns its result: it runs
    for a spawn failure ('error' with no pid) or for 'close', whichever comes first, and every file read or write it
    does reports a failure into the case's stderr instead of throwing. A settled call is out of `running`.
-6. **A call result says whether the call ran to its end.** `ran` is false when the spawn failed, the call was never
-   started (stopping), or it was killed (exit status null). A group that threw counts as not run for all its ids.
+6. **The run knows which calls did not run to their end.** `settle()` adds a call to `incomplete` when its spawn
+   failed or it was killed (exit status null), `runClaude` when it was never started (stopping), and the main flow
+   adds every group that threw.
 
 ## Exit and cleanup
 
-7. **One owner for the end of the run.** `finish()` is the only path to `process.exit`: it stops every running
-   call's process group (retrying until the groups are gone or 5 s pass), then runs `cleanup()` once. A first
-   signal hands the exit to `finish()` with the signal's code (130, 143, 129); a second one cleans up and exits at
-   once. Cleanup runs every step even when one fails and names what may remain; a failed step makes a normal exit
-   status 1 but leaves a signal's code as it is.
+7. **One owner for the end of the run.** Once the layout may exist, `finish()` is the only path to `process.exit`
+   except a second signal: it stops every running call's process group (retrying until the groups are gone or 5 s
+   pass), then runs `cleanup()` once. A first signal's code (130, 143, 129) is the exit code, even when the normal
+   `finish()` is already under way; a second signal cleans up and exits at once. Cleanup runs every step even when
+   one fails and names what may remain; a failed step makes a normal exit status 1.
 8. **Cleanup removes only what this run created**: the home canary dir, the `~/.claude` canary file and other-project
    folder, transcripts whose project folder carries this layout's unique name, and the temp layout (unless --keep).
    Resources a case group acquires (the local WebFetch server) are released in that group's `finally`.
@@ -40,7 +41,7 @@ What must always hold for `npm run probe:reads` (and, where marked, `npm run pro
 ## The --record write
 
 9. **Only a complete, uninterrupted run is recorded.** `probe-reads-record.mjs` `recordReadProbe` is the one decision:
-   it refuses when a signal stopped the run, when any selected case did not run to its end (invariant 6), or for
+   it refuses when a signal stopped the run, when `incomplete` is not empty (invariant 6), or for
    `--only` without an existing record of the same version. Otherwise it merges (`--only`) or replaces the record,
    adds the version to `approvedVersions` only when every non-C0 case is `pass` or `info`, and recomputes C0.
 10. **contract.json is the old bytes or the new record, never a torn file.** The write goes to a sibling temp file

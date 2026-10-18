@@ -630,17 +630,18 @@ function reportCleanup(failures) {
   return failures.length === 0;
 }
 let finishing = null;
+// The exit code of the signal that stopped the probe; read at exit, so it wins even over a finish() already under way.
+let signalCode = null;
 /**
  * The only way the run ends once the layout may exist: stop every running call's process group (a group that threw
- * can leave a sibling call running), then clean up once and exit. The first caller's code wins; a failed cleanup step
- * turns a normal exit into 1 but leaves a signal's code as it is.
+ * can leave a sibling call running), then clean up once and exit. A signal's code wins over `code`; otherwise a failed
+ * cleanup step turns the exit into 1.
  */
 function finish(code) {
-  const signalled = Boolean(stopping);
   finishing ??= stopCalls(running, 5_000).then((left) => {
     if (left.length) console.error(`calls still running after the kill (process groups ${left.join(', ')}); their transcripts may remain`);
     const clean = reportCleanup(cleanup());
-    process.exit(clean || signalled ? code : 1);
+    process.exit(signalCode ?? (clean ? code : 1));
   });
   return finishing;
 }
@@ -655,6 +656,7 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
       process.exit(code);
     }
     stopping = signal;
+    signalCode = code;
     console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);
     void finish(code);
   });

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { PACKAGE_ROOT } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
 import { resolveClaudeBin as preflightResolve } from '../../supervisor/preflight.js';
@@ -359,5 +359,51 @@ syncBuiltinESMExports();
       canariesGone(box);
       expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-')), note).toEqual([]);
     }
+  }, 60_000);
+
+  it('given a signal that arrives while the normal end is still stopping a call, when the probe exits, then it exits with the signal code (invariant 7, FC-02)', async () => {
+    const box = sandbox();
+    const calls = path.join(box.root, 'calls');
+    fs.mkdirSync(calls);
+    // C9's group throws with c9-settings running, and every group kill misses, so the normal end waits in stopCalls.
+    const preload = path.join(box.root, 'slow-end.mjs');
+    fs.writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+fs.writeFileSync = (file, ...rest) => {
+  if (String(file).endsWith('/c9-control/settings.json')) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  return realWrite(file, ...rest);
+};
+syncBuiltinESMExports();
+const realKill = process.kill.bind(process);
+process.kill = (pid, signal) => (pid < 0 && signal === 'SIGKILL' ? true : realKill(pid, signal));
+`,
+    );
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const child = spawn(process.execPath, [box.script, '--only', 'C9'], {
+      env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(calls).length === 0 && Date.now() < deadline) await new Promise((res) => setTimeout(res, 50));
+    expect(fs.readdirSync(calls).length, stderr).toBeGreaterThan(0);
+    // The group has thrown by now (the failing write follows the spawn synchronously); the end waits up to 5 s.
+    await new Promise((res) => setTimeout(res, 1_000));
+    child.kill('SIGINT');
+    const code = await exited;
+    for (const pid of fs.readdirSync(calls)) {
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+    expect(code, stderr).toBe(130);
   }, 60_000);
 });
