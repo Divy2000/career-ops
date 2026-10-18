@@ -364,3 +364,13 @@ test('specsWithoutTmpCheck tells template text from its substitutions: escapes, 
     'comment-substitution.spec.mjs': 'const t = `${/*\n' + tmpImport + '\n*/1}`;\n',
   }), ['backtick-string.spec.mjs', 'comment-substitution.spec.mjs', 'escaped-backtick.spec.mjs', 'escaped-substitution.spec.mjs', 'lone-brace.spec.mjs', 'lone-dollar.spec.mjs']);
 });
+
+test('specsWithoutTmpCheck ends a block comment only at its own */, so /*/ stays open, /**/ closes, code right after */ is read and an unclosed comment hides the rest (R34 leftover)', () => {
+  const tmpImport = "import '../../test-support/tmp.mjs';";
+  assert.deepEqual(graphFixture({
+    'slash-star-slash.spec.mjs': '/*/\n' + tmpImport + '\n*/\n',
+    'empty-comment.spec.mjs': '/**/\n' + tmpImport + '\n',
+    'comment-then-import.spec.mjs': '/* note */' + tmpImport + '\n',
+    'unclosed-comment.spec.mjs': '/*\n' + tmpImport + '\n',
+  }), ['slash-star-slash.spec.mjs', 'unclosed-comment.spec.mjs']);
+});
