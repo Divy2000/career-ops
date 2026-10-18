@@ -226,7 +226,10 @@ function runSync(world, { home, inherited = {}, security = 'exit 44' }) {
   }
   // The data root is pinned to the test checkout: one inherited from the shell (or the launchd plist, when the
   // weekly sync runs these specs) would send this run's log into the user's real data/upstream-sync.
-  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, CC_NODE_BIN: _node, ...env } = { ...GIT_ENV, ...inherited };
+  // Anthropic and Claude Code variables the shell running these specs exports (Claude Code sets several) are dropped
+  // too, so a run sees only the ones a test passes in and its assertions never depend on the host.
+  const hostEnv = Object.fromEntries(Object.entries(GIT_ENV).filter(([n]) => !/^(ANTHROPIC_|CLAUDE_CODE_)/.test(n)));
+  const { CAREER_OPS_DATA_DIR: _dir, CAREER_OPS_TRACKER: _tracker, CC_NODE_BIN: _node, ...env } = { ...hostEnv, ...inherited };
   // The node running these specs, pinned as the plist pins one: sync.sh puts Homebrew's folders first on its PATH.
   // Only a test's own inherited pin replaces it, never one from the shell or the plist that runs these specs.
   const childEnv = { ...env, CC_NODE_BIN: inherited.CC_NODE_BIN ?? process.execPath, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` };
@@ -355,6 +358,46 @@ test('the lock marker the re-exec sets stays out of every child of the locked ru
     const res = runSync(w, { home, security: `env | grep '^CC_SYNC_LOCKED=' > "${seen}"\nexit 44` });
     assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
     assert.equal(readFileSync(seen, 'utf8'), '');
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('inherited Anthropic credentials are dropped before any child of the sync runs; the Keychain token goes only to claude (R31-scripts-b-X-01)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const seen = path.join(w.base, 'security-env.txt');
+  mkdirSync(home);
+  try {
+    const inherited = {
+      ANTHROPIC_API_KEY: 'sk-api', ANTHROPIC_AUTH_TOKEN: 'sk-auth', ANTHROPIC_BASE_URL: 'https://proxy.invalid',
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-oauth', CLAUDE_CODE_API_KEY_HELPER: 'x', CLAUDE_CODE_EFFORT_LEVEL: 'low',
+      // Settings whose names only contain a credential word (TOKENS is not the TOKEN segment) are not credentials.
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '32000', CLAUDE_CODE_ENTRYPOINT: 'cli',
+    };
+    const res = runSync(w, { home, inherited, security: `env > "${seen}"\nexit 44` });
+    assert.match(res.log, /Keychain item career-ops-claude-token not found/, res.log + res.stderr);
+    // Names only: the values in this environment can be the developer's real credentials.
+    const names = readFileSync(seen, 'utf8').split('\n').map((l) => l.split('=')[0]);
+    // The credential rule sync.sh applies: any ANTHROPIC_* name, or a CLAUDE_CODE_* name with a credential segment.
+    const credential = /^ANTHROPIC_|^CLAUDE_CODE_(.*_)?(TOKEN|KEY|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|CERT|HEADERS?)(_|$)/;
+    assert.deepEqual(names.filter((n) => credential.test(n)), []);
+    for (const kept of ['CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_ENTRYPOINT']) {
+      assert.ok(names.includes(kept), `the non-credential setting ${kept} is kept`);
+    }
+  } finally { rmSync(w.base, { recursive: true, force: true }); }
+});
+
+test('an inherited exported TOKEN never carries the Keychain token to the children that run after the read (R31-scripts-b-L2-02)', () => {
+  const w = makeWorld();
+  const home = path.join(w.base, 'home');
+  const seen = path.join(w.base, 'claude-env.txt');
+  mkdirSync(home);
+  const old = path.join(w.base, 'old-claude');
+  // claude --version is the first child after the read; it records what it inherits, then fails the version floor.
+  stub(old, 'claude', `env > "${seen}"\necho "2.1.200 (Claude Code)"`);
+  try {
+    const res = runSync(w, { home, security: 'echo tok-secret', inherited: { TOKEN: 'inherited', CC_CLAUDE_BIN: path.join(old, 'claude') } });
+    assert.match(res.log, /older than 2\.1\.288/, res.log + res.stderr);
+    assert.doesNotMatch(readFileSync(seen, 'utf8'), /tok-secret/);
   } finally { rmSync(w.base, { recursive: true, force: true }); }
 });
 
@@ -1639,7 +1682,9 @@ function mergeDecision({ moveMain = false, fetchFails = false, race = false } = 
     const to = lines.findIndex((l, i) => i > from && l.startsWith('  cd "$LIVE"'));
     assert.ok(from > -1 && to > from, 'no MAIN_MOVED .. cd "$LIVE" block in sync.sh');
     const script = `source "${LIB}"\nfail() { echo "!!! $1"; exit 1; }\nPR_URL=https://example.invalid/pr/1\nBRANCH=sync/x\nLIVE="${w.live}"\n${lines.slice(from, to + 1).join('\n')}\necho "deployed $MERGE_OID"\nelse\necho "hold: $BLOCKERS"\nfi`;
-    const env = { ...GIT_ENV, PATH: `${bin}:${process.env.PATH}`, BASE_REV: baseRev, CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
+    // The commit the gates verified, recorded by sync.sh right after verify_merge: here the sync merge just made.
+    const verifiedOid = git(w.live, 'rev-parse', 'HEAD').trim();
+    const env = { ...GIT_ENV, PATH: `${bin}:${process.env.PATH}`, BASE_REV: baseRev, VERIFIED_OID: verifiedOid, CUSTOM_OK: '1', CC_OK: '1', NEW_FAILURES: '', AUTO_MERGE: '1', KEPT_README: '0', UNEXPECTED_UPSTREAM: '', CLAUDE_HOLD: '', PROTECTED_EDITS: '' };
     const res = spawnSync('bash', ['-c', script], { cwd: w.live, env, encoding: 'utf8' });
     const now = git(w.live, 'rev-parse', 'refs/remotes/origin/main').trim();
     const forkMain = git(w.originBare, 'rev-parse', 'refs/heads/main').trim();

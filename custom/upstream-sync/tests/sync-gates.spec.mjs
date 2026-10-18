@@ -940,3 +940,45 @@ test('control_center_checks reads the vitest summary even when the caller export
   const r = spawnSync('bash', ['-c', `source "${LIB}"\ncontrol_center_checks "${dir}/cc.log"`], { cwd: dir, env: { PATH: `${bin}:/usr/bin:/bin`, FORCE_COLOR: '1' }, encoding: 'utf8' });
   assert.equal(r.status, 0, readFileSync(path.join(dir, 'cc.log'), 'utf8'));
 });
+
+test('the headless sync Claude runs with its autoupdater off, so a long session cannot replace the approved binary mid-run (R31-scripts-b-X-02)', () => {
+  const dir = tempDir('sync-claude-autoupdate-');
+  const bin = path.join(dir, 'bin');
+  const seen = path.join(dir, 'env.txt');
+  stub(bin, 'claude', `env > "${seen}"`);
+  const script = `TOKEN=tok-123 MODEL=m STATE_DIR="${dir}" PROMPT=p LOG="${dir}/log" CLAUDE_BIN=claude\n${block('CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN=', /--output-format text/)}`;
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: `${bin}:/usr/bin:/bin` }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(readFileSync(seen, 'utf8'), /^DISABLE_AUTOUPDATER=1$/m);
+});
+
+test('a commit made in the sync worktree while the test suites run is never pushed: the run fails before any push (R31-scripts-b-X-03)', () => {
+  const dir = tempDir('sync-verified-head-');
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  const g = (cwd, ...args) => spawnSync('git', args, { cwd, env, encoding: 'utf8' });
+  const origin = path.join(dir, 'origin.git');
+  const wt = path.join(dir, 'wt');
+  g(dir, 'init', '-q', '--bare', '-b', 'main', origin);
+  g(dir, 'init', '-q', '-b', 'sync/x', wt);
+  writeFileSync(path.join(wt, 'a.txt'), 'a\n');
+  g(wt, 'add', '-A');
+  g(wt, 'commit', '-q', '-m', 'merge');
+  g(wt, 'remote', 'add', 'origin', origin);
+  const lines = readFileSync(SYNC, 'utf8').split('\n');
+  const from = lines.findIndex((l) => l.startsWith('GATE="$(verify_merge'));
+  const to = lines.findIndex((l, i) => i > from && l.startsWith('BODY='));
+  assert.ok(from > -1 && to > from, 'no gate-to-push block in sync.sh');
+  // Every gate passes; the merged code's custom tests commit in their working directory, as a hostile test could.
+  const stubs = [
+    'fail() { echo "!!! $1"; exit 1; }',
+    'verify_merge() { :; }', 'clean_sync_worktree() { :; }', 'refresh_root_deps() { :; }', 'ensure_playwright_browser() { :; }',
+    'changed_since_snapshot() { :; }', 'unexpected_upstream() { :; }', 'protected_paths() { :; }', 'contract_gate_edits() { :; }',
+    'custom_tests() { echo x >> a.txt; git commit -qam "unreviewed"; }', 'control_center_checks() { :; }',
+    'suite_failures() { :; }', 'new_failures() { :; }',
+  ].join('\n');
+  const script = `${stubs}\nBRANCH=sync/x STATE_DIR="${dir}" TODAY=t BASELINE_FAILURES= CONFLICTS= MERGE_SNAPSHOT=s BASE_REV=b WT="${wt}"\n${lines.slice(from, to).join('\n')}`;
+  const r = spawnSync('bash', ['-c', script], { cwd: wt, env, encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^!!! .*HEAD moved/m, r.stdout);
+  assert.equal(g(origin, 'rev-parse', '--verify', '--quiet', 'refs/heads/sync/x').stdout, '', 'nothing was pushed');
+});

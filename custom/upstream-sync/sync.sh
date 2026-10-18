@@ -16,6 +16,23 @@
 # Scheduled by ~/Library/LaunchAgents/com.career-ops.upstream-sync.plist.
 # Manual run: custom/upstream-sync/sync.sh [--no-merge]
 set -uo pipefail
+# This script's name for the Keychain token, read later: unsetting an inherited copy also drops the export a later
+# assignment would keep, so only the claude call ever holds the token.
+unset TOKEN
+# Every Anthropic credential a manual or launchd start may carry goes before any child runs (the data-root resolver,
+# the installs, upstream's suite, Claude): every ANTHROPIC_* variable, and every CLAUDE_CODE_* one with a credential
+# name segment (the rule run-daily.sh and the Control Center server apply). Claude gets the Keychain token alone.
+for var in $(compgen -e); do
+  case "$var" in
+    ANTHROPIC_*) unset "$var" ;;
+    CLAUDE_CODE_*)
+      case "_${var}_" in
+        *_TOKEN_* | *_KEY_* | *_SECRET_* | *_PASSWORD_* | *_PASSPHRASE_* | *_CREDENTIAL_* | *_CREDENTIALS_* | *_CERT_* | *_HEADER_* | *_HEADERS_*) unset "$var" ;;
+      esac
+      ;;
+  esac
+done
+unset var
 
 LIVE="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=custom/upstream-sync/lib.sh
@@ -212,7 +229,8 @@ REGATE="$(cd "$LIVE" && CC_CLAUDE_BIN="$CLAUDE_BIN" sync_claude_bin 2.1.288)" ||
 # Claude runs upstream's code and npm install scripts through Bash: SUBPROCESS_ENV_SCRUB keeps the token out of those children.
 # Its reply streams to the day log as before (tee) and is kept in memory, where its closing verdict is read.
 # --strict-mcp-config starts none of the user's or the project's MCP servers, which would inherit the token.
-CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" "$CLAUDE_BIN" -p "$PROMPT" \
+# DISABLE_AUTOUPDATER keeps the gated version for the whole session, as every other Claude launch does.
+CLAUDE_OUT="$(CLAUDE_CODE_OAUTH_TOKEN="$TOKEN" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 ANTHROPIC_API_KEY="" DISABLE_AUTOUPDATER=1 "$CLAUDE_BIN" -p "$PROMPT" \
   --model "$MODEL" \
   --effort medium \
   --permission-mode dontAsk \
@@ -230,6 +248,9 @@ CLAUDE_HOLD="$(sync_verdict "$CLAUDE_RC" "$CLAUDE_OUT")"
 echo "--- verifying"
 
 GATE="$(verify_merge "$BRANCH")" || fail "$GATE"
+# The commit every gate below checks. The suites run the merged code inside the worktree, which can commit or check
+# out there: only this commit may be pushed or land on main.
+VERIFIED_OID="$(git rev-parse HEAD)" || fail "cannot read the verified sync commit"
 clean_sync_worktree "$WT" || fail "cannot clean untracked and ignored files from the sync worktree"
 refresh_root_deps "$BASE_REV" "$BASE_DEPS_TREE" || fail "reinstalling the merged root dependencies failed"
 ensure_playwright_browser || fail "cannot install the merged Playwright's Chromium (see the line above)"
@@ -255,7 +276,10 @@ suite_failures "$STATE_DIR/$TODAY.after-failures.txt" || fail "upstream suite ru
 NEW_FAILURES="$(new_failures "$BASELINE_FAILURES" "$STATE_DIR/$TODAY.after-failures.txt")" || fail "cannot compare the upstream suite with its baseline"
 echo "new upstream-suite failures: $(printf '%s' "$NEW_FAILURES" | grep -c . || true)"
 
-git push -q --force-with-lease origin "$BRANCH" || fail "git push failed"
+HEAD_NOW="$(git rev-parse HEAD)" || fail "cannot read the sync commit after the test suites"
+[ "$HEAD_NOW" = "$VERIFIED_OID" ] ||
+  fail "the sync worktree HEAD moved from $VERIFIED_OID to $HEAD_NOW while the test suites ran; nothing pushed"
+git push -q --force-with-lease origin "$VERIFIED_OID:refs/heads/$BRANCH" || fail "git push failed"
 BODY="$STATE_DIR/$TODAY.pr-body.md"
 {
   echo "Weekly merge of career-ops-hq/career-ops main ($BEHIND commits) into this fork."
@@ -290,7 +314,7 @@ echo "PR: $PR_URL"
 MAIN_MOVED="$(main_moved "$BASE_REV")"
 BLOCKERS="$(merge_blockers)"
 if [ -z "$BLOCKERS" ]; then
-  MERGE_OID="$(git rev-parse HEAD)" || fail "cannot read the sync commit"
+  MERGE_OID="$VERIFIED_OID"
   git push -q --force-with-lease="main:$BASE_REV" origin "$MERGE_OID:refs/heads/main" ||
     fail "the fork main moved, or refused the push, before the sync commit could land on it; $PR_URL is left open"
   echo "merged $PR_URL"
