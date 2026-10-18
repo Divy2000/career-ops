@@ -646,13 +646,14 @@ export class SessionManager {
     if (meta.status === 'running' || meta.status === 'queued') throw new BusyError(`session ${meta.id} is ${meta.status}`);
     // A cancelled turn's run may still be stopping (its Claude process lives until SIGKILL) or finalizing: a new turn now
     // would run a second claude --resume on the same conversation and let the old turn's finalize overwrite this one's.
-    if (opts.finishing !== false && this.active.has(meta.id)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+    // Another server process may be the one stopping it (a blue/green handover), which this one does not track.
+    if (opts.finishing !== false && (this.active.has(meta.id) || this.lastRunStillGoing(meta))) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
   }
 
   /** Waits (up to RUN_END_WAIT_MS) for a session's ended turn to finish stopping and finalizing; refused when it does not. */
   private async untilFinished(id: string): Promise<void> {
     const deadline = Date.now() + RUN_END_WAIT_MS;
-    while (this.active.has(id)) {
+    while (this.active.has(id) || this.lastRunStillGoing(this.must(id))) {
       if (Date.now() > deadline) throw new BusyError(`session ${id} is still finishing its previous turn`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -849,12 +850,20 @@ export class SessionManager {
    */
   private assertNotRunningElsewhere(meta: SessionMeta): void {
     if (meta.status === 'running') throw new BusyError(`session ${meta.id} is running`);
+    if (this.lastRunStillGoing(meta)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+  }
+
+  /**
+   * Whether the session's last turn has not ended and its run (in this process or another) has not either: a cancelled
+   * run keeps its Claude process until SIGKILL. Delete, reply and fork all refuse or wait on it.
+   */
+  private lastRunStillGoing(meta: SessionMeta): boolean {
     const turn = meta.turns.at(-1);
-    if (!turn || turn.endedAt !== null) return;
+    if (!turn || turn.endedAt !== null) return false;
     const run = this.runner.store.read(turn.runId);
-    if (run === null || run.endedAt !== null || this.runner.store.readExit(turn.runId) !== null) return;
+    if (run === null || run.endedAt !== null || this.runner.store.readExit(turn.runId) !== null) return false;
     // A cancelled run left by a stopped process is taken over here and settled, or followed until it exits.
-    if (run.status !== 'cancelled' || this.runner.ending(turn.runId)) throw new BusyError(`session ${meta.id} is still finishing its previous turn`);
+    return run.status !== 'cancelled' || this.runner.ending(turn.runId);
   }
 
   private async deleteClaimed(id: string): Promise<boolean> {
