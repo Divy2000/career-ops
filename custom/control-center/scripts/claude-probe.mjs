@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { childEnv } from '../server/system/child-env.ts';
 
 /**
  * The claude binary, resolved as supervisor/preflight.ts resolveClaudeBin does so the probe tests the one the app runs:
@@ -35,15 +36,39 @@ function resolveClaudeBin(bin) {
   return [...dirs.map((d) => path.join(d, bin)), path.join(os.homedir(), '.local', 'bin', bin), ...fallbacks].find((c) => path.isAbsolute(c) && executable(c)) ?? bin;
 }
 const claudeBin = resolveClaudeBin(process.env.CC_CLAUDE_BIN?.trim() || 'claude');
-const token = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8' });
-if (token.status !== 0 || !token.stdout.trim()) {
-  console.error('Keychain item career-ops-claude-token not found');
-  process.exit(1);
+/**
+ * The OAuth token, read as supervisor/preflight.ts reads it: bounded, because a locked keychain waits at an unlock
+ * prompt nobody may answer (over SSH, before login), and missing only on exit 44 (errSecItemNotFound) or a blank value.
+ * Any other failure leaves the item where it is, so the probe says it could not be read rather than send the user to
+ * recreate a token that is fine. Exits 1 with the reason; never prints the token.
+ */
+function readKeychainToken() {
+  const KEYCHAIN_TIMEOUT_MS = 8000;
+  const r = spawnSync('security', ['find-generic-password', '-s', 'career-ops-claude-token', '-w'], { encoding: 'utf8', timeout: KEYCHAIN_TIMEOUT_MS, killSignal: 'SIGKILL' });
+  const unreadable = (why) => `Could not read Keychain item career-ops-claude-token: ${why}. The login keychain is probably locked or cannot prompt (for example over SSH or before login). Unlock it with: security unlock-keychain, then retry.`;
+  let problem = null;
+  if (r.error?.code === 'ETIMEDOUT') problem = unreadable(`security timed out after ${KEYCHAIN_TIMEOUT_MS / 1000}s`);
+  else if (r.error?.code === 'ENOENT') problem = 'Could not read Keychain item career-ops-claude-token: the security command was not found on PATH (it ships with macOS in /usr/bin).';
+  else if (r.error) problem = unreadable(`security could not be run (${r.error.message})`);
+  else if (r.status === 44 || (r.status === 0 && !r.stdout.trim())) problem = 'Keychain item career-ops-claude-token not found';
+  else if (r.status !== 0) {
+    const tail = String(r.stderr ?? '').trim().slice(-200);
+    problem = unreadable(`security failed (${r.status === null ? `signal ${r.signal}` : `exit ${r.status}`}${tail ? `: ${tail}` : ''})`);
+  }
+  if (problem) {
+    console.error(problem);
+    process.exit(1);
+  }
+  return r.stdout.trim();
 }
+const token = readKeychainToken();
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-probe-'));
-// Same as claude-probe-reads.mjs: no nested-session or provider variables reach the CLI, and it never auto-updates past the approved version.
-const BASE_ENV = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k))), DISABLE_AUTOUPDATER: '1' };
-const env = { ...BASE_ENV, CLAUDE_CODE_OAUTH_TOKEN: token.stdout.trim(), ANTHROPIC_API_KEY: '' };
+// Same as claude-probe-reads.mjs: the environment the app gives a Claude session (server/system/child-env.ts), minus
+// every CLAUDE* nested-session variable, never auto-updating past the approved version. The Keychain token is the only
+// Claude or Anthropic credential the CLI gets; other variables the shell exports pass, as they do to the app's sessions.
+const INHERITED = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
+const BASE_ENV = childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED);
+const env = childEnv({ DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: '' }, INHERITED);
 const redact = (s) => String(s).split(env.CLAUDE_CODE_OAUTH_TOKEN).join('<redacted>');
 
 const hookLog = path.join(dir, 'hook-log.ndjson');

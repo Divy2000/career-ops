@@ -386,3 +386,102 @@ describe('the probes run the claude binary the supervisor preflight picks (R29-s
     }, 60_000);
   }
 });
+
+describe('claude-probe-reads.mjs --record', () => {
+  /** A copy of the probe beside its own contract.json, so a run that records cannot touch the repository's. */
+  function probeCopy(box: ReturnType<typeof sandbox>) {
+    const pkg = path.join(box.root, 'pkg');
+    fs.mkdirSync(path.join(pkg, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(pkg, 'server', 'core'), { recursive: true });
+    fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs'), path.join(pkg, 'scripts', 'claude-probe-reads.mjs'));
+    for (const dir of ['claude', 'system']) fs.symlinkSync(path.join(PACKAGE_ROOT, 'server', dir), path.join(pkg, 'server', dir));
+    const contract = path.join(pkg, 'server', 'core', 'contract.json');
+    fs.copyFileSync(path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json'), contract);
+    return { script: path.join(pkg, 'scripts', 'claude-probe-reads.mjs'), contract };
+  }
+
+  it('given a run with --record, when a signal stops it mid-run, then contract.json is left as it was (R32-supervisor-L1-01)', async () => {
+    const box = sandbox();
+    const { script, contract } = probeCopy(box);
+    const before = fs.readFileSync(contract, 'utf8');
+    const claude = path.join(box.bin, 'claude');
+    // Answers --version; every case call records its pid and hangs, as a real call does for minutes.
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const child = spawn(process.execPath, [script, '--record'], {
+      env: { ...process.env, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    expect(fs.readdirSync(box.calls).length, stderr).toBeGreaterThan(0);
+    child.kill('SIGINT');
+    expect(await exited, stderr).toBe(130);
+    expect(fs.readFileSync(contract, 'utf8')).toBe(before);
+  }, 40_000);
+});
+
+describe('the probes read the Keychain as the preflight does (R32-supervisor-L2-03)', () => {
+  /** A sandbox whose `security` runs `body`, and a claude that records every call. */
+  function keychainBox(body: string) {
+    const box = sandbox();
+    fs.writeFileSync(path.join(box.bin, 'security'), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, '#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\necho "$1" > "$f"\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+    return { box, claude };
+  }
+
+  for (const script of ['claude-probe.mjs', 'claude-probe-reads.mjs']) {
+    it(`given a locked keychain that cannot prompt, when ${script} runs, then it says the item could not be read rather than that it is missing`, () => {
+      const { box, claude } = keychainBox("echo 'User interaction is not allowed.' >&2\nexit 36");
+      const r = runProbe(script, box, claude);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/Could not read Keychain item career-ops-claude-token: security failed \(exit 36: User interaction is not allowed\.\)/);
+      expect(r.stderr).toMatch(/security unlock-keychain/);
+      expect(r.stderr).not.toMatch(/not found/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+      expect(fs.readdirSync(box.tmp)).toEqual([]);
+    });
+
+    it(`given no Keychain item (security exit 44), when ${script} runs, then it says the item is not found`, () => {
+      const { box, claude } = keychainBox("echo 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.' >&2\nexit 44");
+      const r = runProbe(script, box, claude);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/Keychain item career-ops-claude-token not found/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+    });
+
+    it(`given a security that waits at an unlock prompt, when ${script} runs, then it gives up after 8 s and says so`, () => {
+      const { box, claude } = keychainBox('exec sleep 30');
+      const started = Date.now();
+      const r = runProbe(script, box, claude);
+      expect(Date.now() - started).toBeLessThan(20_000);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(/Could not read Keychain item career-ops-claude-token: security timed out after 8s/);
+      expect(fs.readdirSync(box.calls)).toEqual([]);
+    }, 40_000);
+  }
+});
+
+describe('the probes give the CLI the environment the app gives its Claude sessions (R32-supervisor-X-02)', () => {
+  for (const script of ['claude-probe.mjs', 'claude-probe-reads.mjs']) {
+    it(`given a shell that exports repository and data-file overrides, when ${script} runs, then every CLI call gets them as server/system/child-env.ts leaves them`, () => {
+      const box = sandbox();
+      const claude = path.join(box.bin, 'claude');
+      // Records each call's first argument and environment, one file per call; every case call fails at once.
+      fs.writeFileSync(claude, '#!/bin/sh\nf=$(mktemp "$PROBE_FAKE_CALLS/call-XXXXXX")\n{ echo "ARG1=$1"; env; } > "$f"\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nexit 1\n', { mode: 0o755 });
+      const r = runProbe(script, box, claude, { GIT_DIR: path.join(box.root, 'other-repo'), GIT_CONFIG_KEY_0: 'core.hooksPath', CAREER_OPS_PIPELINE: path.join(box.root, 'elsewhere.md') });
+      const calls = fs.readdirSync(box.calls).map((n) => fs.readFileSync(path.join(box.calls, n), 'utf8').split('\n'));
+      const cases = calls.filter((lines) => lines[0] === 'ARG1=-p');
+      expect(cases.length, r.stdout + r.stderr).toBeGreaterThan(0);
+      for (const lines of calls) {
+        expect(lines.filter((l) => /^(GIT_DIR|GIT_CONFIG_KEY_0)=/.test(l))).toEqual([]);
+        expect(lines).toContain('CAREER_OPS_PIPELINE=');
+        expect(lines.find((l) => l.startsWith('NODE_OPTIONS='))).toMatch(/--import=file:.*local-file-guard\.mjs/);
+      }
+      for (const lines of cases) expect(lines).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${FAKE_TOKEN}`);
+    }, 60_000);
+  }
+});
