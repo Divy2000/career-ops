@@ -11,6 +11,7 @@
 // blocks every `|` line in the file, wherever it is, so a row the table does
 // not hold (after a blank line, in a second table) is listed too, read as the
 // scanner reads it, and a save moves it into the table.
+// What must always hold: blacklist.invariants.md next to this file.
 import fs from 'node:fs';
 import path from 'node:path';
 import { dataRootOnly, writeFileAtomic } from '../lib/atomic-write.js';
