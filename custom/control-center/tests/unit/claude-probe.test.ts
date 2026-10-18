@@ -166,6 +166,35 @@ syncBuiltinESMExports();
     expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
     expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
   });
+  it('given a call that exits but whose stream.ndjson and stderr.txt cannot be written, when the probe runs, then every case settles and the canaries are removed (R31-supervisor-L1-02)', () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    // Answers --version; every case call exits at once with no output, so each one settles through 'close'.
+    fs.writeFileSync(claude, '#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+    // A full volume: the writes of a finished call's logs fail with ENOSPC.
+    const preload = path.join(box.root, 'enospc.mjs');
+    fs.writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+fs.writeFileSync = (file, ...rest) => {
+  if (/(stream\\.ndjson|stderr\\.txt)$/.test(String(file))) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  return realWrite(file, ...rest);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const r = runProbe('claude-probe-reads.mjs', box, claude, { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` });
+    expect(r.stderr).not.toMatch(/no space left on device[\s\S]*\n\s+at /);
+    expect(r.status, r.stderr).toBe(1);
+    const summary = JSON.parse(r.stdout);
+    expect(Object.keys(summary.cases).length).toBeGreaterThan(1);
+    expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+    expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+  });
   // The calls lead their own process groups, so a terminal hang-up reaches only the probe, which must pass it on.
   for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
     it(`on ${signal} mid-run stops the running CLI calls, removes every canary and the temp layout, and exits ${exitCode} (R28-supervisor-L1-01)`, async () => {

@@ -276,17 +276,29 @@ function runClaude(name, opts) {
           return { type: 'unparsed', line: l.slice(0, 300) };
         }
       });
-      const hook = fs.existsSync(prep.hookLog)
-        ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
-            try {
-              return JSON.parse(l);
-            } catch {
-              return null;
-            }
-          }).filter(Boolean)
-        : [];
-      fs.writeFileSync(path.join(prep.dir, 'stream.ndjson'), redact(stdout));
-      fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
+      // A full volume (ENOSPC) or no descriptors left (EMFILE) fails these reads and writes; unheard, the throw would
+      // crash the probe past its cleanup, so the case settles with the failure in its stderr instead.
+      let hook = [];
+      try {
+        hook = fs.existsSync(prep.hookLog)
+          ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
+              try {
+                return JSON.parse(l);
+              } catch {
+                return null;
+              }
+            }).filter(Boolean)
+          : [];
+      } catch (readErr) {
+        stderr += `\nhook log not read: ${readErr?.message ?? readErr}`;
+      }
+      for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) {
+        try {
+          fs.writeFileSync(path.join(prep.dir, file), redact(text));
+        } catch (writeErr) {
+          stderr += `\n${file} not written: ${writeErr?.message ?? writeErr}`;
+        }
+      }
       resolve({ name, sessionId, status, stdout: redact(stdout), stderr: redact(stderr).slice(-2000), events, hook, prep });
     });
   });
