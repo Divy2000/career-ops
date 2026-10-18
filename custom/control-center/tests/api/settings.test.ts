@@ -1033,6 +1033,52 @@ describe('app settings over an unreadable settings.json (R33-feat-c-L2-01)', () 
   });
 });
 
+describe('app settings optimistic concurrency (R33-feat-c-X-01)', () => {
+  const putIn = (own: TestApp, payload: unknown, extra: Record<string, string> = {}) => own.app.inject({ method: 'PUT', url: '/api/settings/app', headers: { ...own.authedWrite, ...extra }, payload: payload as Record<string, unknown> });
+  const readIn = async (own: TestApp) => (await own.app.inject({ method: 'GET', url: '/api/settings/app', headers: own.authed })).json();
+  it('given a read, when another client saves first and this one saves with the read ETag, then it is refused with 409 and the current settings', async () => {
+    const own = await makeTestApp();
+    try {
+      const read = await readIn(own);
+      expect(read.etag).toEqual(expect.any(String));
+      const first = await putIn(own, { claudeConcurrency: 3 }, { 'if-match': read.etag });
+      expect(first.statusCode, first.body).toBe(200);
+      expect(first.json().etag).not.toBe(read.etag);
+      const stale = await putIn(own, { claudeConcurrency: 1 }, { 'if-match': read.etag });
+      expect(stale.statusCode, stale.body).toBe(409);
+      expect(stale.json()).toMatchObject({ code: 'settings-changed', current: { claudeConcurrency: 3, etag: first.json().etag } });
+      expect((await readIn(own)).claudeConcurrency).toBe(3);
+      expect(own.runner.claudeSlots).toBe(3);
+    } finally {
+      await own.close();
+    }
+  });
+  it('given the ETag from the last answer, when the next save sends it, then it is taken', async () => {
+    const own = await makeTestApp();
+    try {
+      const first = await putIn(own, { logos: true }, { 'if-match': (await readIn(own)).etag });
+      const second = await putIn(own, { logos: false }, { 'if-match': first.json().etag });
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json().etag).toBe((await readIn(own)).etag);
+    } finally {
+      await own.close();
+    }
+  });
+  it('given settings.json changed on disk by hand, when a save sends the earlier ETag, then it is refused', async () => {
+    const own = await makeTestApp();
+    try {
+      const read = await readIn(own);
+      const file = path.join(own.cfg.dataRoot, 'data', 'control-center', 'settings.json');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify({ retention: 900 }));
+      expect((await putIn(own, { logos: true }, { 'if-match': read.etag })).statusCode).toBe(409);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ retention: 900 });
+    } finally {
+      await own.close();
+    }
+  });
+});
+
 describe('raising Claude concurrency (SW2-server-03)', () => {
   it('starts a Claude run that was waiting for a slot as soon as the cap is raised, with no other run event', async () => {
     const own = await makeTestApp();

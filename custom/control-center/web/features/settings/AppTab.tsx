@@ -10,9 +10,12 @@ import type { AppSettings, AppSettingsRead } from '@shared/api';
 
 const SETTINGS_KEY = ['system', 'settings'];
 
-// The server takes app-settings patches without an ETag, in the order they arrive, so two writes on their way at once
-// could land older last and undo the user's latest choice. Each write waits for the one before it to answer, in this
-// tab through the queue and across the browser's tabs through a Web Lock (granted in request order).
+/** The server's read carries the file's version (ETag); a write sends it so a change made elsewhere is refused, not overwritten. */
+type VersionedRead = AppSettingsRead & { etag?: string };
+type Written = AppSettings & { etag?: string };
+
+// Each write waits for the one before it to answer, in this tab through the queue and across the browser's tabs
+// through a Web Lock (granted in request order), so the user's latest choice lands last.
 let writeQueue: Promise<unknown> = Promise.resolve();
 const WRITE_LOCK = 'career-ops-app-settings-write';
 const withWriteLock = <T,>(send: () => Promise<T>): Promise<T> => (typeof navigator !== 'undefined' && navigator.locks ? navigator.locks.request(WRITE_LOCK, send) : send());
@@ -32,9 +35,47 @@ const subscribe = (l: () => void) => {
 
 const applyPatch = (s: AppSettingsRead, patch: Partial<AppSettings>): AppSettingsRead => ({ ...s, ...patch, usageBudgets: { ...s.usageBudgets, ...(patch.usageBudgets ?? {}) } });
 
-const queueWrite = (patch: Partial<AppSettings>, reset: boolean) => {
+// The versions this browser's own writes moved the file through (from -> to), shared by its tabs. A tab whose last
+// read predates a write from its sibling tab follows the chain to that write's version: the Web Lock already ordered
+// the two, so only a version no tab of this browser wrote (another device, a hand edit) is a conflict.
+const CHAIN_KEY = 'career-ops-app-settings-versions';
+const CHAIN_MAX = 20;
+const readChain = (): Array<[string, string]> => {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(CHAIN_KEY) ?? '[]');
+    return Array.isArray(raw) ? raw.filter((e): e is [string, string] => Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+const recordWrite = (from: string, to: string) => {
+  try {
+    localStorage.setItem(CHAIN_KEY, JSON.stringify([...readChain().filter(([f]) => f !== from), [from, to]].slice(-CHAIN_MAX)));
+  } catch {
+    // Without storage a sibling tab's next write is refused as a conflict and refetches: safe, only less smooth.
+  }
+};
+const latestOwnVersion = (etag: string): string => {
+  const next = new Map(readChain());
+  const seen = new Set([etag]);
+  let at = etag;
+  for (let to = next.get(at); to !== undefined && !seen.has(to); to = next.get(at)) {
+    seen.add(to);
+    at = to;
+  }
+  return at;
+};
+
+const queueWrite = (patch: Partial<AppSettings>, reset: boolean, lastRead: () => string | undefined) => {
   const url = reset ? '/api/settings/app?reset=1' : '/api/settings/app';
-  const write = writeQueue.then(() => withWriteLock(() => apiSend<AppSettings>('PUT', url, patch)));
+  const send = async () => {
+    const read = lastRead();
+    const base = read === undefined ? undefined : latestOwnVersion(read);
+    const written = await apiSend<Written>('PUT', url, patch, base === undefined ? {} : { 'if-match': base });
+    if (base !== undefined && written.etag) recordWrite(base, written.etag);
+    return written;
+  };
+  const write = writeQueue.then(() => withWriteLock(send));
   writeQueue = write.catch(() => undefined);
   return write;
 };
@@ -58,10 +99,10 @@ export function useSaveSettings() {
     setUnanswered([...unanswered, patch]);
     try {
       try {
-        const written = await queueWrite(patch, reset);
+        const written = await queueWrite(patch, reset, () => qc.getQueryData<VersionedRead>(SETTINGS_KEY)?.etag);
         // A read started before this write may answer after it: it is dropped, and the written settings shown until the refetch.
         await qc.cancelQueries({ queryKey: SETTINGS_KEY });
-        qc.setQueryData<AppSettingsRead>(SETTINGS_KEY, { ...written, problem: null });
+        qc.setQueryData<VersionedRead>(SETTINGS_KEY, { ...written, problem: null });
       } finally {
         setUnanswered(unanswered.filter((p) => p !== patch));
       }
@@ -69,7 +110,14 @@ export function useSaveSettings() {
       await Promise.all([qc.invalidateQueries({ queryKey: SETTINGS_KEY }), qc.invalidateQueries({ queryKey: ['system', 'usage'] })]);
       return true;
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && (err.body as { code?: unknown } | null)?.code === 'settings-problem') setRefused({ patch, okText });
+      const refusal = err instanceof ApiError && err.status === 409 ? (err.body as { code?: unknown; current?: VersionedRead } | null) : null;
+      if (refusal?.code === 'settings-problem') setRefused({ patch, okText });
+      // Changed elsewhere: the latest values are shown and the fields' drafts kept, for the user to check and save again.
+      if (refusal?.code === 'settings-changed') {
+        await qc.cancelQueries({ queryKey: SETTINGS_KEY });
+        if (refusal.current) qc.setQueryData<VersionedRead>(SETTINGS_KEY, refusal.current);
+        void qc.invalidateQueries({ queryKey: SETTINGS_KEY });
+      }
       setError(`Could not save settings: ${describeError(err)}`);
       toast.error('Settings not saved');
       return false;

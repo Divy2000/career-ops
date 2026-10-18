@@ -121,20 +121,25 @@ export async function settingsRoutes(app: FastifyInstance, opts: SettingsDeps): 
 
   // ---- app settings ----
   app.get('/api/settings/app', async () => {
-    const { settings, problem } = readSettings(cfg.dataRoot);
-    return { ...settings, problem };
+    const { settings, problem, etag } = readSettings(cfg.dataRoot);
+    return { ...settings, problem, etag };
   });
   app.put<{ Body: unknown; Querystring: { reset?: string } }>('/api/settings/app', async (req, reply) => {
     const body = appSettingsPatchSchema.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid settings', issues: body.error.issues });
-    const written = updateSettings(cfg.dataRoot, body.data, { reset: req.query.reset === '1' });
+    const ifMatch = req.headers['if-match'];
+    const written = updateSettings(cfg.dataRoot, body.data, { reset: req.query.reset === '1', ifMatch: typeof ifMatch === 'string' ? ifMatch : undefined });
+    if (!written.ok && written.code === 'settings-changed') {
+      const { settings, problem, etag } = written.current;
+      return reply.code(409).send({ code: written.code, error: `${SETTINGS_REL} changed since you loaded it (another window, device or a hand edit). Check the current values and save again.`, current: { ...settings, problem, etag } });
+    }
     if (!written.ok) {
       return reply.code(409).send({ code: written.code, problem: written.problem, error: `${SETTINGS_REL} could not be read (${written.problem}), so saving would replace it with defaults. Fix the file by hand, or save again with ?reset=1 to replace it.` });
     }
     const next = written.settings;
     opts.applySettings(next);
     bus.publish('data.changed', { domain: 'config' });
-    return next;
+    return { ...next, etag: written.etag };
   });
 
   // ---- usage meter ----
