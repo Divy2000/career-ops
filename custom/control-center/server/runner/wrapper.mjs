@@ -47,6 +47,8 @@ if (fs.existsSync(cancelPath)) {
     process.exit(0);
   });
 } else {
+  // The runner starts this wrapper with childEnv(), so process.env here is already filtered.
+  // nosemgrep: child-process-env-raw-process-env
   child = spawn(cmd, args, { cwd, env: process.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
   fs.writeFileSync(path.join(runDir, 'wrapper.json'), JSON.stringify({ wrapperPid: process.pid, childPid: child.pid, startedAt: new Date().toISOString() }));
 
