@@ -287,8 +287,9 @@ abspath() {
 }
 
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-# A remote URL as shown and logged: an https://user:token@host URL loses its userinfo, which can hold a credential.
-redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^@/]*@#\1#'; }
+# A remote URL as shown and logged: an https://user:token@host URL loses its userinfo, which can hold a credential. The
+# userinfo runs to the last @ before the first / (a raw @ in a password included), so no part of it is left.
+redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1#'; }
 
 # ---------------------------------------------------------------- arguments
 

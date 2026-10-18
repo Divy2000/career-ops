@@ -49,6 +49,39 @@ function bashWith(names, body, args = []) {
 
 // ---------------------------------------------------------------- invariant 10: shown URLs carry no userinfo
 
+test('redact_url drops all of the userinfo, up to the last @ of the authority, from every remote URL spelling (R31-scripts-b-L2-01)', () => {
+  const cases = [
+    ['https://user:ghp_tok@github.com/Divy2000/career-ops.git', 'https://github.com/Divy2000/career-ops.git'],
+    ['https://ghp_tok@github.com/Divy2000/career-ops.git', 'https://github.com/Divy2000/career-ops.git'],
+    // A password with a raw @ in it: the authority ends at the first /, the userinfo at its last @.
+    ['https://user:p@ss@github.com/Divy2000/career-ops.git', 'https://github.com/Divy2000/career-ops.git'],
+    ['https://user:a@b@c@github.com/x.git', 'https://github.com/x.git'],
+    ['ssh://git:pw@github.com/Divy2000/career-ops.git', 'ssh://github.com/Divy2000/career-ops.git'],
+    ['git+https://u:t@example.com/x', 'git+https://example.com/x'],
+    // Nothing to drop: no userinfo, an @ only in the path, scp-like syntax.
+    ['https://github.com/Divy2000/career-ops.git', 'https://github.com/Divy2000/career-ops.git'],
+    ['https://github.com/a@b/x.git', 'https://github.com/a@b/x.git'],
+    ['git@github.com:Divy2000/career-ops.git', 'git@github.com:Divy2000/career-ops.git'],
+  ];
+  const out = bashWith(['redact_url'], 'for u in "$@"; do redact_url "$u"; printf "\\n"; done', cases.map(([u]) => u)).split('\n');
+  cases.forEach(([url, want], i) => assert.equal(out[i], want, url));
+});
+
+test('redact_url never shows any part of a random credential (seeded)', () => {
+  const CHARS = 'abcXYZ019@:!$%&*+,;=~-._';
+  for (const seed of SEEDS) {
+    const rand = prng(seed);
+    const urls = [];
+    for (let i = 0; i < 60; i++) {
+      const secret = Array.from({ length: 4 + Math.floor(rand() * 12) }, () => pick(rand, [...CHARS])).join('');
+      const user = pick(rand, ['', 'user:', 'x-access-token:', 'a@b:']);
+      urls.push({ url: `${pick(rand, ['https', 'http', 'ssh', 'git+ssh'])}://${user}${secret}@github.com/o/r.git`, secret: `${user}${secret}` });
+    }
+    const out = bashWith(['redact_url'], 'for u in "$@"; do redact_url "$u"; printf "\\n"; done', urls.map((u) => u.url)).split('\n');
+    urls.forEach(({ url }, i) => assert.equal(out[i], url.replace(/:\/\/.*@github\.com\//, '://github.com/'), `seed ${seed}: ${url}`));
+  }
+});
+
 // ---------------------------------------------------------------- invariant 6: one credential rule for Claude children
 
 const SEGMENTS = ['TOKEN', 'TOKENS', 'KEY', 'KEYS', 'SECRET', 'PASSWORD', 'PASSPHRASE', 'CREDENTIAL', 'CREDENTIALS', 'CERT', 'CERTS', 'HEADER', 'HEADERS', 'MAX', 'OUTPUT', 'USE', 'BEDROCK', 'API', 'AUTH', 'BASE', 'URL', 'TTL', 'MS', 'HELPER', 'CLIENT'];
