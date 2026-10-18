@@ -92,6 +92,8 @@ async function typeInto(label: string, text: string) {
     area.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+/** A projects preview made before the library loads is checked against no ETag, so it reads stale (Append disabled) once it does. */
+const libraryLoaded = () => until(() => !button('Add project').disabled, 'the library');
 const textOf = (label: string) => host.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)!.value;
 
 /** Uploads a PDF, lets its parse run, edits the draft, then lands the parse result, which is held behind the banner. */
@@ -470,8 +472,9 @@ describe('Import projects', () => {
     await render(createElement(ProjectsLibrary));
     await until(() => host.querySelector('input[aria-label="Projects file"]'), 'the import card');
     await holdParsed('Projects file', 'one.pdf', 'projects/one.pdf', 'Projects to import', 'projects', '[{"name":"X"}]');
+    await libraryLoaded();
     await act(async () => button('Preview').click());
-    await until(() => button('Append'), 'the Append button');
+    await until(() => button('Append') && !button('Append').disabled, 'the Append button enabled');
     await act(async () => button('Append').click());
     await until(() => textOf('Projects to import') === '' || undefined, 'the append to finish');
     expect(host.textContent).not.toContain('you edited the draft');
@@ -485,12 +488,13 @@ describe('Import projects', () => {
     const { ProjectsLibrary } = await import('@web/features/profile/ProjectsLibrary');
     await render(createElement(ProjectsLibrary));
     const area = await until(() => host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Projects to import"]'), 'the import box');
+    await libraryLoaded();
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, '[{"name":"X"}]');
       area.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await act(async () => button('Preview').click());
-    await until(() => button('Append'), 'the Append button');
+    await until(() => button('Append') && !button('Append').disabled, 'the Append button enabled');
     await act(async () => button('Append').click());
     await until(() => released.length === 1 || undefined, 'the held append');
     await act(async () => button('Append')?.click());
