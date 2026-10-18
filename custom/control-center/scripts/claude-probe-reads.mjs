@@ -699,6 +699,8 @@ try {
     Object.assign(summary.info, o.info ?? {});
   }
   summary.runs = fs.readdirSync(GUARD).filter((d) => fs.existsSync(path.join(GUARD, d, 'settings.json'))).length;
+  // Cases a signal cut short fail without having run: recording them would replace the last real record.
+  if (stopping) throw new Error('stopped by a signal; nothing recorded');
   if (RECORD) {
     // A targeted re-run (--only) merges into the record of the same version; a new version needs every case.
     const prev = contract.claude.readProbe;

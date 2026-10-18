@@ -386,3 +386,39 @@ describe('the probes run the claude binary the supervisor preflight picks (R29-s
     }, 60_000);
   }
 });
+
+describe('claude-probe-reads.mjs --record', () => {
+  /** A copy of the probe beside its own contract.json, so a run that records cannot touch the repository's. */
+  function probeCopy(box: ReturnType<typeof sandbox>) {
+    const pkg = path.join(box.root, 'pkg');
+    fs.mkdirSync(path.join(pkg, 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(pkg, 'server', 'core'), { recursive: true });
+    fs.copyFileSync(path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs'), path.join(pkg, 'scripts', 'claude-probe-reads.mjs'));
+    for (const dir of ['claude', 'system']) fs.symlinkSync(path.join(PACKAGE_ROOT, 'server', dir), path.join(pkg, 'server', dir));
+    const contract = path.join(pkg, 'server', 'core', 'contract.json');
+    fs.copyFileSync(path.join(PACKAGE_ROOT, 'server', 'core', 'contract.json'), contract);
+    return { script: path.join(pkg, 'scripts', 'claude-probe-reads.mjs'), contract };
+  }
+
+  it('given a run with --record, when a signal stops it mid-run, then contract.json is left as it was (R32-supervisor-L1-01)', async () => {
+    const box = sandbox();
+    const { script, contract } = probeCopy(box);
+    const before = fs.readFileSync(contract, 'utf8');
+    const claude = path.join(box.bin, 'claude');
+    // Answers --version; every case call records its pid and hangs, as a real call does for minutes.
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const child = spawn(process.execPath, [script, '--record'], {
+      env: { ...process.env, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    expect(fs.readdirSync(box.calls).length, stderr).toBeGreaterThan(0);
+    child.kill('SIGINT');
+    expect(await exited, stderr).toBe(130);
+    expect(fs.readFileSync(contract, 'utf8')).toBe(before);
+  }, 40_000);
+});
