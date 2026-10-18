@@ -24,7 +24,9 @@ fetch_main() {
 # version_ge <a> <b>: true when dotted version <a> is at least <b>, compared number by number.
 version_ge() {
   local IFS=. i
-  local -a a=($1) b=($2)
+  local -a a b
+  read -ra a <<<"$1"
+  read -ra b <<<"$2"
   for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
     if ((10#${a[i]:-0} > 10#${b[i]:-0})); then return 0; fi
     if ((10#${a[i]:-0} < 10#${b[i]:-0})); then return 1; fi

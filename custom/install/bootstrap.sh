@@ -16,6 +16,7 @@ main() {
   # both scripts name one checkout even when the shell left a quoted ~ alone.
   abspath() {
     local p="$1"
+    # shellcheck disable=SC2088 # the patterns match a literal "~" argument; nothing is meant to expand
     case "$p" in
       "~") p="$HOME" ;;
       "~/"*) p="$HOME/${p#"~/"}" ;;

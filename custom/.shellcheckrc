@@ -1,0 +1,11 @@
+# shellcheck settings for every shell script under custom/ (run by custom/scripts/gates.sh).
+# Sourced helpers (upstream-sync/lib.sh, launchd/pinned-node.sh) have no shebang; they are bash.
+shell=bash
+# Follow `source` to files given on the command line or found relative to the script.
+external-sources=true
+source-path=SCRIPTDIR
+
+# SC2016: scripts embed node -e programs and jq filters in single quotes on purpose; the $ there belongs to JS or jq.
+disable=SC2016
+# SC2329: helpers here run from traps (trap fn EXIT) or through a runner (step name fn), which shellcheck cannot follow.
+disable=SC2329
