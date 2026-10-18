@@ -90,12 +90,6 @@ export function sessionModel(dataRoot: string, requested: string | null | undefi
   return requested ?? (readSettings(dataRoot).settings.modelDefault || null);
 }
 
-export function writeSettings(dataRoot: string, patch: Partial<AppSettings>): AppSettings {
-  const next = appSettingsSchema.parse(mergeSettings(readSettings(dataRoot).settings, patch));
-  persistSettings(dataRoot, next);
-  return next;
-}
-
 export type SettingsUpdate =
   | { ok: true; settings: AppSettings; etag: string }
   | { ok: false; code: 'settings-changed'; current: SettingsRead }
