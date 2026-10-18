@@ -1,4 +1,11 @@
 #!/bin/bash
 # Test shim: reports FAKE_NODE_VERSION for version probes, otherwise runs the real node.
+# Names of the variables carrying the stub Keychain secret, besides the one the installer hands the headless claude.
+held=""
+for var in $(compgen -e); do
+  if [ "$var" = CLAUDE_CODE_OAUTH_TOKEN ] && [ "${1:-}" = -p ]; then continue; fi
+  case "${!var}" in *FAKE-SECRET-123*) held="$held $var" ;; esac
+done
+[ -z "$held" ] || echo "secret-env node$held" >> "$STUB_LOG"
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then echo "${FAKE_NODE_VERSION:-v26.0.0}"; exit 0; fi
 exec "$REAL_NODE" "$@"

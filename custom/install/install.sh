@@ -5,20 +5,62 @@
 # Written for the bash 3.2 that macOS ships.
 set -eEuo pipefail
 trap 'echo "install.sh: unexpected failure at line $LINENO (see the install log)" >&2' ERR
-# The temp files and folder in use right now, each cleared once removed. A run stopped part-way (Ctrl-C at the Keychain
-# read, the daily-lock wait or the validator clone; a closed terminal) exits through the EXIT trap, which removes them.
-# LOCK_WAITER is the lockf still queued on a daily lock: stopped first, so it never takes the lock for a gone installer.
-KEYCHAIN_ERR_FILE="" LOCK_READY="" LOCK_ERRS="" PROJECTS_SCRATCH="" LOCK_WAITER=""
-remove_temp_paths() {
-  if [ -n "$LOCK_WAITER" ]; then
-    kill "$LOCK_WAITER" 2>/dev/null || true
-    wait "$LOCK_WAITER" 2>/dev/null || true
-  fi
-  rm -rf -- ${KEYCHAIN_ERR_FILE:+"$KEYCHAIN_ERR_FILE"} ${LOCK_READY:+"$LOCK_READY"} ${LOCK_ERRS:+"$LOCK_ERRS"} ${PROJECTS_SCRATCH:+"$PROJECTS_SCRATCH"} 2>/dev/null || true
+# The invariants this script keeps are in install.invariants.md next to it; tests/install-invariants*.spec.mjs encode them.
+# Process-owned state, which cleanup (the one EXIT trap, also reached from HUP, INT, QUIT and TERM) releases on every exit:
+# the temp paths make_temp registered, the lockf still queued on a daily lock (LOCK_WAITER), and the daily locks held,
+# each by a holder process (DAILY_HOLDERS) under its lockf (DAILY_LOCKFS).
+TEMP_PATHS=() LOCK_WAITER="" LOCK_READY="" DAILY_HOLDERS=() DAILY_LOCKFS=()
+# The Keychain token is this script's own, never exported (invariant 6): an inherited export of the name would carry
+# the secret into every child once it is read, as an assignment keeps the export attribute. Dropped before any is set.
+unset KEYCHAIN_TOKEN
+KEYCHAIN_TOKEN=""
+# make_temp <var> <name> [-d]: creates a temp file (a folder with -d) in TMPDIR, registers it for cleanup and stores its
+# path in <var>; returns 1, with <var> empty, when mktemp fails. The only place a temp path is made.
+make_temp() {
+  local made
+  made="$(mktemp ${3:+-d} "${TMPDIR:-/tmp}/$2.XXXXXX" 2>/dev/null)" || { printf -v "$1" '%s' ""; return 1; }
+  TEMP_PATHS+=("$made")
+  printf -v "$1" '%s' "$made"
 }
-trap remove_temp_paths EXIT
+# drop_temp <path>...: removes those temp paths now and forgets them. Empty arguments are ignored.
+drop_temp() {
+  local p t kept=()
+  for p in "$@"; do if [ -n "$p" ]; then rm -rf -- "$p" 2>/dev/null || true; fi; done
+  for t in ${TEMP_PATHS[@]+"${TEMP_PATHS[@]}"}; do
+    for p in "$@"; do if [ "$t" = "$p" ]; then continue 2; fi; done
+    kept+=("$t")
+  done
+  TEMP_PATHS=(${kept[@]+"${kept[@]}"})
+}
+# Ends every daily-lock holder and waits for its lockf, so the lock is free and .live-update.pid gone on return.
+daily_lock_release() {
+  local pid
+  for pid in ${DAILY_HOLDERS[@]+"${DAILY_HOLDERS[@]}"}; do kill "$pid" 2>/dev/null || true; done
+  for pid in ${DAILY_LOCKFS[@]+"${DAILY_LOCKFS[@]}"}; do wait "$pid" 2>/dev/null || true; done
+  DAILY_HOLDERS=()
+  DAILY_LOCKFS=()
+}
+cleanup() {
+  local holder started=0
+  if [ -n "$LOCK_WAITER" ]; then
+    # Frozen first, so the set of holders it has started cannot change while it is looked at. A holder it started has
+    # the lock, whether or not it has said so in LOCK_READY yet, and is ended; lockf exits once its holder has, so the
+    # wait below covers both. With none, lockf is still queued and is stopped, so it never takes the lock for a gone
+    # installer; it holds nothing then, as the lock is lockf's own descriptor.
+    kill -STOP "$LOCK_WAITER" 2>/dev/null || true
+    for holder in $(/usr/bin/pgrep -P "$LOCK_WAITER" 2>/dev/null); do DAILY_HOLDERS+=("$holder"); started=1; done
+    if [ "$started" = 0 ]; then kill "$LOCK_WAITER" 2>/dev/null || true; fi
+    kill -CONT "$LOCK_WAITER" 2>/dev/null || true
+    DAILY_LOCKFS+=("$LOCK_WAITER")
+    LOCK_WAITER=""
+  fi
+  daily_lock_release
+  drop_temp ${TEMP_PATHS[@]+"${TEMP_PATHS[@]}"}
+}
+trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
+trap 'exit 131' QUIT
 trap 'exit 143' TERM
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -255,8 +297,9 @@ abspath() {
 }
 
 shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
-# A remote URL as shown and logged: an https://user:token@host URL loses its userinfo, which can hold a credential.
-redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^@/]*@#\1#'; }
+# A remote URL as shown and logged: an https://user:token@host URL loses its userinfo, which can hold a credential. The
+# userinfo runs to the last @ before the first / (a raw @ in a password included), so no part of it is left.
+redact_url() { printf '%s' "$1" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1#'; }
 
 # ---------------------------------------------------------------- arguments
 
@@ -316,7 +359,6 @@ else
 fi
 if [ -n "$DATA_ROOT_ARG" ]; then DATA_REQ="$(abspath "$DATA_ROOT_ARG")"; else DATA_REQ="$DIR"; fi
 if [ -n "$PROJECTS" ]; then PROJECTS="$(abspath "$PROJECTS")"; fi
-DATA="$DATA_REQ"
 QDIR="$(shell_quote "$DIR")" # for printed commands: the directory may contain spaces
 
 # The terminal: fd 3 reads answers, fd 4 receives what interactive tools print. Never opened with --non-interactive.
@@ -332,40 +374,56 @@ fi
 lib() { node "$SCRIPT_DIR/cli.mjs" "$@"; }
 # Headless onboarding hands the session the OAuth token, so it runs only on a Claude Code whose confinement flags
 # (--restricted, SUBPROCESS_ENV_SCRUB) were probed: the versions the checkout's contract approves
-# (claude.approvedVersions), the list the Control Center and the daily job gate on. Prints one line of fields split by
-# the unit separator (\x1f, which read never collapses as it does tabs), "state detail list identity newest": state is approved, unapproved or error; detail is the
-# found version, or why the version or contract cannot be read; approved list is "none yet" for an empty list and
-# "unknown" for an unreadable contract; identity is the approved binary's real path@version ("-" otherwise); newest is
-# the newest approved version that meets CLAUDE_HEADLESS_MIN, empty when none does. Only stdout counts, so a node warning cannot turn "approved" into a
-# refusal. Always exits 0, as bash 3.2 fires the ERR trap on a failing command substitution.
+# (claude.approvedVersions), the list the Control Center and the daily job gate on, and at least CLAUDE_HEADLESS_MIN.
+# The one judge of a version (invariant 7): parseClaudeVersion reads `--version` (asked through claude_child),
+# versionAtLeast applies the floor, the contract decides approval. Prints one line of fields split by the unit separator
+# (\x1f, which read never collapses as it does tabs), "state detail list identity newest": state is approved,
+# unapproved, old (below the floor, or no version can be read from it) or error; detail is the found version ("unknown"
+# when none can be read), or why the contract or the gate cannot be read; list is the approved versions, "none yet" for
+# an empty list and "unknown" for an unreadable contract; identity is the approved binary's real path@version ("-"
+# otherwise); newest is the newest approved version that meets the floor, empty when none does. With "floor" only the
+# floor is judged (state ok or old) and the contract is not read. Only stdout counts, so a node warning cannot turn
+# "approved" into a refusal. Always exits 0, as bash 3.2 fires the ERR trap on a failing command substitution.
 headless_claude_gate() {
   CONFINEMENT="$DIR/custom/control-center/server/claude/confinement.mjs" INSTALL_LIB="$SCRIPT_DIR/lib.mjs" \
-    HEADLESS_MIN="$CLAUDE_HEADLESS_MIN" CLAUDE_BIN="$CLAUDE_BIN" node --input-type=module -e '
+    HEADLESS_MIN="$CLAUDE_HEADLESS_MIN" CLAUDE_BIN="$CLAUDE_BIN" GATE_MODE="${1:-}" claude_child -- node --input-type=module -e '
 const line = (...fields) => process.stdout.write(fields.map((f) => String(f).replace(/[\x1f\n]+/g, " ")).join("\x1f"));
 const reason = (err) => String(err?.message ?? err).split("\n")[0];
-let approved, newest, gate;
+const { HEADLESS_MIN: MIN, GATE_MODE: mode } = process.env;
+let versionAtLeast, claudeVersionGate, contractApprovedVersions;
 try {
-  const { versionAtLeast } = await import(process.env.INSTALL_LIB);
-  const { claudeVersionGate, contractApprovedVersions } = await import(process.env.CONFINEMENT);
-  approved = contractApprovedVersions();
-  // Semver order on x.y.z, then a release above its own pre-releases (2.1.296-beta.1 < 2.1.296).
-  newest = approved.filter((v) => versionAtLeast(v, process.env.HEADLESS_MIN)).reduce((best, v) => (best && versionAtLeast(best, v) ? best : v), "");
-  try {
-    gate = claudeVersionGate(process.env.CLAUDE_BIN, approved);
-  } catch (err) {
-    line("error", reason(err), approved.length ? approved.join(", ") : "none yet", "-", newest);
-    process.exit(0);
-  }
+  ({ versionAtLeast } = await import(process.env.INSTALL_LIB));
+  ({ claudeVersionGate, contractApprovedVersions } = await import(process.env.CONFINEMENT));
 } catch (err) {
   line("error", reason(err), "unknown", "-", "");
   process.exit(0);
 }
-line(gate.problem ? "unapproved" : "approved", gate.version, approved.length ? approved.join(", ") : "none yet", gate.problem ? "-" : gate.identity, newest);
+let approved = [];
+if (mode !== "floor") {
+  try {
+    approved = contractApprovedVersions();
+  } catch (err) {
+    line("error", reason(err), "unknown", "-", "");
+    process.exit(0);
+  }
+}
+const list = approved.length ? approved.join(", ") : "none yet";
+// Semver order on x.y.z, then a release above its own pre-releases (2.1.296-beta.1 < 2.1.296).
+const newest = approved.filter((v) => versionAtLeast(v, MIN)).reduce((best, v) => (best && versionAtLeast(best, v) ? best : v), "");
+let gate = null;
+try {
+  gate = claudeVersionGate(process.env.CLAUDE_BIN, approved);
+} catch {
+  /* no version can be read from it: below the floor, as no confined pass could run on it */
+}
+if (!gate || !versionAtLeast(gate.version, MIN)) line("old", gate?.version ?? "unknown", list, "-", newest);
+else if (mode === "floor") line("ok", gate.version, list, "-", newest);
+else line(gate.problem ? "unapproved" : "approved", gate.version, list, gate.problem ? "-" : gate.identity, newest);
 ' 2>/dev/null || printf 'error\037node could not run the version gate\037unknown\037-\037'
 }
 # Unsets every inherited ANTHROPIC_* variable (keys, tokens, custom headers, and the endpoint they are sent to) and every
 # CLAUDE_CODE_* one with a credential name segment: the rule sync.sh, run-daily.sh and the Control Center's isCredential
-# apply. Called in the headless subshell, so the Claude that gets the Keychain token sees no other credential.
+# apply (a spec checks the three agree on random names).
 strip_claude_credentials() {
   local var
   for var in $(compgen -e); do
@@ -378,6 +436,19 @@ strip_claude_credentials() {
         ;;
     esac
   done
+}
+# claude_child [NAME=VALUE ...] -- <command...>: runs the command the way every process that runs Claude Code, or asks
+# its version, starts here (invariant 6): in a subshell with no inherited credential (strip_claude_credentials) and the
+# autoupdater off, then the NAME=VALUE pairs exported, so a token given here is the only one it sees. The pairs are
+# function arguments, never on a process's command line.
+claude_child() {
+  (
+    strip_claude_credentials
+    export DISABLE_AUTOUPDATER=1
+    while [ "$#" -gt 0 ] && [ "$1" != -- ]; do export "${1?}"; shift; done
+    shift
+    exec "$@"
+  )
 }
 seed() { node "$SCRIPT_DIR/seed.mjs" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -397,12 +468,11 @@ find_claude() {
 keychain_check() {
   local rc=0
   KEYCHAIN_WHY=""
-  KEYCHAIN_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || KEYCHAIN_ERR_FILE=""
+  make_temp KEYCHAIN_ERR_FILE career-ops-install-keychain || true
   bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" >/dev/null 2>"${KEYCHAIN_ERR_FILE:-/dev/null}" || rc=$?
   if [ -n "$KEYCHAIN_ERR_FILE" ]; then
     KEYCHAIN_WHY="$(tail -c 200 "$KEYCHAIN_ERR_FILE" | tr '\n' ' ' | sed 's/ *$//')"
-    rm -f "$KEYCHAIN_ERR_FILE"
-    KEYCHAIN_ERR_FILE=""
+    drop_temp "$KEYCHAIN_ERR_FILE"
   fi
   KEYCHAIN_RC=$rc
 }
@@ -442,14 +512,13 @@ bounded() {
 keychain_read_token() {
   local rc=0
   KEYCHAIN_WHY=""
-  KEYCHAIN_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-keychain.XXXXXX" 2>/dev/null)" || KEYCHAIN_ERR_FILE=""
+  make_temp KEYCHAIN_ERR_FILE career-ops-install-keychain || true
   # The || stays inside $(...) too, where the ERR trap would otherwise report the failed read as a crash.
   KEYCHAIN_TOKEN="$(bounded "$KEYCHAIN_TIMEOUT" security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>"${KEYCHAIN_ERR_FILE:-/dev/null}" || exit "$?")" || rc=$?
   KEYCHAIN_TOKEN="$(trim "$KEYCHAIN_TOKEN")"
   if [ -n "$KEYCHAIN_ERR_FILE" ]; then
     KEYCHAIN_WHY="$(tail -c 200 "$KEYCHAIN_ERR_FILE" | tr '\n' ' ' | sed 's/ *$//')"
-    rm -f "$KEYCHAIN_ERR_FILE"
-    KEYCHAIN_ERR_FILE=""
+    drop_temp "$KEYCHAIN_ERR_FILE"
   fi
   if [ "$rc" = 0 ] && [ -z "$KEYCHAIN_TOKEN" ]; then rc=44; fi
   if [ "$rc" != 0 ]; then KEYCHAIN_TOKEN=""; fi
@@ -575,8 +644,6 @@ installed_job_root() {
 # that finds the lock held waits for the installer instead of skipping the day. Seconds to wait for a running job.
 DAILY_WAIT="${CAREER_OPS_INSTALL_DAILY_WAIT:-120}"
 [[ "$DAILY_WAIT" =~ ^[0-9]+$ ]] || DAILY_WAIT=120
-DAILY_HOLDERS=()
-DAILY_LOCKFS=()
 # The lock that daily_lock_take could not take, for the caller's message.
 DAILY_LOCK_FAILED=""
 
@@ -617,12 +684,12 @@ daily_lock_take() {
 
 daily_lock_take_one() {
   local lock="$1" lockf_pid rc=0 polls=0 line
-  LOCK_READY="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
-  LOCK_ERRS="$(mktemp "${TMPDIR:-/tmp}/career-ops-install-lock.XXXXXX")"
+  make_temp LOCK_READY career-ops-install-lock || return 1
+  make_temp LOCK_ERRS career-ops-install-lock || { drop_temp "$LOCK_READY"; return 1; }
   # -k keeps the file, as run-daily.sh does, so both lock the same inode; lockf exits 75 when the wait runs out.
   # The holder writes nothing for an installer that is already gone, and its exit removes the ready file too, in case the
   # installer's EXIT trap removed it first.
-  /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'kill -0 "$3" 2>/dev/null || exit 0; trap "rm -f \"\$1\" \"\$2\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2; done' \
+  /usr/bin/lockf -k -t "$DAILY_WAIT" "$lock" /bin/bash -c 'kill -0 "$3" 2>/dev/null || exit 0; trap "rm -f \"\$1\" \"\$2\"" EXIT; echo "$$" > "$1"; echo "$$" > "$2"; while kill -0 "$3" 2>/dev/null; do sleep 0.2 & wait "$!"; done' \
     daily-lock "${lock%/*}/.live-update.pid" "$LOCK_READY" "$$" </dev/null >/dev/null 2>"$LOCK_ERRS" 3<&- 4>&- &
   lockf_pid=$!
   LOCK_WAITER="$lockf_pid"
@@ -634,8 +701,9 @@ daily_lock_take_one() {
       if [ "$rc" != 75 ]; then
         while IFS= read -r line || [ -n "$line" ]; do warn "$line"; done < "$LOCK_ERRS"
       fi
-      rm -f "$LOCK_READY" "$LOCK_ERRS"
-      LOCK_READY="" LOCK_ERRS="" LOCK_WAITER=""
+      LOCK_WAITER=""
+      drop_temp "$LOCK_READY" "$LOCK_ERRS"
+      LOCK_READY="" LOCK_ERRS=""
       return "$rc"
     fi
     polls=$((polls + 1))
@@ -644,16 +712,9 @@ daily_lock_take_one() {
   done
   DAILY_HOLDERS+=("$(cat "$LOCK_READY")")
   DAILY_LOCKFS+=("$lockf_pid")
-  rm -f "$LOCK_READY" "$LOCK_ERRS"
-  LOCK_READY="" LOCK_ERRS="" LOCK_WAITER=""
-}
-
-daily_lock_release() {
-  local pid
-  for pid in ${DAILY_HOLDERS[@]+"${DAILY_HOLDERS[@]}"}; do kill "$pid" 2>/dev/null || true; done
-  for pid in ${DAILY_LOCKFS[@]+"${DAILY_LOCKFS[@]}"}; do wait "$pid" 2>/dev/null || true; done
-  DAILY_HOLDERS=()
-  DAILY_LOCKFS=()
+  LOCK_WAITER=""
+  drop_temp "$LOCK_READY" "$LOCK_ERRS"
+  LOCK_READY="" LOCK_ERRS=""
 }
 
 # CAREER_OPS_ROOT, else CAREER_OPS_DATA_DIR, each trimmed like path-resolver.mjs does; empty when neither is set.
@@ -676,6 +737,18 @@ effective_data_root() {
   else
     printf '%s' "$DATA_REQ"
   fi
+}
+
+# set_data_root [resolver]: the one writer of DATA. Sets it to the root the tools will use (effective_data_root, or with
+# "resolver" the checkout's path-resolver.mjs itself) and, in the same call, refuses a root no session could be
+# confined to, so nothing is ever created under a root that was not checked since it was last resolved.
+set_data_root() {
+  if [ "${1:-}" = resolver ]; then
+    DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
+  else
+    DATA="$(effective_data_root)"
+  fi
+  refuse_unconfinable_root "$DATA"
 }
 
 # --data-root must be the root the tools will use. Checked before anything is created, so no directory or log appears
@@ -705,7 +778,6 @@ validate_inputs() {
   [ "$VALIDATED" = 1 ] && return 0
   if [ -z "$RESUME" ] && [ "${#DOCS[@]}" -eq 0 ] && [ -z "$PROJECTS" ]; then VALIDATED=1; return 0; fi
   have node || return 0 # checked again once the prerequisites are in place
-  DATA="$(effective_data_root)"
   local vargs=() rc=0
   if [ -n "$RESUME" ]; then vargs+=(--resume "$RESUME"); fi
   if [ "${#DOCS[@]}" -gt 0 ]; then vargs+=(--docs "${DOCS[@]}"); fi
@@ -747,18 +819,17 @@ check_projects() {
   lib="$(projects_lib)"
   if [ -z "$lib" ]; then
     if [ "$mode" != fetch ] || ! have git; then return 0; fi
-    PROJECTS_SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/career-ops-validator.XXXXXX")"
+    make_temp PROJECTS_SCRATCH career-ops-validator -d
     if git clone --quiet --depth 1 ${REF:+--branch "$REF"} "$FORK_URL" "$PROJECTS_SCRATCH/repo" >/dev/null 2>&1 && [ -f "$PROJECTS_SCRATCH/repo/custom/projects/lib.mjs" ]; then
       lib="$PROJECTS_SCRATCH/repo/custom/projects/lib.mjs"
     else
-      rm -rf "$PROJECTS_SCRATCH"
-      PROJECTS_SCRATCH=""
+      drop_temp "$PROJECTS_SCRATCH"
       printf 'error: could not fetch the projects validator (custom/projects/lib.mjs from %s) to check --projects.\n%s Retry, or run without --projects and import the file later in the Control Center (Profile > Projects).\n' "$(redact_url "$FORK_URL")" "$PROJECTS_NO_CHANGE" >&2
       exit 1
     fi
   fi
   node "$SCRIPT_DIR/seed.mjs" projects-check --lib "$lib" --file "$PROJECTS" >/dev/null || rc=$?
-  if [ -n "$PROJECTS_SCRATCH" ]; then rm -rf "$PROJECTS_SCRATCH"; PROJECTS_SCRATCH=""; fi
+  drop_temp "${PROJECTS_SCRATCH:-}"
   if [ "$rc" -ne 0 ]; then
     printf '%s Fix the projects file above: one "## Title -- link" block per project with "- " bullets, or a projects JSON.\n' "$PROJECTS_NO_CHANGE" >&2
     exit 2
@@ -769,8 +840,7 @@ check_projects() {
 # ---------------------------------------------------------------- intro and platform
 
 check_data_root_conflict
-DATA="$(effective_data_root)"
-refuse_unconfinable_root "$DATA"
+set_data_root
 validate_inputs
 check_projects local
 
@@ -839,8 +909,7 @@ fi
 say "  git, node $NODE_VERSION, npm: ok"
 check_data_root_conflict
 # Again now node can read a .career-ops-data marker, before the daily lock or the log is taken under the root.
-DATA="$(effective_data_root)"
-refuse_unconfinable_root "$DATA"
+set_data_root
 validate_inputs
 check_projects fetch
 
@@ -930,8 +999,7 @@ else
 fi
 
 if [ "$DRY_RUN" = 0 ]; then
-  DATA="$(effective_data_root)"
-  refuse_unconfinable_root "$DATA"
+  set_data_root
   LOG_FILE="$DATA/data/install/install-$(date +%Y-%m-%d).log"
   mkdir -p "$(dirname "$LOG_FILE")"
   printf '%s' "$LOG_BUF" >> "$LOG_FILE"
@@ -999,8 +1067,7 @@ else
       say "  wrote $marker -> $DATA_REQ"
     fi
   fi
-  DATA="$(cd "$DIR" && node --input-type=module -e "import('./path-resolver.mjs').then((m) => process.stdout.write(m.getCareerOpsRoot()))")"
-  refuse_unconfinable_root "$DATA"
+  set_data_root resolver
   mkdir -p "$DATA"
   # same-path resolves letter case too (realpathSync.native), as pwd -P does not on a case-insensitive volume.
   if [ -n "$DATA_ROOT_ARG" ] && ! lib same-path "$DATA" "$DATA_REQ"; then
@@ -1284,10 +1351,10 @@ else
       elif [ "$KEYCHAIN_OK" = 0 ]; then
         say "  Headless onboarding needs the Keychain item $KEYCHAIN_SERVICE."
         pending "Store the Keychain token, then re-run with --onboard headless. Without it, run: cd $QDIR && claude $(shell_quote "$prompt")"
-      elif ! claude_version="$("$CLAUDE_BIN" --version 2>/dev/null)" || ! lib version-ge "${claude_version%% *}" "$CLAUDE_HEADLESS_MIN"; then
+      elif gate="$(headless_claude_gate floor)"; IFS=$'\037' read -r gate_state gate_found _ _ _ <<< "$gate"; [ "$gate_state" = old ]; then
         # Older builds ignore CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, so hook and tool children would inherit the token,
         # or lack --restricted, so the user's own settings (allow rules, hooks) would widen the session.
-        say "  Headless onboarding needs Claude Code $CLAUDE_HEADLESS_MIN or later, which keeps the token out of hooks and tools and confines the session (found: ${claude_version:-unknown})."
+        say "  Headless onboarding needs Claude Code $CLAUDE_HEADLESS_MIN or later, which keeps the token out of hooks and tools and confines the session (found: $gate_found)."
         # claude update can land on a version newer than the probed ones, which the gate below refuses: name an approved one.
         update_hint="claude update"
         gate="$(headless_claude_gate)"
@@ -1301,7 +1368,11 @@ else
         fi
         pending "Update Claude Code ($update_hint), then re-run with --onboard headless. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
       elif gate="$(headless_claude_gate)"; IFS=$'\037' read -r gate_state gate_found gate_approved gate_identity gate_fix <<< "$gate"; [ "$gate_state" != approved ]; then
-        if [ "$gate_state" = unapproved ]; then
+        if [ "$gate_state" = old ]; then
+          # It met the floor a moment ago: it was replaced in between.
+          say "  Claude Code changed while onboarding was being prepared (now: $gate_found); nothing was run."
+          pending "Re-run with --onboard headless once Claude Code has finished updating. Or run: cd $QDIR && claude $(shell_quote "$prompt")"
+        elif [ "$gate_state" = unapproved ]; then
           # A newer CLI than the probed ones can change what --restricted and the scrub do while still passing >= MIN.
           say "  Headless onboarding runs only on a Claude Code version the Control Center approves (approved: $gate_approved; found: $gate_found), because an unprobed one can change what --restricted and the token scrub do."
           if [ -n "$gate_fix" ]; then
@@ -1362,8 +1433,7 @@ else
         # --restricted loads no user, project or local settings, so their allow rules and hooks cannot widen
         # --tools; what it would otherwise keep is disallowed by name, and --settings turns off any remaining hooks.
         # It starts the real path the gate approved, not a symlink an update could re-point, with the autoupdater off.
-        if (strip_claude_credentials && cd "$DIR" && CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" \
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 DISABLE_AUTOUPDATER=1 \
+        if (cd "$DIR" && claude_child CLAUDE_CODE_OAUTH_TOKEN="$KEYCHAIN_TOKEN" ANTHROPIC_API_KEY="" CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 -- \
           "${gate_identity%@*}" -p "$hprompt" --effort medium --restricted --tools Read,Glob,Grep,Edit,Write \
           --disallowedTools Bash,PowerShell,WebFetch,WebSearch,Task,Agent,NotebookEdit --settings '{"disableAllHooks":true}' \
           --permission-mode dontAsk --strict-mcp-config --add-dir "$draft" ${extra_dirs[@]+"${extra_dirs[@]}"} \
@@ -1537,6 +1607,9 @@ if [ "$CC_START" = 1 ]; then
       fi
     fi
     say "Starting the Control Center (Ctrl+C stops it). Open the token URL it prints."
+    # exec keeps this PID, so the EXIT trap never runs and a lock holder polling for it would live on: released first.
+    cleanup
+    trap - EXIT
     exec "$DIR/custom/control-center/bin/cc" 3<&- 4>&-
   fi
 fi
