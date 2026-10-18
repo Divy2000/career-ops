@@ -162,7 +162,8 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
     const box = sandbox();
     const claude = path.join(box.bin, 'claude');
     fs.writeFileSync(claude, '#!/bin/sh\necho "9.9.9 (Claude Code)"\n', { mode: 0o755 });
-    // Out of descriptors: spawn reports EMFILE with no pipes and no 'close', and the error write fails the same way.
+    // Out of descriptors once the version is known: every case spawn reports EMFILE with no pipes and no 'close', and
+    // the error write fails the same way.
     const preload = path.join(box.root, 'emfile.mjs');
     fs.writeFileSync(
       preload,
@@ -170,7 +171,9 @@ describe('claude-probe-reads.mjs (npm run probe:reads)', () => {
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { syncBuiltinESMExports } from 'node:module';
-cp.spawn = () => {
+const realSpawn = cp.spawn;
+cp.spawn = (cmd, argv, ...rest) => {
+  if (argv?.[0] === '--version') return realSpawn(cmd, argv, ...rest);
   const child = Object.assign(new EventEmitter(), { pid: undefined, stdout: null, stderr: null, kill: () => false });
   process.nextTick(() => child.emit('error', Object.assign(new Error('spawn claude EMFILE'), { code: 'EMFILE' })));
   return child;

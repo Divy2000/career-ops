@@ -420,4 +420,196 @@ process.kill = (pid, signal) => (pid < 0 && signal === 'SIGKILL' ? true : realKi
     }
     expect(code, stderr).toBe(130);
   }, 60_000);
+
+  /** A preload that shortens the named timer and spawnSync timeouts (in ms) to 300 ms, so a timeout path runs in a test. */
+  function shortTimeouts(box: Box, delays: number[]) {
+    const preload = path.join(box.root, `short-${delays.join('-')}.mjs`);
+    fs.writeFileSync(
+      preload,
+      `import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const short = (ms) => (${JSON.stringify(delays)}.includes(ms) ? 300 : ms);
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) => realSetTimeout(fn, short(ms), ...rest);
+const realSpawnSync = cp.spawnSync;
+cp.spawnSync = (cmd, argv, opts) => realSpawnSync(cmd, argv, opts && typeof opts.timeout === 'number' ? { ...opts, timeout: short(opts.timeout) } : opts);
+syncBuiltinESMExports();
+`,
+    );
+    return preload;
+  }
+  /** The pids recorded under `dir` whose process is still alive (not a zombie). */
+  const aliveIn = (dir: string) =>
+    fs.readdirSync(dir).map((n) => fs.readFileSync(path.join(dir, n), 'utf8').trim()).filter(Boolean).filter((pid) => {
+      const ps = spawnSync('ps', ['-o', 'stat=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
+      return ps !== '' && !ps.startsWith('Z');
+    });
+  const killAll = (pids: string[]) => {
+    for (const pid of pids) {
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  };
+  const probeEnv = (box: Box, claude: string, preload?: string) => ({ ...process.env, ...(preload ? { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } : {}), HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude });
+  /** A claude whose --version forks a long sleep and waits on it, recording the sleep's pid. */
+  const hangingVersion = (box: Box, pids: string) => {
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\nif [ "$1" = "--version" ]; then sleep 600 & echo $! > "${pids}/version-child"; wait; fi\nexit 0\n`, { mode: 0o755 });
+    return claude;
+  };
+
+  it('given a call that times out while a member of its group outlives the first group kill, when the probe ends, then no member of that group is alive (invariant 11, R34-supervisor-L1-01)', () => {
+    const box = sandbox();
+    const pids = path.join(box.root, 'pids');
+    fs.mkdirSync(pids);
+    // The member was forked while the kill ran, so the first group SIGKILL reaches only the leader; the member then
+    // recreates the call's project folder under ~/.claude/projects after the cleanup.
+    const claude = path.join(box.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n( sleep 1; mkdir -p "$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"; exec sleep 60 ) </dev/null >/dev/null 2>&1 &\necho $! > "${pids}/member-$$"\nexec sleep 60\n`, { mode: 0o755 });
+    const preload = shortTimeouts(box, [300_000]);
+    fs.appendFileSync(
+      preload,
+      `const realKill = process.kill.bind(process);
+const missed = new Set();
+process.kill = (pid, signal) => {
+  if (pid < 0 && signal === 'SIGKILL' && !missed.has(pid)) {
+    missed.add(pid);
+    return realKill(-pid, 'SIGKILL');
+  }
+  return realKill(pid, signal);
+};
+`,
+    );
+    const r = spawnSync(process.execPath, [box.script, '--only', 'C1'], { encoding: 'utf8', timeout: 30_000, env: probeEnv(box, claude, preload) });
+    const alive = aliveIn(pids);
+    killAll(alive);
+    expect(fs.readdirSync(pids).length, r.stderr).toBeGreaterThan(0);
+    expect(alive, r.stderr).toEqual([]);
+    expect(r.status, r.stderr).toBe(1);
+    expect(JSON.parse(r.stdout).cases).toHaveProperty('C0');
+    canariesGone(box);
+  }, 60_000);
+
+  it('given a claude --version that forks and then hangs, when the version check times out, then the run stops and the forked process is gone (invariant 11, R34-supervisor-X-01)', () => {
+    const box = sandbox();
+    const pids = path.join(box.root, 'pids');
+    fs.mkdirSync(pids);
+    const claude = hangingVersion(box, pids);
+    const r = spawnSync(process.execPath, [box.script], { encoding: 'utf8', timeout: 30_000, env: probeEnv(box, claude, shortTimeouts(box, [30_000])) });
+    const alive = aliveIn(pids);
+    killAll(alive);
+    expect(fs.readdirSync(pids), r.stderr).toEqual(['version-child']);
+    expect(alive, r.stderr).toEqual([]);
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toContain(`claude not runnable at ${claude}`);
+    expect(r.stderr).toMatch(/timed out/);
+    canariesGone(box);
+  }, 60_000);
+
+  it('given a claude --version that forks and then hangs, when the probe gets SIGTERM, then it exits 143 at once and the forked process is gone (invariant 11)', async () => {
+    const box = sandbox();
+    const pids = path.join(box.root, 'pids');
+    fs.mkdirSync(pids);
+    const claude = hangingVersion(box, pids);
+    const child = spawn(process.execPath, [box.script], { env: probeEnv(box, claude), stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (!fs.existsSync(path.join(pids, 'version-child')) && Date.now() < deadline) await new Promise((res) => setTimeout(res, 50));
+    expect(fs.readdirSync(pids), stderr).toEqual(['version-child']);
+    const sent = Date.now();
+    child.kill('SIGTERM');
+    const code = await exited;
+    const alive = aliveIn(pids);
+    killAll(alive);
+    expect(code, stderr).toBe(143);
+    expect(Date.now() - sent, stderr).toBeLessThan(10_000);
+    expect(alive, stderr).toEqual([]);
+    canariesGone(box);
+  }, 60_000);
+});
+
+describe('claude-probe.mjs ends every CLI process group it starts (invariant 11)', () => {
+  function box() {
+    const root = tempDir('cc-probe-groups-');
+    const bin = path.join(root, 'bin');
+    const pids = path.join(root, 'pids');
+    for (const d of [bin, pids, path.join(root, 'home'), path.join(root, 'tmp')]) fs.mkdirSync(d);
+    fs.writeFileSync(path.join(bin, 'security'), `#!/bin/sh\necho ${FAKE_TOKEN}\n`, { mode: 0o755 });
+    return { root, bin, pids };
+  }
+  type GroupBox = ReturnType<typeof box>;
+  const env = (b: GroupBox, claude: string, preload?: string) => ({ ...process.env, ...(preload ? { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } : {}), HOME: path.join(b.root, 'home'), TMPDIR: path.join(b.root, 'tmp'), PATH: `${b.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude });
+  function shortTimeouts(b: GroupBox, delays: number[]) {
+    const preload = path.join(b.root, 'short.mjs');
+    fs.writeFileSync(
+      preload,
+      `import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const short = (ms) => (${JSON.stringify(delays)}.includes(ms) ? 300 : ms);
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...rest) => realSetTimeout(fn, short(ms), ...rest);
+const realSpawnSync = cp.spawnSync;
+cp.spawnSync = (cmd, argv, opts) => realSpawnSync(cmd, argv, opts && typeof opts.timeout === 'number' ? { ...opts, timeout: short(opts.timeout) } : opts);
+syncBuiltinESMExports();
+`,
+    );
+    return preload;
+  }
+  const alive = (dir: string) =>
+    fs.readdirSync(dir).map((n) => fs.readFileSync(path.join(dir, n), 'utf8').trim()).filter((pid) => {
+      const ps = spawnSync('ps', ['-o', 'stat=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
+      return ps !== '' && !ps.startsWith('Z');
+    });
+  const reap = (pids: string[]) => {
+    for (const pid of pids) {
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+  };
+  // Each forks a sleep, records its pid and waits on it: a timeout that kills only the direct child leaves the sleep.
+  const hangs: Array<[string, string, number]> = [
+    ['a CLI call', '[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nsleep 600 & echo $! > "$PIDS/call-$$"; wait', 180_000],
+    ['claude --version', '[ "$1" = "--version" ] && { sleep 600 & echo $! > "$PIDS/version-$$"; wait; }\nexit 0', 30_000],
+  ];
+  for (const [what, body, timeout] of hangs) {
+    it(`given ${what} that forks and then hangs, when its timeout passes, then the probe finishes and the forked process is gone`, () => {
+      const b = box();
+      const claude = path.join(b.bin, 'claude');
+      fs.writeFileSync(claude, `#!/bin/sh\nPIDS="${b.pids}"\n${body}\n`, { mode: 0o755 });
+      const r = spawnSync(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe.mjs')], { encoding: 'utf8', timeout: 20_000, env: env(b, claude, shortTimeouts(b, [timeout])) });
+      const left = alive(b.pids);
+      reap(left);
+      expect(fs.readdirSync(b.pids).length, r.stderr).toBeGreaterThan(0);
+      expect(left, r.stderr).toEqual([]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(JSON.parse(r.stdout).probeA).toBeTruthy();
+    }, 60_000);
+  }
+
+  it('given a CLI call that is running, when the probe gets SIGINT, then it exits 130 and the call\'s group is gone', async () => {
+    const b = box();
+    const claude = path.join(b.bin, 'claude');
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\nsleep 600 & echo $! > "${b.pids}/call-$$"\nwait\n`, { mode: 0o755 });
+    const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe.mjs')], { env: env(b, claude), stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code, signal) => resolve(code ?? (signal === 'SIGINT' ? 130 : null))));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(b.pids).length === 0 && Date.now() < deadline) await new Promise((res) => setTimeout(res, 50));
+    expect(fs.readdirSync(b.pids).length, stderr).toBeGreaterThan(0);
+    child.kill('SIGINT');
+    const code = await exited;
+    const left = alive(b.pids);
+    reap(left);
+    expect(code, stderr).toBe(130);
+    expect(left, stderr).toEqual([]);
+  }, 60_000);
 });

@@ -20,11 +20,11 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { childEnv } from '../server/system/child-env.ts';
 import { claudeBinFromEnv, probeInherited, readKeychainToken } from './probe-cli.mjs';
 import { recordReadProbe, writeContract } from './probe-reads-record.mjs';
+import { runGroup, stopGroups } from './probe-proc.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = path.resolve(here, '..');
@@ -176,38 +176,9 @@ function prepare(name, opts, sessionId) {
 }
 
 // Production starts the server from a plain shell: no nested-session or provider variables reach the CLI.
-// The CLI calls still running, which a SIGINT or SIGTERM stops before the cleanup.
+// The CLI processes (cases and --version) whose process group may still have a member, which finish() stops before
+// the cleanup.
 const running = new Set();
-// Each call leads its own process group, so its hooks and Bash-tool commands die with it.
-function killCall(child) {
-  try {
-    process.kill(-child.pid, 'SIGKILL');
-  } catch {
-    child.kill('SIGKILL');
-  }
-}
-/**
- * Kills each call's process group until it has no process left, or the deadline passes. One group kill is not enough
- * under load: a member forked while it ran can miss it, and one preempted mid-write still acts after it, so a cleanup
- * right after the kill can race a call that creates a project folder or transcript behind it. Returns the PIDs of the
- * groups that may remain.
- */
-async function stopCalls(children, ms) {
-  const pending = new Set([...children].filter((c) => Number.isInteger(c.pid)));
-  for (const child of children) if (!pending.has(child)) child.kill('SIGKILL');
-  const deadline = Date.now() + ms;
-  for (;;) {
-    for (const child of pending) {
-      try {
-        process.kill(-child.pid, 'SIGKILL');
-      } catch (err) {
-        if (err?.code === 'ESRCH') pending.delete(child);
-      }
-    }
-    if (!pending.size || Date.now() >= deadline) return [...pending].map((c) => c.pid);
-    await new Promise((r) => setTimeout(r, 50));
-  }
-}
 // The signal that stopped the probe, once one has: no new call starts, and finish() keeps that signal's exit code.
 let stopping = null;
 // Every call or group that did not run to its end (spawn failed, never started, killed): --record refuses while any is.
@@ -244,59 +215,43 @@ function runClaude(name, opts) {
     CC_TURN_DIR: prep.dir,
     ...(opts.configDir ? { CLAUDE_CONFIG_DIR: opts.configDir } : {}),
   }, INHERITED);
-  return new Promise((resolve) => {
-    const child = spawn(claudeBin, argv, { cwd: CODE, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-    running.add(child);
-    let stdout = '';
-    let stderr = '';
-    // On EMFILE/ENFILE Node reports the spawn failure before it creates the pipes, so they can be null.
-    child.stdout?.on('data', (d) => (stdout += d));
-    child.stderr?.on('data', (d) => (stderr += d));
-    const timer = setTimeout(() => killCall(child), 300_000);
-    let settled = false;
+  return runGroup(claudeBin, argv, { cwd: CODE, env, timeoutMs: 300_000, track: running }).then((r) => {
+    const { stdout } = r;
+    let stderr = `${r.stderr}${r.error ? `\n${r.error.message}` : ''}`;
+    const spawnFailed = r.child.pid === undefined;
+    if (spawnFailed) incomplete.push(`${name} (spawn failed: ${r.error?.code ?? r.error?.message})`);
+    else if (r.error?.code === 'ETIMEDOUT') incomplete.push(`${name} (timed out)`);
+    else if (r.status === null) incomplete.push(`${name} (killed by ${r.signal})`);
+    if (r.left.length) incomplete.push(`${name} (process group ${r.left.join(', ')} still running after the kill)`);
     /**
-     * The one place a call's result is made, whichever of a spawn failure or 'close' comes first. It never throws: a full
-     * volume (ENOSPC) or no descriptors left (EMFILE) fails its reads and writes, and a throw here would skip the cleanup,
-     * so each file step reports its failure into the case's stderr instead.
+     * The one place a call's result is made, once its process group is gone. It never throws: a full volume (ENOSPC) or
+     * no descriptors left (EMFILE) fails its reads and writes, and a throw here would skip the cleanup, so each file step
+     * reports its failure into the case's stderr instead.
      */
-    const settle = (status, notRun) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      running.delete(child);
-      if (notRun) incomplete.push(`${name} (${notRun})`);
-      const fileStep = (what, fn, fallback) => {
-        try {
-          return fn();
-        } catch (err) {
-          stderr += `\n${what}: ${err?.message ?? err}`;
-          return fallback;
-        }
-      };
-      const events = stdout.split('\n').filter(Boolean).map((l) => {
-        try {
-          return JSON.parse(l);
-        } catch {
-          return { type: 'unparsed', line: l.slice(0, 300) };
-        }
-      });
-      const hook = fileStep('hook log not read', () => (fs.existsSync(prep.hookLog) ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
-        try {
-          return JSON.parse(l);
-        } catch {
-          return null;
-        }
-      }).filter(Boolean) : []), []);
-      for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) fileStep(`${file} not written`, () => fs.writeFileSync(path.join(prep.dir, file), redact(text)));
-      resolve({ name, sessionId, status, stdout: redact(stdout), stderr: redact(stderr).slice(-2000), events, hook, prep });
+    const fileStep = (what, fn, fallback) => {
+      try {
+        return fn();
+      } catch (err) {
+        stderr += `\n${what}: ${err?.message ?? err}`;
+        return fallback;
+      }
     };
-    // A spawn failure (ENOENT, EAGAIN, EMFILE) emits 'error' with no pid and no 'close'; unheard it would crash the probe
-    // past its cleanup. An 'error' after a successful spawn (a failed kill) leaves the child running, so 'close' settles.
-    child.on('error', (err) => {
-      stderr += `\n${err?.message ?? err}`;
-      if (child.pid === undefined) settle(null, `spawn failed: ${err?.code ?? err?.message ?? err}`);
+    const events = stdout.split('\n').filter(Boolean).map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return { type: 'unparsed', line: l.slice(0, 300) };
+      }
     });
-    child.on('close', (status, signal) => settle(status, status === null ? `killed by ${signal}` : null));
+    const hook = fileStep('hook log not read', () => (fs.existsSync(prep.hookLog) ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    }).filter(Boolean) : []), []);
+    for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) fileStep(`${file} not written`, () => fs.writeFileSync(path.join(prep.dir, file), redact(text)));
+    return { name, sessionId, status: r.status, stdout: redact(stdout), stderr: redact(stderr).slice(-2000), events, hook, prep };
   });
 }
 
@@ -638,7 +593,7 @@ let signalCode = null;
  * cleanup step turns the exit into 1.
  */
 function finish(code) {
-  finishing ??= stopCalls(running, 5_000).then((left) => {
+  finishing ??= stopGroups(running).then((left) => {
     if (left.length) console.error(`calls still running after the kill (process groups ${left.join(', ')}); their transcripts may remain`);
     const clean = reportCleanup(cleanup());
     process.exit(signalCode ?? (clean ? code : 1));
@@ -663,8 +618,9 @@ for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]
 }
 try {
   buildLayout();
-  const v = spawnSync(claudeBin, ['--version'], { encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL', env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
+  const v = await runGroup(claudeBin, ['--version'], { timeoutMs: 30_000, track: running, env: childEnv({ DISABLE_AUTOUPDATER: '1' }, INHERITED) });
   if (v.error) throw new Error(`claude not runnable at ${claudeBin}: ${v.error.message}`);
+  if (v.left.length) throw new Error(`claude --version at ${claudeBin} left process group ${v.left.join(', ')} running after the kill`);
   summary.version = ((v.stdout ?? '').match(/\d+\.\d+\.\d+/) ?? [null])[0];
   // Every case and --record need a working CLI with a known version; a null one would be recorded as approved.
   if (v.status !== 0 || !summary.version) {

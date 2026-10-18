@@ -7,9 +7,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { childEnv } from '../server/system/child-env.ts';
 import { claudeBinFromEnv, probeInherited, readKeychainToken } from './probe-cli.mjs';
+import { runGroup, stopGroups } from './probe-proc.mjs';
 
 const claudeBin = claudeBinFromEnv();
 const token = readKeychainToken();
@@ -56,8 +56,25 @@ const prompt = [
   'Then reply with the single word done.',
 ].join('\n');
 
-function run(args) {
-  const r = spawnSync(claudeBin, args, { cwd: dir, env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 180_000 });
+// Each CLI run leads its own process group, so no signal from the terminal reaches it: a signal stops every running
+// group before the probe exits with that signal's code, and no run starts after it.
+const running = new Set();
+let stopping = false;
+for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
+  process.once(signal, () => {
+    stopping = true;
+    void stopGroups(running).then(() => process.exit(code));
+  });
+}
+
+/** Every CLI run starts here. Once a signal is stopping the probe it never starts: the exit is under way. */
+async function start(args, opts) {
+  if (stopping) await new Promise(() => {});
+  return runGroup(claudeBin, args, { ...opts, track: running });
+}
+
+async function run(args) {
+  const r = await start(args, { cwd: dir, env, timeoutMs: 180_000 });
   // A spawn failure (ENOENT) leaves no stdout or stderr, only r.error; a timeout keeps both and sets r.error too.
   const lines = (r.stdout ?? '').split('\n').filter(Boolean).map((l) => {
     try { return JSON.parse(l); } catch { return { type: 'unparsed', line: l.slice(0, 200) }; }
@@ -65,7 +82,7 @@ function run(args) {
   return { status: r.status, stderr: redact(`${r.stderr ?? ''}${r.error ? `\n${r.error.message}` : ''}`).slice(-1500), events: lines };
 }
 
-const a = run([
+const a = await run([
   '-p', prompt,
   '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
   '--session-id', sessionId,
@@ -88,13 +105,13 @@ const toolUses = a.events.filter((e) => e.type === 'assistant').flatMap((e) => (
 const toolResults = a.events.filter((e) => e.type === 'user').flatMap((e) => (e.message?.content ?? []).filter((c) => c.type === 'tool_result'));
 const hookLines = fs.existsSync(hookLog) ? fs.readFileSync(hookLog, 'utf8').trim().split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean) : [];
 
-const b = run(['-p', 'Reply with the single word: resumed', '--resume', sessionId, '--output-format', 'stream-json', '--verbose', '--model', 'haiku', '--effort', 'medium']);
+const b = await run(['-p', 'Reply with the single word: resumed', '--resume', sessionId, '--output-format', 'stream-json', '--verbose', '--model', 'haiku', '--effort', 'medium']);
 const bInit = b.events.find((e) => e.type === 'system' && e.subtype === 'init');
 const bResult = b.events.find((e) => e.type === 'result');
 
 const summary = {
   probedAt: new Date().toISOString(),
-  claudeVersion: versionOf(spawnSync(claudeBin, ['--version'], { encoding: 'utf8', env: BASE_ENV })),
+  claudeVersion: versionOf(await start(['--version'], { env: BASE_ENV, timeoutMs: 30_000 })),
   probeA: {
     exitStatus: a.status,
     eventTypes: types(a.events),
