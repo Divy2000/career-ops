@@ -230,7 +230,7 @@ describe('app settings: this browser\'s own saves never conflict with each other
     expect(puts.map((p) => p.ifMatch)).toEqual(['v1', 'v2']);
   });
 
-  it('Given versions named by content, when the file returns to a version this browser saw and a save is refused, then the next save is taken (R34-feat-c-L1-01)', async () => {
+  it('Given versions named by content, when the file returns to a version this browser saw, then a save from that read is taken (R34-feat-c-L1-01)', async () => {
     contentEtag = true;
     const host = await mount('AppTab');
     const box = () => host.querySelector<HTMLInputElement>('#setting-logos');
@@ -241,11 +241,10 @@ describe('app settings: this browser\'s own saves never conflict with each other
     await act(async () => lastQc.invalidateQueries());
     await until(() => box()?.checked === false, 'the restored value shown');
     await act(async () => box()!.click());
-    // Content alone cannot tell this read from one behind a sibling tab, so the first save is refused once.
-    await until(() => /changed since you loaded it/.test(alerts(host)), 'the first save refused');
-    await until(() => box()?.checked === false, 'the current value shown after the refusal');
-    await act(async () => box()!.click());
-    await until(() => settings.logos === true, 'the save after the refusal taken');
+    // The read was asked for after this browser's own write, so it is written as it is, with no refusal first.
+    await until(() => settings.logos === true, 'the save taken');
+    expect(puts.filter((p) => p.ifMatch !== null)).toHaveLength(2);
+    expect(alerts(host)).toBe('');
     expect(puts.at(-1)!.ifMatch).toBe(`c:${JSON.stringify({ ...settings, logos: false })}`);
   });
 });
