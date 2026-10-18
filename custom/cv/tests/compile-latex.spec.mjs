@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { HERE, REPO, dataRoot, envFor } from './helpers.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const COMPILE = path.join(HERE, '..', 'compile-latex.mjs');
 const SECRET = 'R23-SECRET-7f3a9c';
@@ -58,7 +59,9 @@ const compilers = [
   { name: 'installed engine', skip, env: () => ({ PATH: searchPath }), text: (file) => spawnSync('pdftotext', [file, '-'], { encoding: 'utf8' }).stdout },
 ];
 
-const runWith = (root, args, env) => spawnSync(process.execPath, [COMPILE, ...args], { cwd: REPO, env: { ...envFor(root), ...env }, encoding: 'utf8', timeout: 180_000 });
+// A TeX engine's first run builds its font and format caches (tectonic also fetches its bundle), which can take more
+// than the default CPU budget; 180 s matches the wall-clock limit these runs had before.
+const runWith = (root, args, env) => spawnCpuLimited(process.execPath, [COMPILE, ...args], { cwd: REPO, env: { ...envFor(root), ...env }, encoding: 'utf8', cpuSeconds: 180 });
 const run = (root, args) => runWith(root, args, { PATH: searchPath });
 const pdfText = (file) => spawnSync('pdftotext', [file, '-'], { encoding: 'utf8' }).stdout;
 const secretFile = () => {

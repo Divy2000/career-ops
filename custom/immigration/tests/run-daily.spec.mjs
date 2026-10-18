@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { CLI_CANDIDATES } from '../../../rank-pipeline.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..', '..');
@@ -101,7 +102,7 @@ function dailyWorld({ dataInside = false, homeIsData = false, approved = APPROVE
   const start = (extraEnv = {}) => spawn('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env: envFor(extraEnv), stdio: 'ignore', detached: true });
   const run = (extraEnv = {}) => {
     const env = envFor(extraEnv);
-    const r = spawnSync('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8', timeout: 60_000 });
+    const r = spawnCpuLimited('/bin/bash', [path.join(root, 'custom/immigration/run-daily.sh')], { env, encoding: 'utf8' });
     const imm = path.join(data, 'data', 'immigration');
     const logs = fs.existsSync(path.join(imm, 'logs')) ? fs.readdirSync(path.join(imm, 'logs')).filter((f) => /^\d{4}-\d{2}-\d{2}\.log$/.test(f)) : [];
     const log = logs.map((f) => readFileSync(path.join(imm, 'logs', f), 'utf8')).join('\n');

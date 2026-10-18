@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..', '..');
@@ -32,7 +33,7 @@ function build(payload) {
   const input = path.join(dir, 'payload.json');
   const output = path.join(dir, 'cv.html');
   fs.writeFileSync(input, JSON.stringify(payload));
-  const r = spawnSync(process.execPath, [path.join(REPO, 'build-cv-html.mjs'), input, output, FORK], { cwd: REPO, env: rootEnv(dir), encoding: 'utf8', timeout: 30000 });
+  const r = spawnCpuLimited(process.execPath, [path.join(REPO, 'build-cv-html.mjs'), input, output, FORK], { cwd: REPO, env: rootEnv(dir), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   return fs.readFileSync(output, 'utf8');
 }

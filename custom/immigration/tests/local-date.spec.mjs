@@ -2,13 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { zoneOffUtcDay } from '../../test-support/local-day.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const run = (script, args, env) => spawnSync(process.execPath, [...(env.preload ? ['--import', env.preload] : []), path.join(REPO, 'custom', 'immigration', script), ...args], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: env.root, TZ: env.zone, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+const run = (script, args, env) => spawnCpuLimited(process.execPath, [...(env.preload ? ['--import', env.preload] : []), path.join(REPO, 'custom', 'immigration', script), ...args], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: env.root, TZ: env.zone, NO_COLOR: '1' }, encoding: 'utf8' });
 
 test('the official-feed watcher dates its run and each source\'s last success by the local day', () => {
   const { zone, localToday } = zoneOffUtcDay();

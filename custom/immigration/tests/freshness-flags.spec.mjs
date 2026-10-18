@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const run = (root, args) => spawnSync(process.execPath, [path.join(REPO, 'custom', 'immigration', 'freshness.mjs'), ...args], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8', timeout: 60_000 });
+const run = (root, args) => spawnCpuLimited(process.execPath, [path.join(REPO, 'custom', 'immigration', 'freshness.mjs'), ...args], { cwd: REPO, env: { ...process.env, CAREER_OPS_ROOT: root, NO_COLOR: '1' }, encoding: 'utf8' });
 
 function rootWithCheck() {
   const root = tempDir('imm-fresh-flags-');

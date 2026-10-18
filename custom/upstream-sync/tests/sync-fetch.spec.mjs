@@ -12,6 +12,7 @@ import '../../test-support/tmp.mjs';
 import { gitTestEnv } from '../../test-support/git-env.mjs';
 // The real lock writer's start time, so a running-Control-Center lock carries what acquireInstanceLock writes.
 import { processStartTime } from '../../control-center/supervisor/instance-lock.ts';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SYNC_DIR = path.resolve(HERE, '..');
@@ -234,11 +235,10 @@ function runSync(world, { home, inherited = {}, security = 'exit 44', osascript 
   // The node running these specs, pinned as the plist pins one: sync.sh puts Homebrew's folders first on its PATH.
   // Only a test's own inherited pin replaces it, never one from the shell or the plist that runs these specs.
   const childEnv = { ...env, CC_NODE_BIN: inherited.CC_NODE_BIN ?? process.execPath, CAREER_OPS_ROOT: world.live, HOME: home, PATH: `${bin}:${process.env.PATH}` };
-  const res = spawnSync('bash', [path.join(syncDir, 'sync.sh'), '--no-merge'], {
+  const res = spawnCpuLimited('bash', [path.join(syncDir, 'sync.sh'), '--no-merge'], {
     cwd: world.live,
     env: childEnv,
     encoding: 'utf8',
-    timeout: 60_000,
   });
   const logDir = path.join(world.live, 'data/upstream-sync');
   const logName = existsSync(logDir) ? readdirSync(logDir).find((n) => n.endsWith('.log')) : null;

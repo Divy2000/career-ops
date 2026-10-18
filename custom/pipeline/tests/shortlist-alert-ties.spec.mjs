@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { rootEnv } from '../../test-support/root-env.mjs';
 import { localToday } from '../../../lib/local-today.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SHORTLIST = path.join(REPO, 'custom', 'pipeline', 'shortlist.mjs');
@@ -23,7 +24,7 @@ function alertWorld(company, alertRows) {
     path.join(root, 'data', 'immigration', 'company-alerts.tsv'),
     `date\tcompany\tslug\tstatus\theadline\turl\n${alertRows.map(([date, slug, status]) => `${date}\t${company}\t${slug}\t${status}\t${company} ${status} sponsorship\thttps://news.example/${slug}`).join('\n')}\n`,
   );
-  const r = spawnSync(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, [SHORTLIST], { cwd: REPO, env: rootEnv(root), encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   return { stdout: r.stdout, md: fs.readFileSync(path.join(root, 'data', 'shortlist.md'), 'utf8') };
 }

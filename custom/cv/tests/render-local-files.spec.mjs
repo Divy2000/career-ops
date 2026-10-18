@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { HERE, REPO, dataRoot, envFor } from './helpers.mjs';
 import { tempDir } from '../../test-support/tmp.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const RENDER = path.join(HERE, '..', 'render-pdf.mjs');
 const SECRET = 'R23-HTML-SECRET-51c0de';
@@ -17,8 +18,8 @@ const secretUrl = () => {
   return pathToFileURL(file).href;
 };
 const page = (body) => `<!DOCTYPE html>\n<html lang="en">\n<head><meta charset="utf-8"></head>\n<body><h1>Visible Candidate</h1>${body}</body>\n</html>\n`;
-const render = (root, html) => spawnSync(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--skip-fact-check'], {
-  cwd: REPO, env: envFor(root), encoding: 'utf8', timeout: 240000,
+const render = (root, html) => spawnCpuLimited(process.execPath, [RENDER, html, path.join(root, 'output', 'cv-test.pdf'), '--format=letter', '--skip-fact-check'], {
+  cwd: REPO, env: envFor(root), encoding: 'utf8',
 });
 const pdfText = (file) => spawnSync('pdftotext', [file, '-'], { encoding: 'utf8' }).stdout;
 

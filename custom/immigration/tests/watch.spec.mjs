@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+
 import { fileURLToPath } from 'node:url';
 import { tempDir } from '../../test-support/tmp.mjs';
 import { dayIn } from '../../test-support/local-day.mjs';
+import { spawnCpuLimited } from '../../test-support/cpu-limit.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const WATCH = path.join(REPO, 'custom', 'immigration', 'watch.mjs');
@@ -70,7 +71,7 @@ globalThis.fetch = async (url) => {
   const imm = path.join(root, 'data', 'immigration');
   const runRaw = (...args) => {
     fs.rmSync(frSince, { force: true });
-    return spawnSync(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1', TZ: zone }, encoding: 'utf8', timeout: 60_000 });
+    return spawnCpuLimited(process.execPath, ['--import', preload, WATCH, ...args], { cwd: REPO, env: { PATH: process.env.PATH, HOME: root, CAREER_OPS_ROOT: root, NO_COLOR: '1', TZ: zone }, encoding: 'utf8' });
   };
   const run = (...args) => {
     const r = runRaw(...args);
@@ -335,7 +336,7 @@ fs.promises.rename = async (from, to) => {
 };
 syncBuiltinESMExports();
 `);
-  const r = spawnSync(process.execPath, ['--import', path.join(w.root, 'feeds.mjs'), '--import', preload, WATCH], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', path.join(w.root, 'feeds.mjs'), '--import', preload, WATCH], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8' });
   assert.notEqual(r.status, 0, r.stdout);
   assert.match(r.stderr, /disk full/);
   assert.deepEqual(fs.readdirSync(w.imm).filter((f) => f.includes('.tmp-')), []);
@@ -362,7 +363,7 @@ fs.promises.rm = async (target, opts) => {
 };
 syncBuiltinESMExports();
 `);
-  const r = spawnSync(process.execPath, ['--import', failing, WATCH, '--ack', file], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8', timeout: 60_000 });
+  const r = spawnCpuLimited(process.execPath, ['--import', failing, WATCH, '--ack', file], { cwd: REPO, env: { PATH: process.env.PATH, HOME: w.root, CAREER_OPS_ROOT: w.root, NO_COLOR: '1', TZ: ZONE }, encoding: 'utf8' });
   assert.equal(r.status, 1, r.stderr);
   assert.match(r.stderr, /immigration-watch failed: i\/o error/);
   assert.doesNotMatch(r.stderr, /immigration-watch failed: permission denied/);
