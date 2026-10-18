@@ -570,8 +570,11 @@ describe('events', () => {
     const watcher = startWatcher(root, { publish: (type: string, payload: { domain: string; paths: string[] }) => void published.push({ type, payload }) } as unknown as EventBus, 20);
     try {
       await new Promise<void>((resolve) => watcher.on('ready', () => resolve()));
+      // Waits for each expected event, not a count: two followups events (FSEvents batches) must not end the wait early.
+      const has = (domain: string, file: string) => published.some((p) => p.payload.domain === domain && p.payload.paths.includes(file));
+      const both = () => has('config', 'voice-dna.md') && has('followups', path.join('data', 'contacts.tsv'));
       const deadline = Date.now() + 10_000;
-      for (let i = 0; published.length < 2 && Date.now() < deadline; i++) {
+      for (let i = 0; !both() && Date.now() < deadline; i++) {
         if (i % 10 === 0) {
           fs.writeFileSync(path.join(root, 'voice-dna.md'), `# Voice ${i}\n`);
           fs.writeFileSync(path.join(root, 'data', 'contacts.tsv'), `# name\tcompany\nPat${i}\tAcme\n`);
