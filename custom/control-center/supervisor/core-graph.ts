@@ -137,11 +137,12 @@ export interface CoreGraphWatcher {
  * import and the file written back to back) is signalled as well, since watching an existing file reports nothing.
  */
 export async function watchCoreGraph(codeRoot: string, entries: GraphEntries, onChange: (file: string) => void): Promise<CoreGraphWatcher> {
-  const files = () => {
-    const graph = coreImportGraphWithMissing(codeRoot, entriesOf(entries));
-    return [...graph.files, ...graph.missing].map((rel) => path.join(codeRoot, rel));
+  const read = () => {
+    const roots = entriesOf(entries);
+    const graph = coreImportGraphWithMissing(codeRoot, roots);
+    return { files: [...graph.files, ...graph.missing].map((rel) => path.join(codeRoot, rel)), roots: new Set(roots.map((rel) => path.join(codeRoot, rel))) };
   };
-  let watched = new Set(files());
+  let watched = new Set(read().files);
   const watcher = chokidar.watch([...watched], { ignoreInitial: true });
   // Callers void this: a disk error re-reading the graph is logged and the files watched so far stay watched, since
   // an unhandled rejection would exit the supervisor and /__recovery with it. One at a time, each against the set the
@@ -150,13 +151,16 @@ export async function watchCoreGraph(codeRoot: string, entries: GraphEntries, on
   const refresh = () => (queue = queue.then(apply));
   const apply = async () => {
     try {
-      const next = new Set(files());
+      const { files, roots } = read();
+      const next = new Set(files);
       const added = [...next].filter((f) => !watched.has(f));
       const gone = [...watched].filter((f) => !next.has(f));
       if (gone.length) watcher.unwatch(gone);
       if (added.length) watcher.add(added);
       watched = next;
-      for (const f of added) if (fs.existsSync(f)) onChange(f);
+      // A new entry is a change to the caller's own listing (a new server/ or shared/ module), which the caller watches
+      // and has already reloaded for: signalling it again would drain the child that reload just brought up.
+      for (const f of added) if (!roots.has(f) && fs.existsSync(f)) onChange(f);
     } catch (err) {
       logError('re-reading the core import graph failed; still watching the previous files', err);
     }
