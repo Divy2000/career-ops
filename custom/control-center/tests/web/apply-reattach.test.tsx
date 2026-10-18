@@ -798,7 +798,8 @@ describe('Given the row number now belongs to another application (R32-feat-a-L2
     const inner = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       if (input === '/api/sessions' && init?.method !== 'POST') {
-        return json(listed ? [{ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'running', target: { type: 'app', value: '12' } }] : []);
+        // The server pins the row a session started on (#264), so it starts the new owner's CV beside this one.
+        return json(listed ? [{ ...URL_SESSION, id: 's-pdf-12', mode: 'pdf', status: 'running', target: { type: 'app', value: '12', row: ROW_12 } }] : []);
       }
       return inner(input, init);
     });
@@ -812,6 +813,111 @@ describe('Given the row number now belongs to another application (R32-feat-a-L2
     await openApply('12', undefined, BETA_12);
     await until(() => generate() && !generate()!.disabled && generate(), 'Generate CV PDF on');
     expect(host.querySelector('a[href="/sessions/s-pdf-12"]')).toBeNull();
+  });
+});
+
+// The tracker query refetches after a delete elsewhere, so the number can change owner while the page stays open.
+// The server pins the application an app session started on (target.row), so the CV session of the row's earlier owner
+// is told apart from the new owner's however it was started; a session from before the pin is held by its number alone.
+describe('Given a live tailored CV session on a reused row number (R33-feat-a-X-01, R33-feat-a-L2-01)', () => {
+  const BETA_12 = { company: 'Beta Labs', role: 'Data Engineer', report: 44 };
+  const generate = () => [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.startsWith('Generate CV PDF'));
+  const listing = (target: SessionMeta['target']) => {
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (input === '/api/sessions' && init?.method !== 'POST') return json([{ ...URL_SESSION, id: 's-pdf-old', mode: 'pdf', status: 'running', target }]);
+      return inner(input, init);
+    });
+  };
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
+    docs = { pdfs: [], covers: [], suggestedPdf: null, suggestedCover: null };
+  });
+
+  it('When it was started elsewhere for the earlier owner, Then it does not hold Generate CV PDF off and is not linked as the new owner\'s', async () => {
+    // Started from AskDrawer or the Documents tab: no cc.apply.row marker, only the row the server pinned.
+    listing({ type: 'app', value: '12', row: ROW_12 });
+    await openApply('12', undefined, BETA_12);
+    await until(() => generate() && !generate()!.disabled && generate(), 'Generate CV PDF on');
+    expect(host.querySelector('a[href="/sessions/s-pdf-old"]')).toBeNull();
+  });
+
+  it('When it was started elsewhere for the row shown, Then Generate CV PDF stays off and links it', async () => {
+    listing({ type: 'app', value: '12', row: BETA_12 });
+    sessionStorage.setItem('cc.apply.row.s-pdf-old', JSON.stringify(ROW_12));
+    await openApply('12', undefined, BETA_12);
+    await until(() => host.querySelector('a[href="/sessions/s-pdf-old"]'), 'the link to the running CV session');
+    expect(generate()!.disabled).toBe(true);
+  });
+
+  it('When it carries no pinned row, Then the server holds the number, so Generate CV PDF stays off and links the session in the way', async () => {
+    listing({ type: 'app', value: '12' });
+    sessionStorage.setItem('cc.apply.row.s-pdf-old', JSON.stringify(ROW_12));
+    await openApply('12', undefined, BETA_12);
+    await until(() => host.querySelector('a[href="/sessions/s-pdf-old"]'), 'the link to the running CV session');
+    expect(generate()!.disabled).toBe(true);
+    expect(host.textContent).toContain('the earlier application');
+  });
+});
+
+describe('Given the row number changes owner while its Apply page is open (R33-feat-a-L1-01)', () => {
+  const BETA_12 = { company: 'Beta Labs', role: 'Data Engineer', report: 44 };
+  let reindex: (identity: typeof ROW_12) => void;
+  let turnPosts: string[];
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', class { addEventListener() {} close() {} });
+    turnPosts = [];
+    const inner = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (typeof input === 'string' && /^\/api\/sessions\/[^/]+\/turns$/.test(input) && init?.method === 'POST') turnPosts.push(String(init.body));
+      if (input === '/api/sessions/s-apply-beta/turns' && init?.method === 'POST') return json({ ...URL_SESSION, id: 's-apply-beta', status: 'running', target: { type: 'app', value: '12' } });
+      return inner(input, init);
+    });
+  });
+  async function openReindexable() {
+    const { useState } = await import('react');
+    const { ApplyBody } = await import('@web/features/apply/ApplyPage');
+    const { ConfirmProvider } = await import('@web/components/ConfirmDialog');
+    function Shown() {
+      const [identity, setIdentity] = useState(ROW_12);
+      reindex = setIdentity;
+      return createElement(ApplyBody, { n: '12', company: identity.company, postingUrl: 'https://jobs.example.com/acme/1', identity });
+    }
+    const rootRoute = createRootRoute({ component: () => createElement(ConfirmProvider, null, createElement(Outlet)) });
+    const apply = createRoute({ getParentRoute: () => rootRoute, path: '/apply', component: Shown });
+    router = createRouter({ routeTree: rootRoute.addChildren([apply]), history: createMemoryHistory({ initialEntries: ['/apply'] }) });
+    root = createRoot(host);
+    await act(async () => root.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) }, createElement(RouterProvider, { router }))));
+    await until(() => applyPanel(), 'the apply session panel');
+  }
+
+  it('When the tracker reindexes, Then the earlier application\'s answers leave the form and its draft\'s kept keys go', async () => {
+    await openReindexable();
+    await act(async () => draftButton()!.click());
+    await draftAnswers();
+    expect(fillButton()).toBeDefined();
+    expect(sessionStorage.getItem('cc.apply.row.s-apply-12')).not.toBeNull();
+
+    await act(async () => reindex(BETA_12));
+    await until(() => draftButton(), 'the Draft answers button');
+    expect(host.querySelector('[aria-label="Drafted answers"]')).toBeNull();
+    expect(fillButton()).toBeUndefined();
+    expect(sessionStorage.getItem('cc.apply.12')).toBeNull();
+    expect(sessionStorage.getItem('cc.apply.row.s-apply-12')).toBeNull();
+    expect(sessionStorage.getItem('cc.apply.docs.s-apply-12')).toBeNull();
+  });
+
+  it('When a draft for the new owner stops before its answers, Then Fill cannot send the earlier application\'s answers to it', async () => {
+    await openReindexable();
+    await draftAnswers();
+    await act(async () => reindex(BETA_12));
+    await until(() => draftButton(), 'the Draft answers button');
+    await act(async () => draftButton()!.click());
+    await act(async () => applyPanel()!.onSessionId!('s-apply-beta'));
+    await act(async () => applyPanel()!.onStatus!('awaiting_user', null));
+    expect(fillButton()).toBeUndefined();
+    expect(host.textContent).not.toContain('Jane Smith');
+    expect(turnPosts).toEqual([]);
   });
 });
 

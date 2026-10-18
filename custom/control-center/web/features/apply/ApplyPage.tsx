@@ -191,12 +191,19 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   // page comes back, and its answers envelope (replayed by the panel) rebuilds the form.
   const remembered = useRememberedSession(applyKey(n));
   const rememberedId = remembered.panel.sessionId;
-  // Another application's draft under a reused number is not this row's: it is let go, and the form starts clean.
+  // Another application's draft under a reused number is not this row's: it is let go, and the form starts clean, as New
+  // draft's does. The number can change owner while the page is open (a delete elsewhere reindexes the tracker), and the
+  // answers drafted for the earlier application must not stay for Fill to send to the new owner's session.
   const foreignDraft = n !== null && startedForOther(rememberedId, identity);
   const sessionId = foreignDraft ? null : rememberedId;
   useEffect(() => {
-    if (foreignDraft && rememberedId) lastSession(applyKey(n)).forget(rememberedId);
-  }, [foreignDraft, rememberedId, n]);
+    if (!foreignDraft || !rememberedId) return;
+    lastSession(applyKey(n)).forget(rememberedId);
+    writeTypedUrl(rememberedId, null);
+    writeDraftDocs(rememberedId, null);
+    writeSessionRow(rememberedId, null);
+    onNewDraft();
+  }, [foreignDraft, rememberedId, n, onNewDraft]);
   const [typedUrl, setUrl] = useState<string | null>(null);
   const storedUrl = readTypedUrl(sessionId);
   // A session re-attached on /apply (no row), also one that reports its id after the page came back mid-start, brings
@@ -333,21 +340,28 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
   // (remembered across leaving the page, for the session page it opens) is starting, queued or running.
   const pdfSession = useRememberedSession(`cc.pdf.${n ?? 'none'}`);
   const pdfRemembered = n ? pdfSession.panel.sessionId : null;
-  // Another application's CV run under a reused number neither holds Generate off nor is linked as this row's.
-  const foreignPdf = startedForOther(pdfRemembered, identity);
+  // The sessions list also backs the per-row tailored-CV guard: a pdf session for this row started from its Documents
+  // tab (cc.application.<n>.documents) is not remembered under cc.pdf.<n>, so the guard reads it from the list, exactly
+  // as AskDrawer's generatePdf does, and links it instead of starting a second paid CV write.
+  const sessions = useSessions();
+  // The row the server pinned on the session (#264) tells the application it was started for, however it was started;
+  // the marker this page wrote stands in for a session started before the server pinned rows.
+  const pdfForOther = (s: { id: string; target: Target }) => (s.target.row ? identity !== undefined && !sameRow(s.target.row, identity) : startedForOther(s.id, identity));
+  // Another application's CV run under a reused number is not linked as this row's.
+  const rememberedPdfMeta = pdfRemembered ? sessions.data?.find((s) => s.id === pdfRemembered) : undefined;
+  const foreignPdf = rememberedPdfMeta ? pdfForOther(rememberedPdfMeta) : startedForOther(pdfRemembered, identity);
   const pdfId = foreignPdf ? null : pdfRemembered;
   useEffect(() => {
     if (foreignPdf && pdfRemembered) lastSession(`cc.pdf.${n}`).forget(pdfRemembered);
   }, [foreignPdf, pdfRemembered, n]);
   const pdfStream = useSessionStream(pdfId);
-  // The sessions list also backs the per-row tailored-CV guard: a pdf session for this row started from its Documents
-  // tab (cc.application.<n>.documents) is not remembered under cc.pdf.<n>, so the guard reads it from the list, exactly
-  // as AskDrawer's generatePdf does, and links it instead of starting a second paid CV write.
-  const sessions = useSessions();
   // Until the sessions list answers (and when it cannot), a live pdf session for the row cannot be told apart from none,
   // so Generate stays off rather than starting a second paid CV write, as Today's Evaluate button guards oferta sessions.
   const sessionsChecking = sessions.isPending || sessions.isError;
-  const livePdf = n === null ? undefined : sessions.data?.find((s) => s.mode === 'pdf' && LIVE_PDF.has(s.status) && s.target.value === n && !startedForOther(s.id, identity));
+  // The server holds the row's CV by the application a session pinned, and by the number alone for one that pinned none,
+  // so an earlier owner's unpinned run still holds Generate off: it is linked, as the session in the way.
+  const livePdf = n === null ? undefined : sessions.data?.find((s) => s.mode === 'pdf' && LIVE_PDF.has(s.status) && s.target.value === n && !(s.target.row && pdfForOther(s)));
+  const livePdfForOther = livePdf !== undefined && pdfForOther(livePdf);
   const { onStatus: pdfOnStatus, onStarting: pdfOnStarting, onSessionId: pdfOnSessionId, onStartFailed: pdfOnStartFailed } = pdfSession.panel;
   useEffect(() => {
     // A session waiting for the user's reply is still the row's CV run: the reply finishes it, so it stays live here.
@@ -510,7 +524,7 @@ function ApplyForm({ n, company, postingUrl, status: rowStatus, identity, onNewD
                         <Link to="/sessions/$id" params={{ id: livePdf?.id ?? pdfId! }}>
                           The tailored CV session
                         </Link>{' '}
-                        is still running.
+                        {livePdfForOther ? 'of the earlier application under this row number is still running, and holds the row\'s CV until it ends.' : 'is still running.'}
                       </span>
                     ) : (
                       (pdfSession.waiting || generating) && <span className="muted small"> The tailored CV session is starting.</span>
