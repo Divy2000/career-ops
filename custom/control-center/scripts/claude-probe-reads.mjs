@@ -213,11 +213,36 @@ function killCall(child) {
     child.kill('SIGKILL');
   }
 }
+/**
+ * Kills each call's process group until it has no process left, or the deadline passes. One group kill is not enough
+ * under load: a member forked while it ran can miss it, and one preempted mid-write still acts after it, so a cleanup
+ * right after the kill can race a call that creates a project folder or transcript behind it. Returns the PIDs of the
+ * groups that may remain.
+ */
+async function stopCalls(children, ms) {
+  const pending = new Set([...children].filter((c) => Number.isInteger(c.pid)));
+  for (const child of children) if (!pending.has(child)) child.kill('SIGKILL');
+  const deadline = Date.now() + ms;
+  for (;;) {
+    for (const child of pending) {
+      try {
+        process.kill(-child.pid, 'SIGKILL');
+      } catch (err) {
+        if (err?.code === 'ESRCH') pending.delete(child);
+      }
+    }
+    if (!pending.size || Date.now() >= deadline) return [...pending].map((c) => c.pid);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+// Set once a signal stops the probe: no new call starts, and the main flow leaves the cleanup and exit to the signal.
+let stopping = null;
 const BASE_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CC_|CLAUDE|ANTHROPIC)/.test(k)));
 
 function runClaude(name, opts) {
   const sessionId = crypto.randomUUID();
   const prep = prepare(name, opts, sessionId);
+  if (stopping) return Promise.resolve({ name, sessionId, status: null, stdout: '', stderr: 'not started: the probe is stopping', events: [], hook: [], prep });
   const argv = ['-p', opts.prompt, '--output-format', 'stream-json', '--verbose', '--session-id', sessionId, '--permission-mode', 'dontAsk'];
   if (opts.shape !== 'today') argv.push('--restricted');
   if (opts.tools) argv.push('--tools', opts.tools.join(','));
@@ -276,17 +301,29 @@ function runClaude(name, opts) {
           return { type: 'unparsed', line: l.slice(0, 300) };
         }
       });
-      const hook = fs.existsSync(prep.hookLog)
-        ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
-            try {
-              return JSON.parse(l);
-            } catch {
-              return null;
-            }
-          }).filter(Boolean)
-        : [];
-      fs.writeFileSync(path.join(prep.dir, 'stream.ndjson'), redact(stdout));
-      fs.writeFileSync(path.join(prep.dir, 'stderr.txt'), redact(stderr));
+      // A full volume (ENOSPC) or no descriptors left (EMFILE) fails these reads and writes; unheard, the throw would
+      // crash the probe past its cleanup, so the case settles with the failure in its stderr instead.
+      let hook = [];
+      try {
+        hook = fs.existsSync(prep.hookLog)
+          ? fs.readFileSync(prep.hookLog, 'utf8').split('\n').filter(Boolean).map((l) => {
+              try {
+                return JSON.parse(l);
+              } catch {
+                return null;
+              }
+            }).filter(Boolean)
+          : [];
+      } catch (readErr) {
+        stderr += `\nhook log not read: ${readErr?.message ?? readErr}`;
+      }
+      for (const [file, text] of [['stream.ndjson', stdout], ['stderr.txt', stderr]]) {
+        try {
+          fs.writeFileSync(path.join(prep.dir, file), redact(text));
+        } catch (writeErr) {
+          stderr += `\n${file} not written: ${writeErr?.message ?? writeErr}`;
+        }
+      }
       resolve({ name, sessionId, status, stdout: redact(stdout), stderr: redact(stderr).slice(-2000), events, hook, prep });
     });
   });
@@ -622,10 +659,17 @@ function reportCleanup(failures) {
 // none writes a transcript after cleanTranscripts has run.
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {
   process.on(signal, () => {
-    for (const child of running) killCall(child);
+    // A second signal does not wait for the calls to go.
+    if (stopping) {
+      reportCleanup(cleanup());
+      process.exit(code);
+    }
     console.error(`${signal}: stopping ${running.size} running call(s) and cleaning up`);
-    reportCleanup(cleanup());
-    process.exit(code);
+    stopping = stopCalls(running, 5_000).then((left) => {
+      if (left.length) console.error(`calls still running after the kill (process groups ${left.join(', ')}); their transcripts may remain`);
+      reportCleanup(cleanup());
+      process.exit(code);
+    });
   });
 }
 try {
@@ -675,6 +719,8 @@ try {
   console.error(redact(err?.stack ?? err));
   exitCode = 1;
 } finally {
+  // Stopped by a signal: its handler cleans up once the calls are gone and exits with the signal's code.
+  if (stopping) await stopping;
   if (!reportCleanup(cleanup())) exitCode = 1;
 }
 process.exit(exitCode);

@@ -672,6 +672,29 @@ describe('a Dev Chat turn left running when no server can start (SW3-claude-02)'
     expect(JSON.parse(fs.readFileSync(metaFile, 'utf8')).status).toBe('lost');
   });
 
+  it('given the revert write fails before any file is reverted, when reverting with no server, then the queued run marked lost is put back to queued (R31-supervisor-L1-01)', () => {
+    const t = stalled((dir) => {
+      runMeta(dir, { status: 'queued', params: { sessionId: 's1', turn: 1 } });
+      fs.writeFileSync(path.join(dir, 'request.json'), JSON.stringify({ env: {}, secrets: [] }));
+    });
+    const metaFile = path.join(t.runsDir, 'r20261006000000-abcdef', 'meta.json');
+    const target = fs.realpathSync(t.file);
+    const rename = fs.renameSync;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (to === target) throw Object.assign(new Error('EACCES: permission denied, rename'), { code: 'EACCES' });
+      rename(from, to);
+    });
+    const result = t.revert(false);
+    spy.mockRestore();
+    expect(result).toMatchObject({ status: 500, text: expect.stringMatching(/^revert failed at notes\.md: EACCES.*\nnothing was reverted$/) });
+    expect(fs.readFileSync(t.file, 'utf8')).toBe('broken by the turn\n');
+    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+    expect(meta.status).toBe('queued');
+    expect(meta.error).toBeUndefined();
+    expect(t.revert(false)).toMatchObject({ status: 200, text: 'notes.md: restored' });
+    expect(JSON.parse(fs.readFileSync(metaFile, 'utf8')).status).toBe('lost');
+  });
+
   it('a cancelled session whose cancelled turn\'s command is still in the kill grace cannot have an earlier turn reverted, with or without a server, as /api/dev/revert refuses while the session is active (R19-supervisor-L3-01)', () => {
     const live = { wrapperPid: process.pid, wrapperStartedAt: processStartTime(process.pid), childPid: process.pid, childStartedAt: processStartTime(process.pid) };
     /** Turn 1 finished and was finalized; turn 2 was cancelled and its run has not recorded its end. */

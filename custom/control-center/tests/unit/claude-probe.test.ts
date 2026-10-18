@@ -166,6 +166,35 @@ syncBuiltinESMExports();
     expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
     expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
   });
+  it('given a call that exits but whose stream.ndjson and stderr.txt cannot be written, when the probe runs, then every case settles and the canaries are removed (R31-supervisor-L1-02)', () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    // Answers --version; every case call exits at once with no output, so each one settles through 'close'.
+    fs.writeFileSync(claude, '#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)"\nexit 0\n', { mode: 0o755 });
+    // A full volume: the writes of a finished call's logs fail with ENOSPC.
+    const preload = path.join(box.root, 'enospc.mjs');
+    fs.writeFileSync(
+      preload,
+      `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const realWrite = fs.writeFileSync;
+fs.writeFileSync = (file, ...rest) => {
+  if (/(stream\\.ndjson|stderr\\.txt)$/.test(String(file))) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+  return realWrite(file, ...rest);
+};
+syncBuiltinESMExports();
+`,
+    );
+    const r = runProbe('claude-probe-reads.mjs', box, claude, { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` });
+    expect(r.stderr).not.toMatch(/no space left on device[\s\S]*\n\s+at /);
+    expect(r.status, r.stderr).toBe(1);
+    const summary = JSON.parse(r.stdout);
+    expect(Object.keys(summary.cases).length).toBeGreaterThan(1);
+    expect(fs.readdirSync(box.home).filter((n) => n.startsWith('.cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude')).filter((n) => n.startsWith('cc-probe-'))).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+    expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+  });
   // The calls lead their own process groups, so a terminal hang-up reaches only the probe, which must pass it on.
   for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]] as const) {
     it(`on ${signal} mid-run stops the running CLI calls, removes every canary and the temp layout, and exits ${exitCode} (R28-supervisor-L1-01)`, async () => {
@@ -207,6 +236,51 @@ syncBuiltinESMExports();
       expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
     }, 40_000);
   }
+
+  it('given a call process the first SIGKILL of its group misses, when the probe gets SIGTERM, then it cleans up only once the group is gone (R31-flake-claude-probe)', async () => {
+    const box = sandbox();
+    const claude = path.join(box.bin, 'claude');
+    // Under load a group kill can miss a member (one forked while the kill ran) or land after it already acted: that
+    // member creates its project folder after the kill was sent. Modelled here by a first group SIGKILL that misses.
+    fs.writeFileSync(claude, `#!/bin/sh\n[ "$1" = "--version" ] && echo "9.9.9 (Claude Code)" && exit 0\n: > "${box.calls}/$$"\nsleep 0.5\nmkdir -p "$HOME/.claude/projects/$(pwd | sed 's/[^A-Za-z0-9]/-/g')"\nexec sleep 60\n`, { mode: 0o755 });
+    const preload = path.join(box.root, 'kill-misses.mjs');
+    fs.writeFileSync(
+      preload,
+      `const realKill = process.kill.bind(process);
+const missed = new Set();
+process.kill = (pid, signal) => {
+  if (pid < 0 && signal === 'SIGKILL' && !missed.has(pid)) {
+    missed.add(pid);
+    return true;
+  }
+  return realKill(pid, signal);
+};
+`,
+    );
+    const child = spawn(process.execPath, [path.join(PACKAGE_ROOT, 'scripts', 'claude-probe-reads.mjs')], {
+      env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, HOME: box.home, TMPDIR: box.tmp, PATH: `${box.bin}${path.delimiter}${process.env.PATH ?? ''}`, CC_CLAUDE_BIN: claude },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+    const deadline = Date.now() + 20_000;
+    while (fs.readdirSync(box.calls).length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    expect(fs.readdirSync(box.calls).length, stderr).toBeGreaterThan(0);
+    child.kill('SIGTERM');
+    const code = await exited;
+    // Long enough for a call the probe left running to reach its mkdir.
+    await new Promise((r) => setTimeout(r, 1_000));
+    const alive = fs.readdirSync(box.calls).filter((pid) => {
+      const ps = spawnSync('ps', ['-o', 'stat=,command=', '-p', pid], { encoding: 'utf8' }).stdout.trim();
+      return ps !== '' && !ps.startsWith('Z');
+    });
+    for (const pid of alive) process.kill(Number(pid), 'SIGKILL');
+    expect(code, stderr).toBe(143);
+    expect(alive).toEqual([]);
+    expect(fs.readdirSync(path.join(box.home, '.claude', 'projects'))).toEqual([]);
+    expect(fs.readdirSync(box.tmp).filter((n) => n.startsWith('cc-reads-probe-') && !n.startsWith('cc-reads-probe-summary-'))).toEqual([]);
+  }, 40_000);
 
   /** A preload under which removing the home canary dir fails with EBUSY. */
   function homeRmFails(box: ReturnType<typeof sandbox>) {
