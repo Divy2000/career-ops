@@ -2,10 +2,13 @@
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { blockClaude } from '../test-support/no-claude.mjs';
+import { blockClaude, CLAUDE_BLOCKED_ENV } from '../test-support/no-claude.mjs';
 
 // The test runner processes inherit this PATH, so a mutant that drops a fake Claude path cannot reach the real CLI.
-process.env.PATH = blockClaude(path.join(path.dirname(fileURLToPath(import.meta.url)), 'reports/bin')).PATH;
+// The marker lets the real-CLI contract check skip; without it Stryker's initial run fails on the blocked claude.
+const blocked = blockClaude(path.join(path.dirname(fileURLToPath(import.meta.url)), 'reports/bin'));
+process.env.PATH = blocked.PATH;
+process.env[CLAUDE_BLOCKED_ENV] = blocked[CLAUDE_BLOCKED_ENV];
 
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {

@@ -98,11 +98,13 @@ describe('core contract', () => {
     for (const flag of CONTRACT.batchRunner.flags) expect(text).toContain(flag);
   });
 
-  // A host with no Claude Code installed (CI) has nothing to check; where it is installed, the check always runs.
+  // A host with no Claude Code installed (CI) has nothing to check; where it is installed, the check always runs,
+  // except in a mutation run, where blockClaude (custom/test-support/no-claude.mjs) puts a failing claude on PATH.
   const realClaude = process.env.CC_REAL_CLAUDE_BIN ?? 'claude';
+  const claudeBlocked = process.env.CC_CLAUDE_BLOCKED === '1' && process.env.CC_REAL_CLAUDE_BIN === undefined;
   // Autoupdater off: a test run must never update the developer's CLI past the approved version (SW2-tests-05).
   const noUpdate = { ...process.env, DISABLE_AUTOUPDATER: '1' };
-  it.skipIf((spawnSync(realClaude, ['--version'], { timeout: 30_000, env: noUpdate }).error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT')('the installed Claude CLI advertises every flag the invocation builder uses (skipped where no claude is installed)', () => {
+  it.skipIf(claudeBlocked || (spawnSync(realClaude, ['--version'], { timeout: 30_000, env: noUpdate }).error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT')('the installed Claude CLI advertises every flag the invocation builder uses (skipped where no claude is installed, or in a mutation run)', () => {
     const bin = realClaude;
     const r = spawnSync(bin, ['--help'], { encoding: 'utf8', timeout: 30_000, env: noUpdate });
     expect(r.status, `${bin} --help failed: ${r.stderr}`).toBe(0);

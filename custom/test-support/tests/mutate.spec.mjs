@@ -136,3 +136,10 @@ test('blockClaude puts a claude that always fails first on PATH, so a mutant can
   assert.equal(r.status, 127);
   assert.match(r.stderr, /claude is blocked during mutation testing/);
 });
+
+test('blockClaude marks the env as blocked, so a test that checks the real CLI skips instead of failing the dry run', async () => {
+  const { blockClaude, CLAUDE_BLOCKED_ENV } = await import('../no-claude.mjs');
+  const env = blockClaude(tempDir('no-claude-'), { PATH: '/usr/bin:/bin' });
+  assert.equal(CLAUDE_BLOCKED_ENV, 'CC_CLAUDE_BLOCKED');
+  assert.equal(env[CLAUDE_BLOCKED_ENV], '1');
+});
