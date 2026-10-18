@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -66,6 +66,16 @@ const secretFile = () => {
   fs.writeFileSync(file, `${SECRET}\n`);
   return file;
 };
+// A data root outside every folder the profile denies on its own (home, /Users, /Volumes, the temp folders), so only
+// the DATA and WORKSPACE rules stand between the engine and its files. /private/var/tmp is world-writable on macOS.
+const outsideRoots = [];
+after(() => outsideRoots.splice(0).forEach((d) => fs.rmSync(d, { recursive: true, force: true })));
+const outsideRoot = () => {
+  const d = fs.realpathSync(fs.mkdtempSync('/private/var/tmp/cv-root-'));
+  outsideRoots.push(d);
+  fs.mkdirSync(path.join(d, 'output'));
+  return d;
+};
 const doc = (body, preamble = '') => `\\documentclass{article}\n${preamble}\\begin{document}\n${body}\n\\end{document}\n`;
 // Whatever the run left behind: the PDF (when one was written) and everything it printed.
 const leaked = (r, pdf, text) => (fs.existsSync(pdf) && text(pdf).includes(SECRET)) || `${r.stdout}${r.stderr}`.includes(SECRET);
@@ -101,7 +111,7 @@ for (const c of compilers) {
   });
 
   test(`given a .tex that \\inputs a file under the data root, when compiled, then the file never reaches the PDF or the output (${c.name})`, { skip: c.skip }, () => {
-    const root = dataRoot();
+    const root = outsideRoot();
     fs.writeFileSync(path.join(root, '.env'), `TOKEN=${SECRET}\n`);
     const tex = path.join(root, 'output', 'x.tex');
     const pdf = path.join(root, 'output', 'x.pdf');
@@ -189,8 +199,10 @@ test('given an input that is not a .tex file, when compiled, then it is refused'
 
 // pdflatex also runs with openin_any=p, which refuses absolute paths on its own, so the compile tests above would pass
 // with a broken profile; this runs a plain reader under the same profile.
-test('given the sandbox profile alone, when a process in it reads a file under the data root or the temp folder, then only its own work folder is readable', { skip: noSandbox }, () => {
-  const root = fs.realpathSync(dataRoot());
+test('given the sandbox profile alone, when a process in it reads a file under the data root, the workspace or the temp folder, then only its own work folder is readable', { skip: noSandbox }, () => {
+  // Two roots, so the DATA rule and the WORKSPACE rule each guard a file no other rule covers.
+  const root = outsideRoot();
+  const workspace = outsideRoot();
   const work = fs.realpathSync(tempDir('latex-work-'));
   const inWork = path.join(work, 'cv.tex');
   fs.writeFileSync(inWork, 'work file\n');
@@ -199,11 +211,16 @@ test('given the sandbox profile alone, when a process in it reads a file under t
   const PATH = engine ? searchPath : compilers[0].env().PATH;
   const bin = spawnSync('which', [engine ?? 'pdflatex'], { env: { ...process.env, PATH }, encoding: 'utf8' }).stdout.trim();
   const env = { ...envFor(root), PATH };
-  const args = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sandboxArgs } from ${JSON.stringify(COMPILE)}; process.stdout.write(JSON.stringify(sandboxArgs(...JSON.parse(process.argv.at(-1)))));`, JSON.stringify([work, engine ?? 'pdflatex', bin, root])], { cwd: REPO, env, encoding: 'utf8' });
+  const args = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sandboxArgs } from ${JSON.stringify(COMPILE)}; process.stdout.write(JSON.stringify(sandboxArgs(...JSON.parse(process.argv.at(-1)))));`, JSON.stringify([work, engine ?? 'pdflatex', bin, workspace])], { cwd: REPO, env, encoding: 'utf8' });
   assert.equal(args.status, 0, args.stderr);
+  fs.writeFileSync(path.join(workspace, 'notes.txt'), `${SECRET}\n`);
   const cat = (file) => spawnSync('/usr/bin/sandbox-exec', [...JSON.parse(args.stdout), '/bin/cat', file], { encoding: 'utf8' });
   assert.equal(cat(inWork).stdout, 'work file\n');
-  for (const file of [path.join(root, 'notes.txt'), secretFile()]) {
+  // Beside the roots, in the same parent: readable, so the refusals below are the DATA and WORKSPACE rules' doing.
+  const beside = path.join(outsideRoot(), 'beside.txt');
+  fs.writeFileSync(beside, 'beside\n');
+  assert.equal(cat(beside).stdout, 'beside\n');
+  for (const file of [path.join(root, 'notes.txt'), path.join(workspace, 'notes.txt'), secretFile()]) {
     const r = cat(file);
     assert.notEqual(r.status, 0, file);
     assert.equal(r.stdout.includes(SECRET), false, file);
@@ -243,4 +260,9 @@ test('given a data root reached through a link, when the sandbox is built, then 
   const args = JSON.parse(r.stdout);
   assert.ok(args.includes(`DATA=${real}`), r.stdout);
   assert.ok(args.includes(`WORKSPACE=${real}`), r.stdout);
+  // The profile's top-level forms start at a line start; the read-and-write deny must name both roots.
+  const profile = args[args.indexOf('-p') + 1];
+  const deny = profile.split(/\n(?=\()/).find((form) => form.startsWith('(deny file-read* file-write*'));
+  assert.ok(deny?.includes('(subpath (param "DATA"))'), profile);
+  assert.ok(deny?.includes('(subpath (param "WORKSPACE"))'), profile);
 });

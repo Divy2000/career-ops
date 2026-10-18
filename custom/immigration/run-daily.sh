@@ -74,6 +74,11 @@ if [ -z "${CC_RUN_DAILY_LOCKED:-}" ]; then
       echo "run-daily: skipped, because an install or update is changing the live checkout (it holds the daily job's lock); try again in a few minutes" >&2
       case "$CC_RUN_DAILY_SKIP_EXIT" in *[!0-9]*) exit 0 ;; *) exit "$CC_RUN_DAILY_SKIP_EXIT" ;; esac
     fi
+  elif [ "$rc" = 75 ]; then
+    # No live update named itself, but the holder may have let go while the run polled (an update that ended before its
+    # marker was read, or a run that just finished): only a lock still held after the window is a conflict.
+    CC_RUN_DAILY_LOCKED=1 /usr/bin/lockf -k -t 0 "$IMM/.run-daily.lockf" /bin/bash "$0" "$@"
+    rc=$?
   fi
   if [ "$rc" = 75 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') another run-daily holds the lock; skipped" >> "$IMM/logs/skipped.log"
