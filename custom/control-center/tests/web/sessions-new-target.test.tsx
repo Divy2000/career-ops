@@ -34,7 +34,7 @@ beforeEach(() => {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? 'GET';
-      if (method === 'GET' && url === '/api/modes') return json([{ id: 'oferta', policyClass: 'read' }]);
+      if (method === 'GET' && url === '/api/modes') return json([{ id: 'oferta', policyClass: 'read' }, { id: 'auto-pipeline', policyClass: 'evaluate' }, { id: 'de/angebot', policyClass: 'read' }, { id: 'deep', policyClass: 'read' }]);
       if (method === 'GET' && url === '/api/sessions') return typeof listed === 'number' ? json({ error: 'down' }, listed) : json(listed);
       if (method === 'GET' && url === '/api/sessions/s-1') return json({ meta: RUNNING, events: [{ seq: 1, ts: RUNNING.createdAt, event: { type: 'status', status: 'running' } }] });
       // As server/routes/sessions.ts: a url target that is not a plain posting URL is refused.
@@ -199,5 +199,39 @@ describe('Sessions > New session: an oferta on a posting already being evaluated
     expect(client.getQueryState(['sessions'])?.status).toBe('error');
     await act(async () => new Promise((r) => setTimeout(r, 50)));
     expect(button('Start session')!.matches(':disabled')).toBe(false);
+  });
+});
+
+describe('Sessions > New session: another report-gated mode on a posting already being evaluated (R35-feat-c-L2-01)', () => {
+  async function openInMode(mode: string, target: string) {
+    await renderSessions();
+    await act(async () => (await until(() => button('New session'), 'New session')).click());
+    const select = await until(() => document.querySelector<HTMLSelectElement>(`select[aria-label="New session mode"] option[value="${mode}"]`)?.closest('select') ?? undefined, `the ${mode} option`);
+    await act(async () => {
+      select.value = mode;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => type(document.querySelector<HTMLInputElement>('input[aria-label="New session target"]')!, target));
+    const prompt = await until(() => document.querySelector<HTMLTextAreaElement>(`textarea[aria-label="Prompt for ${mode}"]`), 'the prompt');
+    await act(async () => type(prompt, 'Evaluate this posting'));
+  }
+
+  for (const mode of ['auto-pipeline', 'de/angebot']) {
+    it(`given a running oferta on the posting, when ${mode} is picked and the URL typed, then the page links that session and Start session is off`, async () => {
+      listed = [{ ...RUNNING, id: 's-live', target: { type: 'url', value: 'https://jobs.example.com/1' } }];
+      await openInMode(mode, 'https://jobs.example.com/1');
+      await until(() => document.querySelector('[role="status"] a[href="/sessions/s-live"]'), 'the link to the running evaluation');
+      const start = button('Start session')!;
+      expect(start.matches(':disabled')).toBe(true);
+      await act(async () => start.click());
+      expect(starts).toEqual([]);
+    });
+  }
+
+  it('given a running oferta on the posting, when a mode that writes no report is picked, then Start session is on', async () => {
+    listed = [{ ...RUNNING, id: 's-live', target: { type: 'url', value: 'https://jobs.example.com/1' } }];
+    await openInMode('deep', 'https://jobs.example.com/1');
+    await until(() => (button('Start session') && !button('Start session')!.matches(':disabled')) || undefined, 'Start session on');
+    expect(document.querySelector('[role="status"] a[href="/sessions/s-live"]')).toBeNull();
   });
 });

@@ -35,6 +35,12 @@ export function ProvenancePills({ json }: { json: unknown }) {
   );
 }
 
+/**
+ * An employer the tracker does not know: a placeholder cell (`?`, a dash, no letter or digit), or the `? (via Hays)` label
+ * rejection-latency.mjs gives one by its channel. data/blacklist.md matches by name, so such a row would block no one.
+ */
+const unknownEmployer = (company: string) => !/[\p{L}\p{N}]/u.test(company) || /^\?\s*\(via\s/.test(company);
+
 /** Rows in rejection-latency output that name a company become explicit "Add to blacklist" suggestions; nothing is written here. */
 export function companySuggestions(json: unknown): string[] {
   const out = new Set<string>();
@@ -45,7 +51,7 @@ export function companySuggestions(json: unknown): string[] {
       return;
     }
     const o = v as Record<string, unknown>;
-    if (typeof o.company === 'string' && o.company.trim()) out.add(o.company.trim());
+    if (typeof o.company === 'string' && !unknownEmployer(o.company.trim())) out.add(o.company.trim());
     Object.values(o).forEach((x) => visit(x, depth + 1));
   };
   visit(json, 0);

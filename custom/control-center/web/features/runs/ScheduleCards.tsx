@@ -49,8 +49,8 @@ function JobCard({ job }: { job: ScheduleState }) {
       await apiSend('PUT', `/api/schedule/${job.label}`, body);
       toast.success(enabled ? `${job.title} scheduled at ${pad(h)}:${pad(m)}` : `${job.title} disabled`);
       await qc.invalidateQueries({ queryKey: ['system', 'schedule'] });
-      // The refetched plist now holds the saved time.
-      if (enabled) setEdits({});
+      // The refetched plist now holds the saved time; a field typed into while the save ran keeps its newer edit.
+      if (enabled) setEdits((prev) => Object.fromEntries(Object.entries(prev).filter(([k, v]) => v !== from[k as keyof typeof from])));
     } catch (err) {
       setError(`Could not update launchd: ${describeError(err)}`);
       toast.error('launchd update failed');
