@@ -485,8 +485,10 @@ jobTest('a Keychain that cannot be read (locked, exit 36) says so with the exit 
 jobTest('a Keychain read that never answers (locked keychain, unlock prompt nobody answers) fails fast with the reason and frees the lock', () => {
   const w = dailyWorld();
   // A security that waits forever, as one blocked on an unanswered unlock dialog does (one process, as security is).
-  const childPid = path.join(w.T, 'security.pid');
-  fs.writeFileSync(path.join(w.T, 'bin', 'security'), `#!/bin/bash\necho $$ > ${JSON.stringify(childPid)}\nexec /bin/sleep 100000\n`, { mode: 0o755 });
+  // Every command line it has, the script's and the sleep's it becomes, names its own path: under load the alarm can
+  // fire before the script has run a line, so the check below finds it by that path rather than by a pid it wrote.
+  const security = path.join(w.T, 'bin', 'security');
+  fs.writeFileSync(security, '#!/bin/bash\nexec -a "$0-waiting" /bin/sleep 100000\n', { mode: 0o755 });
   const started = Date.now();
   const r = w.run({ CC_KEYCHAIN_TIMEOUT: '2' });
   assert.ok(Date.now() - started < 30_000, `the run waited ${Date.now() - started} ms for the Keychain`);
@@ -499,8 +501,9 @@ jobTest('a Keychain read that never answers (locked keychain, unlock prompt nobo
   assert.equal(fs.existsSync(path.join(r.imm, '.run-daily.pid')), false);
   const lock = spawnSync('/usr/bin/lockf', ['-k', '-t', '0', path.join(r.imm, '.run-daily.lockf'), '/usr/bin/true']);
   assert.equal(lock.status, 0, 'the daily lock is free once the run has failed');
-  const orphan = spawnSync('/bin/kill', ['-0', readFileSync(childPid, 'utf8').trim()]);
-  assert.notEqual(orphan.status, 0, 'nothing the Keychain read started is left running');
+  const orphan = spawnSync('/usr/bin/pgrep', ['-f', security.replace(/[^\w/-]/g, '\\$&')], { encoding: 'utf8' });
+  assert.equal(orphan.stdout, '', 'nothing the Keychain read started is left running');
+  assert.equal(orphan.status, 1, orphan.stderr);
 });
 
 // 4294967296 wraps to alarm(0) in perl, which would wait forever: the wait is capped at an hour.
@@ -840,6 +843,39 @@ exec /bin/sleep "$@"
     assert.equal(fs.existsSync(path.join(imm, 'logs', 'skipped.log')), false);
   } finally {
     try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+});
+
+jobTest('a scheduled run that finds the lock held by an update that ends before the run reads its marker runs instead of skipping the day (R33-flake-rundaily)', async () => {
+  const w = dailyWorld();
+  const imm = path.join(w.data, 'data', 'immigration');
+  fs.mkdirSync(path.join(imm, 'logs'), { recursive: true });
+  const marker = path.join(imm, '.live-update.pid');
+  const release = path.join(w.T, 'release');
+  // The update holds the lock with its marker in place until told to finish, then removes the marker and exits, as the
+  // weekly sync does. The run's first poll sleep tells it to finish and waits until it has let go of the lock, so the
+  // run's lock attempt failed while the update ran but every marker read comes after the update ended.
+  const holder = spawn('/usr/bin/lockf', ['-k', '-t', '0', path.join(imm, '.run-daily.lockf'), '/bin/sh', '-c', `echo $$ > "$1"; for _ in $(seq 1200); do [ -e "$2" ] && break; /bin/sleep 0.05; done; rm -f "$1"`, 'holder', marker, release], { stdio: 'ignore', detached: true });
+  const finished = new Promise((resolve) => holder.on('exit', resolve));
+  const countingSleep = path.join(w.T, 'release-sleep');
+  fs.writeFileSync(countingSleep, `#!/bin/bash
+if [ "$1" = 0.05 ] && [ ! -e "${release}" ]; then
+  touch "${release}"
+  for _ in $(seq 1200); do /usr/bin/lockf -k -t 0 "${path.join(imm, '.run-daily.lockf')}" /usr/bin/true 2>/dev/null && break; /bin/sleep 0.05; done
+fi
+exec /bin/sleep "$@"
+`, { mode: 0o755 });
+  try {
+    for (let i = 0; i < 200 && !fs.existsSync(marker); i += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(fs.existsSync(marker), 'the update never took the lock');
+    const r = w.run({ CC_SLEEP_BIN: countingSleep });
+    assert.ok(fs.existsSync(release), 'the run never polled for the update marker');
+    assert.equal(r.status, 0, r.log + r.stderr);
+    assert.match(r.steps, /scan\.mjs/);
+    assert.equal(fs.existsSync(path.join(imm, 'logs', 'skipped.log')), false);
+  } finally {
+    try { process.kill(-holder.pid, 'SIGKILL'); } catch { /* already gone */ }
+    await finished;
   }
 });
 
