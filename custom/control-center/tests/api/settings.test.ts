@@ -1216,6 +1216,16 @@ describe('hand edits to settings.json reach the runner (R34-srv-dom-b-L2-01)', (
       await own.close();
     }
   });
+  it('given a hand edit with one invalid value, when the page reads it, then the runner uses the valid values the page shows', async () => {
+    const own = await makeTestApp();
+    try {
+      writeFile(own, JSON.stringify({ claudeConcurrency: 4, retention: 10 }));
+      expect(await readIn(own)).toMatchObject({ claudeConcurrency: 4, retention: 500, problem: expect.any(String) });
+      expect(own.runner.claudeSlots).toBe(4);
+    } finally {
+      await own.close();
+    }
+  });
   it('given a hand edit that leaves settings.json unreadable, when the page reads it, then the runner keeps the last good settings', async () => {
     const own = await makeTestApp();
     try {
