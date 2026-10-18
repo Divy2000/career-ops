@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeTestApp } from '../helpers/app.js';
 import { tempDir } from '../helpers/tmp.js';
+import { runsEnded } from '../helpers/runs.js';
 import { execNoShell, type Exec } from '../../server/routes/system.js';
 import { acquireTrackerLock, resolveTrackerPath, trackerLockDirFor } from '../../../../tracker-utils.mjs';
 
@@ -382,6 +383,8 @@ describe('a reply whose sentinel refresh cannot run (R28-claude-L1-01 review fol
     } finally {
       warn.mockRestore();
       await app.close();
+      // The reply's run is detached and still going: the data root goes only once it has ended.
+      await runsEnded(app.cfg.dataRoot);
     }
   });
 
@@ -404,6 +407,8 @@ describe('a reply whose sentinel refresh cannot run (R28-claude-L1-01 review fol
       expect(refreshes).toBe(0);
     } finally {
       await app.close();
+      // The reply's run is detached and still going: the data root goes only once it has ended.
+      await runsEnded(app.cfg.dataRoot);
     }
   });
 });
